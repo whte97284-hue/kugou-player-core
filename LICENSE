@@ -1,0 +1,59 @@
+MIT License
+
+Copyright (c) 2024 酷狗音频解码终端
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+
+ADDITIONAL TERMS - NON-COMMERCIAL USE ONLY
+
+This software is provided for personal, non-commercial use only.
+
+You may NOT:
+- Use this software for any commercial purpose
+- Sell this software or any derivative works
+- Include this software in any paid product or service
+- Use this software to infringe on any copyright or intellectual property rights
+
+The core decryption tools used in this software are from the Unlock Music 
+project (https://github.com/unlock-music), which is also open source under 
+the MIT License.
+
+Users are responsible for ensuring they have legal rights to convert any 
+audio files they process with this software.
+
+================================================================================
+
+第三方开源许可证
+
+1. Electron - MIT License
+   https://github.com/electron/electron
+
+2. Flask - BSD-3-Clause License
+   https://github.com/pallets/flask
+
+3. Unlock Music - MIT License
+   https://github.com/unlock-music
+
+4. PyInstaller - GPL-2.0 License
+   https://github.com/pyinstaller/pyinstaller
+
+5. electron-builder - MIT License
+   https://github.com/electron-userland/electron-builder
