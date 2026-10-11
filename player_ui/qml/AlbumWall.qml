@@ -13,6 +13,15 @@ Item {
     readonly property real cellW: (width - sidePadding * 2) / columns
 
     // 与用户手动滚到底完全一致:最大 contentY 包含底部留白
+    // 曲库出现或刷新后的短暂窗口内创建的卡片依次浮现;之后滚动复用的卡片不再播放
+    property bool entering: false
+    Timer { id: enterWindow; interval: 900; onTriggered: wall.entering = false }
+    Connections {
+        target: library
+        function onLibraryChanged() { wall.entering = true; enterWindow.restart() }
+    }
+    onVisibleChanged: if (visible && grid.count > 0 && !grid.userScrolled) { entering = true; enterWindow.restart() }
+
     function scrollToEnd() { grid.contentY = grid.originY + grid.contentHeight - grid.height + grid.bottomMargin }
     function coverOf(index) {
         if (grid.headerItem && grid.headerItem.albumIndex === index && grid.headerItem.coverItem
@@ -57,6 +66,17 @@ Item {
             height: grid.cellHeight
             readonly property int albumIndex: model.albumIndex
             readonly property Item coverItem: cardItem.coverItem
+            Component.onCompleted: if (wall.entering) rise.start()
+            transform: Translate { id: lift }
+            SequentialAnimation {
+                id: rise
+                ScriptAction { script: { cell.opacity = 0; lift.y = 22 } }
+                PauseAnimation { duration: Math.max(0, Math.min(420, (index % wall.columns) * 45 + Math.floor(index / wall.columns) * 70)) }
+                ParallelAnimation {
+                    OpacityAnimator { target: cell; to: 1; duration: 420; easing.type: Easing.OutCubic }
+                    NumberAnimation { target: lift; property: "y"; to: 0; duration: 560; easing.type: Easing.OutQuint }
+                }
+            }
             AlbumCard {
                 id: cardItem
                 width: cell.width - 28

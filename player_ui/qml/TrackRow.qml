@@ -111,6 +111,7 @@ Item {
             width: 32; height: 32
             icon: row.fav ? "heart-filled" : "heart"
             iconTint: row.fav ? Theme.accent : "transparent"
+            popOnChange: true
             iconSize: 15
             restOpacity: row.fav ? 0.95 : 0.6
             opacity: row.fav || row.hovered ? 1 : 0

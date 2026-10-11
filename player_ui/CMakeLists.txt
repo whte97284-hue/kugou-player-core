@@ -59,6 +59,7 @@ qt_add_qml_module(KugouPlayer
         qml/PlaylistDetail.qml
         qml/SearchPage.qml
         qml/ToolsPage.qml
+        qml/CrossfadeCover.qml
         qml/DecryptPrompt.qml
         qml/DecryptToast.qml
 )

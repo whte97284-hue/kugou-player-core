@@ -184,19 +184,114 @@ Item {
             Item { width: 1; height: 10 }
         }
 
-        delegate: TrackRow {
+        // 拖动排序:悬停时行左侧出现把手,按住把手上下拖,强调色细线标出落点
+        property int dragFrom: -1
+        property int dropAt: -1
+        delegate: Item {
+            id: rowWrap
             width: list.width
-            trackId: model.trackId
-            number: model.number
-            title: model.title
-            artist: model.artist
-            album: model.album
-            quality: model.quality
-            duration: model.duration
-            cover: model.cover
-            showAlbum: true
-            menuContext: ({ playlistId: page.playlistId })
-            onActivated: player.playTracks(playlistTracks.trackIds(), index)
+            height: trackRow.height
+            opacity: list.dragFrom === index ? 0.35 : 1
+            Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+
+            TrackRow {
+                id: trackRow
+                width: parent.width
+                trackId: model.trackId
+                number: model.number
+                title: model.title
+                artist: model.artist
+                album: model.album
+                quality: model.quality
+                duration: model.duration
+                cover: model.cover
+                showAlbum: true
+                menuContext: ({ playlistId: page.playlistId })
+                onActivated: player.playTracks(playlistTracks.trackIds(), index)
+            }
+            Icon {
+                x: -26
+                anchors.verticalCenter: parent.verticalCenter
+                name: "grip"
+                size: 16
+                opacity: grip.containsMouse || grip.pressed ? 0.9 : (trackRow.hovered ? 0.4 : 0)
+                Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+            }
+            MouseArea {
+                id: grip
+                x: -34
+                width: 30
+                height: parent.height
+                hoverEnabled: true
+                cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                preventStealing: true
+                onPressed: (e) => {
+                    list.dragFrom = index
+                    list.dropAt = index
+                    ghost.title = model.title
+                    ghost.cover = model.cover
+                    move(e)
+                }
+                onPositionChanged: (e) => { if (pressed) move(e) }
+                onReleased: {
+                    const from = list.dragFrom, to = list.dropAt
+                    list.dragFrom = -1
+                    list.dropAt = -1
+                    ghost.visible = false
+                    if (from >= 0 && to >= 0 && to !== from) playlists.move(page.playlistId, from, to)
+                }
+                onCanceled: { list.dragFrom = -1; list.dropAt = -1; ghost.visible = false }
+                function move(e) {
+                    const p = mapToItem(list.contentItem, e.x, e.y)
+                    let i = list.indexAt(40, p.y)
+                    if (i < 0) i = p.y < list.originY + (list.headerItem ? list.headerItem.height : 0) ? 0 : list.count - 1
+                    list.dropAt = i
+                    const v = mapToItem(page, e.x, e.y)
+                    ghost.y = v.y - ghost.height / 2
+                    ghost.visible = true
+                    // 拖到上下边缘时自动滚动
+                    const lv = mapToItem(list, e.x, e.y)
+                    if (lv.y < 60) list.contentY = Math.max(list.originY, list.contentY - 12)
+                    else if (lv.y > list.height - page.bottomInset - 20)
+                        list.contentY = Math.min(list.contentHeight + list.originY - list.height + list.bottomMargin, list.contentY + 12)
+                }
+            }
+            // 落点指示线
+            Rectangle {
+                visible: list.dropAt === index && list.dragFrom >= 0 && list.dropAt !== list.dragFrom
+                y: list.dropAt > list.dragFrom ? parent.height - 1 : -1
+                width: parent.width
+                height: 2
+                radius: 1
+                color: Theme.accent
+            }
+        }
+    }
+
+    // 拖动中跟随指针的行影
+    Rectangle {
+        id: ghost
+        property string title
+        property string cover
+        visible: false
+        x: page.sidePadding + 8
+        width: Math.min(420, page.width - page.sidePadding * 2)
+        height: 52
+        radius: Theme.radiusM
+        color: Theme.panel
+        border.width: 1
+        border.color: Theme.accentAlpha(0.5)
+        z: 10
+        RoundedImage { x: 8; anchors.verticalCenter: parent.verticalCenter; width: 36; height: 36; radius: 6; source: ghost.cover; decodeSize: 72 }
+        Text {
+            x: 56
+            width: parent.width - 70
+            anchors.verticalCenter: parent.verticalCenter
+            text: ghost.title
+            elide: Text.ElideRight
+            color: Theme.text
+            font.family: Theme.fontFamily
+            font.pixelSize: 14
         }
     }
 

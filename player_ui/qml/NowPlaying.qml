@@ -76,7 +76,7 @@ Item {
         height: np.columnH
 
         SoftShadow { target: cover; spread: 40; offsetY: 24; strength: 0.95 }
-        RoundedImage {
+        CrossfadeCover {
             id: cover
             width: np.coverSize
             height: np.coverSize
@@ -112,6 +112,7 @@ Item {
                     width: 38; height: 38
                     icon: fav ? "heart-filled" : "heart"
                     iconTint: fav ? Theme.accent : "transparent"
+                    popOnChange: true
                     iconSize: 19
                     onClicked: playlists.toggleFavorite(player.trackId)
                 }

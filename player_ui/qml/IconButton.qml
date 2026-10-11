@@ -14,6 +14,9 @@ Item {
     property string tip
     property color iconTint: "transparent"
     readonly property alias hovered: mouse.containsMouse
+    // 图标切换时弹跳一下 (收藏等状态型按钮)
+    property bool popOnChange: false
+    onIconChanged: if (popOnChange) pop.restart()
     signal clicked()
 
     width: 40
@@ -29,11 +32,17 @@ Item {
         Behavior on color { ColorAnimation { duration: Theme.fast } }
     }
     Icon {
+        id: glyph
         anchors.centerIn: parent
         // 填充按钮在浅色强调色上自动切换为深色图标,保证对比度
         name: btn.filled && Theme.accentIsLight ? btn.icon + "-dark" : btn.icon
         size: btn.iconSize
         tint: btn.iconTint
+        SequentialAnimation {
+            id: pop
+            ScaleAnimator { target: glyph; from: 0.6; to: 1.28; duration: 160; easing.type: Easing.OutCubic }
+            ScaleAnimator { target: glyph; to: 1; duration: 260; easing.type: Easing.OutBack }
+        }
         opacity: btn.filled ? 1 : (mouse.containsMouse ? 1 : btn.restOpacity)
         Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
     }

@@ -94,8 +94,29 @@ Item {
             onClicked: if (player.hasTrack) island.expandRequested()
         }
     }
+    // 切歌:旧歌名向左淡出,新歌名从右侧滑入
+    property string shownTitle
+    property string shownArtist
+    Component.onCompleted: { shownTitle = player.title; shownArtist = player.artist }
+    Connections {
+        target: player
+        function onTrackChanged() { swap.restart() }
+    }
+    SequentialAnimation {
+        id: swap
+        ParallelAnimation {
+            OpacityAnimator { target: titleCol; to: 0; duration: 130; easing.type: Easing.InCubic }
+            NumberAnimation { target: titleShift; property: "x"; to: -10; duration: 130; easing.type: Easing.InCubic }
+        }
+        ScriptAction { script: { island.shownTitle = player.title; island.shownArtist = player.artist; titleShift.x = 14 } }
+        ParallelAnimation {
+            OpacityAnimator { target: titleCol; to: 1; duration: 320; easing.type: Easing.OutCubic }
+            NumberAnimation { target: titleShift; property: "x"; to: 0; duration: 420; easing.type: Easing.OutQuint }
+        }
+    }
     Column {
         id: titleCol
+        transform: Translate { id: titleShift }
         anchors.left: discBox.right
         anchors.leftMargin: 14
         anchors.right: controls.left
@@ -104,7 +125,7 @@ Item {
         spacing: 2
         Text {
             width: parent.width
-            text: player.hasTrack ? player.title : ""
+            text: player.hasTrack ? island.shownTitle : ""
             elide: Text.ElideRight
             color: Theme.text
             font.family: Theme.fontFamily
@@ -113,7 +134,7 @@ Item {
         }
         Text {
             width: parent.width
-            text: player.hasTrack ? player.artist : ""
+            text: player.hasTrack ? island.shownArtist : ""
             elide: Text.ElideRight
             color: Theme.textSecondary
             font.family: Theme.fontFamily
