@@ -38,7 +38,7 @@ Item {
             labelSize: 256
         }
         SoftShadow { target: sleeve; spread: 36; offsetY: 20 }
-        RoundedImage {
+        CrossfadeCover {
             id: sleeve
             width: hero.s
             height: hero.s

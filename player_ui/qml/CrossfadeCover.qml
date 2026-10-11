@@ -10,8 +10,14 @@ Item {
     property bool frontIsA: true
 
     onSourceChanged: {
+        const front = frontIsA ? a : b
         const back = frontIsA ? b : a
-        if (String(back.source) === source) return
+        if (String(front.source) === source) return
+        // 后层恰好已是这张 (来回切换时常见):已就绪则直接翻面,否则等它加载完成
+        if (String(back.source) === source) {
+            if (back.status === Image.Ready) frontIsA = !frontIsA
+            return
+        }
         back.source = source
     }
 
