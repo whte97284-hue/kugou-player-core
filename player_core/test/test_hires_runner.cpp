@@ -81,7 +81,7 @@ int main() {
     g_logger = &logger;
 
     logger.Log(L"================================================================================");
-    logger.Log(L"  [Phase 2 进阶发烧实测] 240GB / 4000+ 首母带级真实物理压测与硬件闭环验证");
+    logger.Log(L"  [Phase 2 进阶发烧实测] 本地母带库真实物理压测与硬件闭环验证 (规模见下方实际统计)");
     logger.Log(L"  遵循铁律: 零模拟 · 真实硬件管线 · 绝不假测试 · 目标母带库绝对只读安全");
     logger.Log(L"================================================================================\n");
 
@@ -174,9 +174,9 @@ int main() {
     }
 
     // ========================================================================
-    // 梯度 2: 全库 240GB / 4,162 实体文件多线程异步并发入库压测
+    // 梯度 2: 全库多线程异步并发入库压测
     // ========================================================================
-    logger.Log(L"\n▶ 【梯度 2】240GB 全母带库多线程异步并发扫描与吞吐量压测 (AudioIngestionPipeline):");
+    logger.Log(L"\n▶ 【梯度 2】全母带库多线程异步并发扫描与吞吐量压测 (AudioIngestionPipeline):");
 
     AudioIngestionPipeline hiresPipeline;
     hiresPipeline.SetTargetLibraryDir(L"player_core\\test\\ingestion_output"); // 只读扫描，不修改原库
@@ -242,6 +242,8 @@ int main() {
                L" (注意:若刚运行过 library_audit,文件头已在系统缓存中,本次耗时不代表冷启动)");
     logger.Log(L"  - 总耗时 (Wall Time): " + std::to_wstring(totalWallSec) + L" 秒");
     double speed = hiresSummary.total_scanned > 0 ? (hiresSummary.total_scanned / totalWallSec) : 0.0;
+    logger.Log(L"  - 库规模 (实测): " + std::to_wstring(hiresSummary.library_bytes / 1073741824.0) + L" GB, " +
+               std::to_wstring(hiresSummary.total_scanned) + L" 个文件");
     logger.Log(L"  - 平均解析吞吐量: " + std::to_wstring(speed) + L" 首/秒");
     logger.Log(L"  - 增量缓存: 命中 " + std::to_wstring(hiresSummary.cache_hits) + L" / 实际解析 " +
                std::to_wstring(hiresSummary.cache_misses) +
@@ -278,7 +280,7 @@ int main() {
     }
 
     // ========================================================================
-    // 梯度 3: 4000+ 首曲库分类、拼音索引、智能检索与去重折叠压测
+    // 梯度 3: 全库曲库分类、拼音索引、智能检索与去重折叠压测
     // ========================================================================
     logger.Log(L"\n▶ 【梯度 3】大容量母带曲库智能清洗、拼音索引与检索基准测试 (MusicCatalog):");
 
@@ -302,7 +304,7 @@ int main() {
     logger.Log(L"  - 检索 '陈奕迅' 命中: " + std::to_wstring(easonTracks.size()) +
                L" 首 (耗时 " + std::to_wstring(searchMsEason) + L" ms)");
     AssertCheck(L"检索 '陈奕迅' 命中大于 0 首", !easonTracks.empty(), std::to_wstring(easonTracks.size()) + L" 首");
-    AssertCheck(L"4000+ 首曲库检索延迟 < 15ms (极速毫秒级响应)", searchMsEason < 15.0, std::to_wstring(searchMsEason) + L" ms");
+    AssertCheck(L"全库检索延迟 < 15ms", searchMsEason < 15.0, std::to_wstring(searchMsEason) + L" ms");
 
     // 拼音前缀搜索基准测试 (如 "CYX" 拼音首字母检索)
     auto tSearch2 = std::chrono::high_resolution_clock::now();
