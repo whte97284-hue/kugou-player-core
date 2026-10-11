@@ -162,7 +162,7 @@ bool PlaylistManager::ExportM3U8(const std::string& playlistId, const std::wstri
         trackMap[t.id] = &t;
     }
 
-    std::ofstream ofs(exportPath, std::ios::out | std::ios::trunc | std::ios::binary);
+    std::ofstream ofs(std::filesystem::path(exportPath), std::ios::out | std::ios::trunc | std::ios::binary);
     if (!ofs.is_open()) return false;
 
     // UTF-8 BOM
@@ -192,7 +192,7 @@ bool PlaylistManager::ImportM3U8(const std::wstring& m3u8Path, MusicCatalog& cat
     fs::path p(m3u8Path);
     if (!fs::exists(p)) return false;
 
-    std::ifstream ifs(m3u8Path, std::ios::binary);
+    std::ifstream ifs(std::filesystem::path(m3u8Path), std::ios::binary);
     if (!ifs.is_open()) return false;
 
     std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
@@ -264,7 +264,7 @@ bool PlaylistManager::ImportM3U8(const std::wstring& m3u8Path, MusicCatalog& cat
 
 bool PlaylistManager::SaveToJson(const std::wstring& filePath) const {
     std::lock_guard<std::mutex> lock(mtx_);
-    std::ofstream ofs(filePath, std::ios::out | std::ios::trunc | std::ios::binary);
+    std::ofstream ofs(std::filesystem::path(filePath), std::ios::out | std::ios::trunc | std::ios::binary);
     if (!ofs.is_open()) return false;
 
     std::ostringstream ss;
@@ -298,7 +298,7 @@ bool PlaylistManager::SaveToJson(const std::wstring& filePath) const {
 
 bool PlaylistManager::LoadFromJson(const std::wstring& filePath) {
     if (!fs::exists(filePath)) return false;
-    std::ifstream ifs(filePath, std::ios::binary);
+    std::ifstream ifs(std::filesystem::path(filePath), std::ios::binary);
     if (!ifs.is_open()) return false;
 
     std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());

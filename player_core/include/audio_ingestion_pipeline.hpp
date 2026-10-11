@@ -6,9 +6,17 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
-#include <condition_variable>
-#include <queue>
 #include "music_catalog.hpp"
+
+// ============================================================================
+//  AudioIngestionPipeline —— 曲库入库流水线
+//   · 高速目录枚举 (Win32 FindFirstFileEx LARGE_FETCH,一次调用拿到文件名+大小)
+//   · 存储感知并发:自动探测机械盘/固态盘,机械盘降低并发避免磁头抖动
+//   · 惰性封面:只记录内嵌封面的物理偏移,零图片 I/O 构建曲库
+//   · 无锁结果收集 + 工作线程内完成清洗/拼音计算,曲库锁只用于极短的批量提交
+//   · CUE 整轨自动拆分、同目录伴生封面 (cover.jpg / folder.jpg) 关联
+//   · KGM 解密:掩码表整个运行期仅映射一次,解密内核为单条异或流水线
+// ============================================================================
 
 struct IngestionItemResult {
     std::wstring source_path;
@@ -32,6 +40,17 @@ struct IngestionSummary {
     size_t transcoded_count = 0;
     size_t failed_count = 0;
     double elapsed_seconds = 0.0;
+
+    // 扩展审计指标
+    size_t tracks_added = 0;        // 实际入库曲目数 (CUE 分轨后可能多于文件数)
+    size_t cue_tracks = 0;          // 由 CUE 拆分出的虚拟曲目数
+    size_t external_covers = 0;     // 关联到同目录伴生封面的曲目数
+    uint64_t bytes_read = 0;        // 解析阶段真实磁盘读取字节数 (不含解密)
+    uint64_t library_bytes = 0;     // 扫描到的音频文件总大小
+    double enumerate_seconds = 0.0; // 目录枚举耗时
+    size_t thread_count = 0;
+    int storage_seek_penalty = -1;  // 1 = 机械盘, 0 = 固态盘, -1 = 未知
+    bool cancelled = false;
 };
 
 class AudioIngestionPipeline {
@@ -42,8 +61,9 @@ public:
     // 配置参数
     void SetTargetLibraryDir(const std::wstring& dir);
     void SetKgmMaskPath(const std::wstring& maskPath);
-    void SetThreadCount(size_t threads);               // 默认自适应多核 CPU 线程数
-    void SetLazyCoverExtract(bool lazy);               // 开启后入库不抽取落盘几万张图片，光速构建万级曲库
+    void SetThreadCount(size_t threads);               // 0 = 按存储类型自适应 (机械盘 4 / 固态盘按核心数)
+    void SetLazyCoverExtract(bool lazy);               // 开启后入库不读取封面图片,仅记录偏移,光速构建万级曲库
+    void SetSplitCueSheets(bool split);                // 默认开启:整轨 + CUE 自动拆分为独立曲目
 
     // 输入源管理
     void AddInputPath(const std::wstring& path);
@@ -60,21 +80,31 @@ public:
     // 控制与状态
     void Cancel();
     bool IsRunning() const { return is_running_.load(); }
+    IngestionSummary GetLastSummary() const;
 
-    // 进度回调通知 (同步模式下触发)
+    // 进度回调通知 (串行化调用,current 严格单调递增)
     std::function<void(const IngestionProgress&)> on_progress;
 
+    // KGM 掩码解密内核 (公开以便单元测试):out = x ^ (x << 4), x = c ^ key[i % 17] ^ mask[i % maskLen]
+    static void KgmDecryptBlock(uint8_t* data, size_t len, uint64_t fileOffset, const uint8_t key17[17],
+                                const uint8_t* mask, uint64_t maskLen);
+
 private:
-    bool DecryptKgm(const std::wstring& src, const std::wstring& targetDir, std::wstring& outDecryptedPath);
+    struct Impl;
+    bool DecryptKgm(const std::wstring& src, const std::wstring& targetDir, std::wstring& outDecryptedPath,
+                    std::wstring& outMessage);
 
     std::wstring target_lib_dir_;
     std::wstring kgm_mask_path_;
     std::vector<std::wstring> input_paths_;
     size_t thread_count_ = 0;
     bool lazy_cover_extract_ = false;
+    bool split_cue_ = true;
 
     std::atomic<bool> is_running_{false};
     std::atomic<bool> cancel_requested_{false};
     std::thread async_worker_thread_;
-    std::mutex pipeline_mutex_;
+    mutable std::mutex pipeline_mutex_;
+    IngestionSummary last_summary_;
+    std::shared_ptr<void> mask_; // 运行期间共享的 KGM 掩码映射
 };

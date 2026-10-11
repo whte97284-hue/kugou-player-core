@@ -6,162 +6,179 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+namespace {
+constexpr float kMinFreq = 30.0f;
+constexpr float kMaxFreq = 20000.0f;
+constexpr float kFloorDb = -70.0f;
+
+float BandEdge(size_t i, float hi) {
+    // 第 i 个频带边界 (共 NUM_BANDS + 1 个),在 [kMinFreq, hi] 上对数均分
+    float t = static_cast<float>(i) / static_cast<float>(FftVisualizer::NUM_BANDS);
+    return kMinFreq * std::pow(hi / kMinFreq, t);
+}
+} // namespace
+
 FftVisualizer::FftVisualizer() {
-    sample_buffer_.reserve(FFT_SIZE * 2);
-    window_.resize(FFT_SIZE);
+    ring_.assign(MAX_FFT_SIZE, 0.0f);
     current_bars_.assign(NUM_BANDS, 0.0f);
     smooth_bars_.assign(NUM_BANDS, 0.0f);
+    Rebuild(FFT_SIZE);
+}
 
-    // 预计算 Hann 窗函数
-    for (size_t i = 0; i < FFT_SIZE; ++i) {
-        window_[i] = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(M_PI) * i / (FFT_SIZE - 1)));
+void FftVisualizer::Rebuild(size_t fftSize) {
+    fft_size_ = fftSize;
+    window_.resize(fftSize);
+    for (size_t i = 0; i < fftSize; ++i) {
+        window_[i] = 0.5f * (1.0f - std::cos(2.0f * static_cast<float>(M_PI) * i / (fftSize - 1)));
     }
+    twiddle_re_.resize(fftSize / 2);
+    twiddle_im_.resize(fftSize / 2);
+    for (size_t k = 0; k < fftSize / 2; ++k) {
+        double a = -2.0 * M_PI * static_cast<double>(k) / static_cast<double>(fftSize);
+        twiddle_re_[k] = static_cast<float>(std::cos(a));
+        twiddle_im_[k] = static_cast<float>(std::sin(a));
+    }
+}
+
+void FftVisualizer::SetSampleRate(uint32_t sampleRate) {
+    if (sampleRate == 0) return;
+    // 保持约 47 Hz 的频率分辨率:48k->1024, 96k->2048, 192k->4096, 384k->8192
+    size_t n = FFT_SIZE;
+    while (n < MAX_FFT_SIZE && sampleRate / static_cast<uint32_t>(n) > 48) n *= 2;
+    std::lock_guard<std::mutex> lock(mtx_);
+    sample_rate_ = sampleRate;
+    if (n != fft_size_) Rebuild(n);
+    ring_pos_ = 0;
+    ring_filled_ = 0;
+    std::fill(ring_.begin(), ring_.end(), 0.0f);
 }
 
 void FftVisualizer::Reset() {
     std::lock_guard<std::mutex> lock(mtx_);
-    sample_buffer_.clear();
+    ring_pos_ = 0;
+    ring_filled_ = 0;
+    std::fill(ring_.begin(), ring_.end(), 0.0f);
     std::fill(current_bars_.begin(), current_bars_.end(), 0.0f);
     std::fill(smooth_bars_.begin(), smooth_bars_.end(), 0.0f);
 }
 
 void FftVisualizer::PushSamples(const float* samples, size_t count, size_t channels) {
     if (!samples || count == 0 || channels == 0) return;
+    // 音频线程:拿不到锁就跳过本块 (UI 正在读取),绝不阻塞声卡回调
+    std::unique_lock<std::mutex> lock(mtx_, std::try_to_lock);
+    if (!lock.owns_lock()) return;
 
-    std::lock_guard<std::mutex> lock(mtx_);
-    // 多声道混音为单声道浮点样本
+    const size_t cap = ring_.size();
+    const float inv = 1.0f / static_cast<float>(channels);
     size_t frames = count / channels;
     for (size_t i = 0; i < frames; ++i) {
         float mono = 0.0f;
-        for (size_t c = 0; c < channels; ++c) {
-            mono += samples[i * channels + c];
-        }
-        mono /= static_cast<float>(channels);
-        sample_buffer_.push_back(mono);
+        for (size_t c = 0; c < channels; ++c) mono += samples[i * channels + c];
+        ring_[ring_pos_] = mono * inv;
+        if (++ring_pos_ == cap) ring_pos_ = 0;
     }
-
-    // 维持缓冲区大小不超过 2 * FFT_SIZE
-    if (sample_buffer_.size() > FFT_SIZE * 2) {
-        sample_buffer_.erase(sample_buffer_.begin(), sample_buffer_.begin() + (sample_buffer_.size() - FFT_SIZE * 2));
-    }
+    ring_filled_ = std::min(cap, ring_filled_ + frames);
 }
 
-void FftVisualizer::ComputeFft(std::vector<float>& real, std::vector<float>& imag) {
-    size_t n = real.size();
+void FftVisualizer::ComputeFft(std::vector<float>& real, std::vector<float>& imag) const {
+    const size_t n = real.size();
     // 1. 位反转排列 (Bit-reversal permutation)
-    size_t j = 0;
-    for (size_t i = 0; i < n - 1; ++i) {
+    for (size_t i = 1, j = 0; i < n; ++i) {
+        size_t bit = n >> 1;
+        for (; j & bit; bit >>= 1) j ^= bit;
+        j ^= bit;
         if (i < j) {
             std::swap(real[i], real[j]);
             std::swap(imag[i], imag[j]);
         }
-        size_t k = n / 2;
-        while (k <= j) {
-            j -= k;
-            k /= 2;
-        }
-        j += k;
     }
-
-    // 2. Cooley-Tukey 蝶形变换
+    // 2. Cooley-Tukey 蝶形变换 (查表旋转因子,无三角函数调用、无误差累积)
     for (size_t len = 2; len <= n; len <<= 1) {
-        float angle = -2.0f * static_cast<float>(M_PI) / len;
-        float wlen_r = std::cos(angle);
-        float wlen_i = std::sin(angle);
-
+        size_t half = len / 2;
+        size_t step = n / len;
         for (size_t i = 0; i < n; i += len) {
-            float w_r = 1.0f;
-            float w_i = 0.0f;
-
-            for (size_t k = 0; k < len / 2; ++k) {
-                float u_r = real[i + k];
-                float u_i = imag[i + k];
-                float v_r = real[i + k + len / 2] * w_r - imag[i + k + len / 2] * w_i;
-                float v_i = real[i + k + len / 2] * w_i + imag[i + k + len / 2] * w_r;
-
-                real[i + k] = u_r + v_r;
-                imag[i + k] = u_i + v_i;
-                real[i + k + len / 2] = u_r - v_r;
-                imag[i + k + len / 2] = u_i - v_i;
-
-                float next_w_r = w_r * wlen_r - w_i * wlen_i;
-                float next_w_i = w_r * wlen_i + w_i * wlen_r;
-                w_r = next_w_r;
-                w_i = next_w_i;
+            for (size_t k = 0; k < half; ++k) {
+                float wr = twiddle_re_[k * step], wi = twiddle_im_[k * step];
+                size_t a = i + k, b = a + half;
+                float vr = real[b] * wr - imag[b] * wi;
+                float vi = real[b] * wi + imag[b] * wr;
+                real[b] = real[a] - vr;
+                imag[b] = imag[a] - vi;
+                real[a] += vr;
+                imag[a] += vi;
             }
         }
     }
 }
 
 std::vector<float> FftVisualizer::GetSpectrumBars() {
-    std::vector<float> input(FFT_SIZE, 0.0f);
+    std::vector<float> real, imag;
+    uint32_t sr;
+    size_t n;
     {
         std::lock_guard<std::mutex> lock(mtx_);
-        if (sample_buffer_.size() >= FFT_SIZE) {
-            size_t start = sample_buffer_.size() - FFT_SIZE;
-            for (size_t i = 0; i < FFT_SIZE; ++i) {
-                input[i] = sample_buffer_[start + i] * window_[i];
-            }
-        } else if (!sample_buffer_.empty()) {
-            size_t available = sample_buffer_.size();
-            for (size_t i = 0; i < available; ++i) {
-                input[i] = sample_buffer_[i] * window_[i];
-            }
+        n = fft_size_;
+        sr = sample_rate_;
+        real.assign(n, 0.0f);
+        // 取最近 n 个样本 (不足时右对齐,前部补零)
+        size_t avail = std::min(ring_filled_, n);
+        size_t cap = ring_.size();
+        for (size_t i = 0; i < avail; ++i) {
+            size_t src = (ring_pos_ + cap - avail + i) % cap;
+            size_t dst = n - avail + i;
+            real[dst] = ring_[src] * window_[dst];
         }
     }
-
-    std::vector<float> real = input;
-    std::vector<float> imag(FFT_SIZE, 0.0f);
+    imag.assign(n, 0.0f);
     ComputeFft(real, imag);
 
-    // 计算幅值与对数频带划分
-    size_t half = FFT_SIZE / 2; // 512 bins
-    std::vector<float> mags(half, 0.0f);
-    for (size_t i = 0; i < half; ++i) {
-        mags[i] = std::sqrt(real[i] * real[i] + imag[i] * imag[i]) / (FFT_SIZE / 2);
-    }
+    // 幅度校准:Hann 窗相干增益 0.5,单边谱 ×2 → 满幅正弦峰值 = 1.0 (0 dBFS)
+    const size_t half = n / 2;
+    const float scale = 4.0f / static_cast<float>(n);
+    std::vector<float> mags(half + 1);
+    for (size_t i = 0; i <= half && i < n; ++i) mags[i] = std::sqrt(real[i] * real[i] + imag[i] * imag[i]) * scale;
 
-    // 将 512 个频点按对数尺度映射到 32 个能量频柱
+    const float binHz = static_cast<float>(sr) / static_cast<float>(n);
+    const float hi = std::min(kMaxFreq, 0.5f * static_cast<float>(sr) * 0.98f);
     std::vector<float> newBars(NUM_BANDS, 0.0f);
     for (size_t b = 0; b < NUM_BANDS; ++b) {
-        // 对数尺度计算频段起始与终止 bin
-        double fStart = std::pow(double(half), double(b) / NUM_BANDS);
-        double fEnd = std::pow(double(half), double(b + 1) / NUM_BANDS);
-        size_t binStart = static_cast<size_t>(std::floor(fStart));
-        size_t binEnd = static_cast<size_t>(std::ceil(fEnd));
-        if (binStart >= half) binStart = half - 1;
-        if (binEnd > half) binEnd = half;
-        if (binEnd <= binStart) binEnd = binStart + 1;
-
-        float maxMag = 0.0f;
-        for (size_t k = binStart; k < binEnd && k < half; ++k) {
-            if (mags[k] > maxMag) maxMag = mags[k];
+        float f0 = BandEdge(b, hi), f1 = BandEdge(b + 1, hi);
+        float lo = f0 / binHz, up = f1 / binHz;
+        float peak = 0.0f;
+        size_t k0 = static_cast<size_t>(std::ceil(lo)), k1 = static_cast<size_t>(std::floor(up));
+        if (k1 >= k0) {
+            for (size_t k = k0; k <= k1 && k <= half; ++k) peak = std::max(peak, mags[k]);
+        } else {
+            // 频带窄于一个 bin (低频区):在频带中心做线性插值,避免多根柱子共用同一个 bin
+            float c = 0.5f * (lo + up);
+            size_t k = static_cast<size_t>(c);
+            float frac = c - static_cast<float>(k);
+            if (k + 1 <= half) peak = mags[k] * (1.0f - frac) + mags[k + 1] * frac;
         }
-
-        // 高频增益补偿 (人耳听觉灵敏度等响度修正)
-        float boost = 1.0f + static_cast<float>(b) * 0.15f;
-        float val = maxMag * boost;
-
-        // 分贝映射并归一化到 0.0 ~ 1.0
-        float db = 20.0f * std::log10(val + 1e-5f);
-        float norm = (db + 60.0f) / 60.0f; // -60dB 到 0dB
-        if (norm < 0.0f) norm = 0.0f;
-        if (norm > 1.0f) norm = 1.0f;
-
-        newBars[b] = norm;
+        // 频谱倾斜补偿:以 1 kHz 为基准 +3 dB/倍频程,使粉红噪声/音乐呈现平直视觉
+        float fc = std::sqrt(f0 * f1);
+        float tiltDb = 3.0f * std::log2(fc / 1000.0f);
+        float db = 20.0f * std::log10(peak + 1e-9f) + tiltDb;
+        float norm = (db - kFloorDb) / -kFloorDb;
+        newBars[b] = std::min(1.0f, std::max(0.0f, norm));
     }
 
     // 时间轴平滑滤波 (Attack 快速上升 + Decay 慢速阻尼下落)
     std::lock_guard<std::mutex> lock(mtx_);
+    current_bars_ = newBars;
     for (size_t b = 0; b < NUM_BANDS; ++b) {
         if (newBars[b] >= smooth_bars_[b]) {
-            // 上升响应灵敏
             smooth_bars_[b] = smooth_bars_[b] * 0.4f + newBars[b] * 0.6f;
         } else {
-            // 下落平滑衰减
-            smooth_bars_[b] = std::max(0.0f, smooth_bars_[b] - 0.04f);
+            smooth_bars_[b] = std::max(newBars[b], smooth_bars_[b] - 0.04f);
         }
     }
-
     return smooth_bars_;
+}
+
+std::vector<float> FftVisualizer::GetBandCenterFrequencies() const {
+    float hi = std::min(kMaxFreq, 0.5f * static_cast<float>(sample_rate_) * 0.98f);
+    std::vector<float> out(NUM_BANDS);
+    for (size_t b = 0; b < NUM_BANDS; ++b) out[b] = std::sqrt(BandEdge(b, hi) * BandEdge(b + 1, hi));
+    return out;
 }
