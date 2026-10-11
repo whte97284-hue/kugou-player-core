@@ -71,7 +71,7 @@ Item {
                 model: [
                     { key: "albums", icon: "albums", label: qsTr("专辑") },
                     { key: "search", icon: "search", label: qsTr("搜索  Ctrl K") },
-                    { key: "folder", icon: "folder", label: qsTr("添加音乐文件夹") },
+                    { key: "folder", icon: "folder", label: qsTr("音乐文件夹") },
                     { key: "rescan", icon: "refresh", label: qsTr("重新扫描") }
                 ]
                 delegate: Item {

@@ -220,13 +220,5 @@ Item {
             current: player.trackId === model.trackId
             onActivated: player.playAlbum(albumTracks.albumIndex, index)
         }
-
-        ScrollBar.vertical: ScrollBar {
-            contentItem: Rectangle {
-                implicitWidth: 4
-                radius: 2
-                color: Qt.rgba(1, 1, 1, parent.pressed ? 0.4 : 0.18)
-            }
-        }
     }
 }

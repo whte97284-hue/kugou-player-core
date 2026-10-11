@@ -14,7 +14,9 @@
 
 // 离屏截图驱动 (开发验证用):--screenshot <输出目录>
 // 依次调用 QML 根对象上的自动化函数并截图,用于在无显示器环境下检查排版与配色
-static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, PlayerController& player, const QString& outDir) {
+// flowDir 非空时改为验证「首次使用」流程:空曲库引导 → 添加文件夹 → 识别进度 → 专辑墙 → 打开专辑点歌播放
+static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, PlayerController& player, const QString& outDir,
+                           const QString& flowDir) {
     QDir().mkpath(outDir);
     auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().value(0));
     if (!window) return;
@@ -29,6 +31,21 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         if (arg.isValid()) QMetaObject::invokeMethod(window, fn, Q_ARG(QVariant, arg));
         else QMetaObject::invokeMethod(window, fn);
     };
+    if (!flowDir.isEmpty()) {
+        steps->push_back({"f1_empty", [] {}, 1200});
+        steps->push_back({"f2_importing", [&lib, flowDir] { lib.addFolder(flowDir); }, 1100});
+        steps->push_back({"f3_imported", [] {}, 4000});
+        steps->push_back({"f4_folders", [call] { call("automationLibraryPanel", true); }, 900});
+        steps->push_back({"f5_album", [call] {
+            call("automationLibraryPanel", false);
+            call("automationOpenAlbum", 1);
+        }, 1400});
+        steps->push_back({"f6_playing", [&player] { player.playAlbum(1, 2); }, 2200});
+        steps->push_back({"f7_removed", [&lib, call] {
+            call("automationBack");
+            if (!lib.folders().isEmpty()) lib.removeFolder(lib.folders().first());
+        }, 2500});
+    } else {
     steps->push_back({"01_albums", [] {}, 1500});
     steps->push_back({"02_album_detail", [call] { call("automationOpenAlbum", 0); }, 1500});
     steps->push_back({"03_playing", [&player, call] {
@@ -59,6 +76,7 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         call("automationHideChain");
         window->resize(980, 640);
     }, 1500});
+    }
 
     auto run = std::make_shared<std::function<void(size_t)>>();
     *run = [=](size_t i) {
@@ -74,7 +92,8 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         });
     };
     auto start = [run]() { (*run)(0); };
-    if (lib.scanning()) QObject::connect(&lib, &LibraryService::scanningChanged, window, [&lib, start]() {
+    if (!flowDir.isEmpty()) QTimer::singleShot(800, start);
+    else if (lib.scanning()) QObject::connect(&lib, &LibraryService::scanningChanged, window, [&lib, start]() {
         if (!lib.scanning()) QTimer::singleShot(800, start);
     });
     else QTimer::singleShot(800, start);
@@ -87,11 +106,12 @@ int main(int argc, char* argv[]) {
     app.setApplicationName("KugouPlayer");
     QQuickStyle::setStyle("Basic");
 
-    QString screenshotDir, libraryArg;
+    QString screenshotDir, libraryArg, flowArg;
     const QStringList args = app.arguments();
     for (int i = 1; i + 1 < args.size(); ++i) {
         if (args[i] == "--screenshot") screenshotDir = args[i + 1];
         if (args[i] == "--library") libraryArg = args[i + 1];
+        if (args[i] == "--flow") flowArg = args[i + 1];
     }
 
     LibraryService library;
@@ -121,6 +141,6 @@ int main(int argc, char* argv[]) {
     if (!libraryArg.isEmpty()) library.addFolder(libraryArg);
     else library.rescan();
 
-    if (!screenshotDir.isEmpty()) RunScreenshots(engine, library, player, screenshotDir);
+    if (!screenshotDir.isEmpty()) RunScreenshots(engine, library, player, screenshotDir, flowArg);
     return app.exec();
 }

@@ -42,6 +42,8 @@ qt_add_qml_module(KugouPlayer
         qml/NowPlaying.qml
         qml/HeroBanner.qml
         qml/ScanToast.qml
+        qml/Onboarding.qml
+        qml/LibraryPanel.qml
 )
 
 qt_add_shaders(KugouPlayer "shaders"

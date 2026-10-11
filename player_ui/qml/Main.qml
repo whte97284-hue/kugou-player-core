@@ -40,7 +40,7 @@ Window {
                 id: wall
                 anchors.fill: parent
                 bottomInset: Theme.islandHeight + 60
-                opacity: root.detailShown ? 0 : 1
+                opacity: root.detailShown || library.albumCount === 0 ? 0 : 1
                 visible: opacity > 0
                 scale: root.detailShown ? 0.985 : 1
                 Behavior on opacity { OpacityAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
@@ -58,6 +58,16 @@ Window {
                 Behavior on opacity { OpacityAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
                 Behavior on scale { ScaleAnimator { duration: Theme.slow; easing.type: Easing.OutQuint } }
                 onBack: root.closeAlbum()
+            }
+
+            // 曲库为空:引导选择文件夹;首次导入时显示识别进度
+            Onboarding {
+                anchors.fill: parent
+                anchors.bottomMargin: 60
+                visible: opacity > 0
+                opacity: library.albumCount === 0 && !root.detailShown ? 1 : 0
+                Behavior on opacity { OpacityAnimator { duration: Theme.slow; easing.type: Easing.OutCubic } }
+                onPickFolder: folderDialog.open()
             }
         }
 
@@ -77,7 +87,7 @@ Window {
             onNavigate: (target) => {
                 if (target === "albums") root.closeAlbum()
                 else if (target === "search") palette.open("")
-                else if (target === "folder") folderDialog.open()
+                else if (target === "folder") library.folders.length ? libraryPanel.open() : folderDialog.open()
                 else if (target === "rescan") library.rescan()
             }
         }
@@ -190,7 +200,7 @@ Window {
         y: root.height - height - 24
         z: 20
         // 沉浸页有自己的控制区,岛下沉隐去
-        opacity: nowPlaying.shown ? 0 : 1
+        opacity: nowPlaying.shown || (library.albumCount === 0 && !player.hasTrack) ? 0 : 1
         visible: opacity > 0
         Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
         onChainClicked: chain.shown = !chain.shown
@@ -212,6 +222,8 @@ Window {
     }
 
     ScanToast {
+        // 首次导入时由引导页展示完整进度,不重复显示
+        enabled: library.albumCount > 0
         anchors.horizontalCenter: island.horizontalCenter
         y: 18
         z: 25
@@ -247,10 +259,58 @@ Window {
         onOpenAlbum: (index) => root.openAlbum(index, null)
     }
 
+    LibraryPanel {
+        id: libraryPanel
+        z: 40
+        onPickFolder: folderDialog.open()
+    }
+
     FolderDialog {
         id: folderDialog
         title: qsTr("选择音乐文件夹")
-        onAccepted: library.addFolder(decodeURIComponent(selectedFolder.toString().replace(/^file:\/{2,3}/, Qt.platform.os === "windows" ? "" : "/")))
+        onAccepted: {
+            library.addFolderUrls([selectedFolder])
+            if (root.detailShown) root.closeAlbum()
+        }
+    }
+
+    // ======================= 拖放添加文件夹 =======================
+    DropArea {
+        id: drop
+        anchors.fill: parent
+        z: 60
+        keys: ["text/uri-list"]
+        onDropped: (d) => {
+            if (!d.hasUrls) return
+            const urls = []
+            for (let i = 0; i < d.urls.length; ++i) urls.push(d.urls[i])
+            library.addFolderUrls(urls)
+            d.acceptProposedAction()
+        }
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: 14
+            radius: Theme.radiusL
+            color: Theme.accentAlpha(0.07)
+            border.width: 1.5
+            border.color: Theme.accentAlpha(0.6)
+            opacity: drop.containsDrag ? 1 : 0
+            visible: opacity > 0
+            Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+            Column {
+                anchors.centerIn: parent
+                spacing: 12
+                Icon { anchors.horizontalCenter: parent.horizontalCenter; name: "folder"; size: 40 }
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: qsTr("松开以添加到曲库")
+                    color: Theme.text
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 20
+                    font.weight: Font.DemiBold
+                }
+            }
+        }
     }
 
     // ======================= 键盘 =======================
@@ -262,7 +322,8 @@ Window {
     Shortcut {
         sequence: "Escape"
         enabled: !palette.shown
-        onActivated: chain.shown ? (chain.shown = false) : (nowPlaying.shown ? (nowPlaying.shown = false) : root.closeAlbum())
+        onActivated: libraryPanel.shown ? libraryPanel.close()
+                     : chain.shown ? (chain.shown = false) : (nowPlaying.shown ? (nowPlaying.shown = false) : root.closeAlbum())
     }
 
     // 在任意位置直接打字即唤出搜索
@@ -315,4 +376,5 @@ Window {
             if (library.albumInfo(i).title === String(t)) { player.playAlbum(i, 0); return }
     }
     function automationHideChain() { chain.shown = false }
+    function automationLibraryPanel(on) { on ? libraryPanel.open() : libraryPanel.close() }
 }

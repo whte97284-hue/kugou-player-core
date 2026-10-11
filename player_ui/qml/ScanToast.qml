@@ -4,7 +4,7 @@ import PlayerUi
 // 扫描进度胶囊:扫描时出现,完成后显示结果并在 3 秒后淡出
 Rectangle {
     id: toast
-    property bool shown: library.scanning || hold.running
+    property bool shown: enabled && (library.scanning || hold.running)
     width: Math.max(220, label.implicitWidth + 44)
     height: 38
     radius: 19

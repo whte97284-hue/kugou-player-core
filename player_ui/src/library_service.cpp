@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QUrl>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -78,19 +79,73 @@ std::shared_ptr<const LibrarySnapshot> LibraryService::snapshot() const {
     return snap_;
 }
 
+void LibraryService::saveFolders() {
+    QSettings().setValue("library/folders", folders_);
+    emit foldersChanged();
+}
+
 void LibraryService::addFolder(const QString& path) {
-    QString p = QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath());
-    if (!folders_.contains(p)) {
+    if (addFolderUrls({path}) == 0) rescan(); // 已存在的文件夹:当作一次手动重扫
+}
+
+int LibraryService::addFolderUrls(const QVariantList& urls) {
+    int added = 0;
+    for (const QVariant& v : urls) {
+        QUrl u = v.toUrl();
+        QString local = u.isLocalFile() ? u.toLocalFile() : v.toString();
+        if (local.isEmpty()) continue;
+        QFileInfo fi(local);
+        // 拖进来的是文件:取其所在文件夹
+        if (fi.exists() && !fi.isDir()) fi = QFileInfo(fi.absolutePath());
+        if (!fi.isDir()) continue;
+        QString p = QDir::toNativeSeparators(QDir::cleanPath(fi.absoluteFilePath()));
+        // 已被某个父文件夹覆盖的子文件夹不重复添加;新加的父文件夹吸收已有的子文件夹
+        bool covered = false;
+        for (const QString& f : folders_) {
+            QString fp = QDir::fromNativeSeparators(f), np = QDir::fromNativeSeparators(p);
+            if (np.compare(fp, Qt::CaseInsensitive) == 0 || np.startsWith(fp + "/", Qt::CaseInsensitive)) covered = true;
+        }
+        if (covered) continue;
+        QString np = QDir::fromNativeSeparators(p);
+        folders_.erase(std::remove_if(folders_.begin(), folders_.end(), [&](const QString& f) {
+                           return QDir::fromNativeSeparators(f).startsWith(np + "/", Qt::CaseInsensitive);
+                       }),
+                       folders_.end());
         folders_.append(p);
-        QSettings().setValue("library/folders", folders_);
-        emit foldersChanged();
+        ++added;
     }
-    rescan();
+    if (added) {
+        saveFolders();
+        rescan();
+    }
+    return added;
+}
+
+void LibraryService::removeFolder(const QString& path) {
+    if (!folders_.removeOne(path)) return;
+    saveFolders();
+    if (scanning_) {
+        rescanPending_ = true;
+        cancelScan();
+    } else if (folders_.isEmpty()) {
+        // 最后一个文件夹被移除:清空曲库
+        finishScan(std::make_shared<LibrarySnapshot>(), IngestionSummary{});
+    } else {
+        startScan();
+    }
 }
 
 void LibraryService::rescan() {
-    if (scanning_ || folders_.isEmpty()) return;
+    if (folders_.isEmpty()) return;
+    if (scanning_) {
+        rescanPending_ = true;
+        return;
+    }
     startScan();
+}
+
+void LibraryService::cancelScan() {
+    if (scanning_ && job_) job_->pipeline.Cancel();
 }
 
 void LibraryService::startScan() {
@@ -107,8 +162,11 @@ void LibraryService::startScan() {
     job->clock.start();
 
     scanning_ = true;
+    rescanPending_ = false;
     progress_ = 0;
-    status_ = tr("正在扫描曲库…");
+    scanDone_ = scanTotal_ = 0;
+    scanFile_.clear();
+    status_ = tr("正在查找音乐文件…");
     emit scanningChanged();
     emit progressChanged();
 
@@ -120,41 +178,72 @@ void LibraryService::startScan() {
             if (now - job->lastPost.load() < 60 && p.current != p.total) return;
             job->lastPost.store(now);
             double v = p.total ? double(p.current) / double(p.total) : 0.0;
-            QString text = tr("正在扫描 %1 / %2").arg(p.current).arg(p.total);
-            QMetaObject::invokeMethod(this, [this, v, text]() {
+            int done = static_cast<int>(p.current), total = static_cast<int>(p.total);
+            QString file = Q(p.current_filename);
+            QMetaObject::invokeMethod(this, [this, v, done, total, file]() {
+                if (!scanning_) return;
                 progress_ = v;
-                status_ = text;
+                scanDone_ = done;
+                scanTotal_ = total;
+                scanFile_ = file;
+                status_ = tr("正在识别 %1 / %2").arg(done).arg(total);
                 emit progressChanged();
             }, Qt::QueuedConnection);
         },
         [this, job](const IngestionSummary& sum) {
             // 专辑聚合同样在后台线程完成,界面线程只做指针交换
             auto snap = BuildAlbums(std::move(job->catalog));
-            double secs = sum.elapsed_seconds;
-            size_t hits = sum.cache_hits;
-            QMetaObject::invokeMethod(this, [this, snap, secs, hits]() { finishScan(snap, secs, hits); },
-                                      Qt::QueuedConnection);
+            QMetaObject::invokeMethod(this, [this, snap, sum]() { finishScan(snap, sum); }, Qt::QueuedConnection);
         });
 }
 
-void LibraryService::finishScan(std::shared_ptr<LibrarySnapshot> snap, double seconds, size_t cacheHits) {
-    {
-        std::lock_guard<std::mutex> lock(snap_mutex_);
-        snap_ = snap;
+void LibraryService::finishScan(std::shared_ptr<LibrarySnapshot> snap, const IngestionSummary& sum) {
+    // 被取消的扫描结果不完整:曲库已有内容时保留旧快照,首次导入时保留已识别的部分
+    const bool keepOld = sum.cancelled && albumCount() > 0;
+    if (!keepOld) {
+        {
+            std::lock_guard<std::mutex> lock(snap_mutex_);
+            snap_ = snap;
+        }
+        ++generation_;
     }
-    ++generation_;
     scanning_ = false;
     progress_ = 1.0;
-    status_ = tr("%1 首 · %2 张专辑 · 用时 %3 秒%4")
-                  .arg(snap->catalog.GetAllTracks().size())
-                  .arg(snap->albums.size())
-                  .arg(seconds, 0, 'f', 2)
-                  .arg(cacheHits ? tr(" (增量)") : QString());
-    emit libraryChanged();
+    scanFile_.clear();
+
+    const int tracks = static_cast<int>(snap->catalog.GetAllTracks().size());
+    const int albums = static_cast<int>(snap->albums.size());
+    lastScan_ = QVariantMap{
+        {"tracks", tracks},
+        {"albums", albums},
+        {"failed", static_cast<int>(sum.failed_count)},
+        {"skipped", static_cast<int>(sum.skipped_count)},
+        {"seconds", sum.elapsed_seconds},
+        {"incremental", sum.cache_hits > 0},
+        {"cancelled", sum.cancelled},
+    };
+    if (sum.cancelled) status_ = tr("已取消扫描");
+    else if (folders_.isEmpty()) status_ = tr("曲库已清空");
+    else
+        status_ = tr("%1 首 · %2 张专辑 · %3 秒%4")
+                      .arg(tracks)
+                      .arg(albums)
+                      .arg(sum.elapsed_seconds, 0, 'f', 1)
+                      .arg(sum.failed_count ? tr(" · %1 个文件无法识别").arg(sum.failed_count) : QString());
+    if (!keepOld) emit libraryChanged();
     emit scanningChanged();
     emit progressChanged();
-    // 后台线程已经结束,回收作业对象放到事件循环下一轮,避免在回调栈内析构流水线
-    QMetaObject::invokeMethod(this, [this]() { if (!scanning_) job_.reset(); }, Qt::QueuedConnection);
+    // 后台线程已经结束,回收作业对象放到事件循环下一轮,避免在回调栈内析构流水线;
+    // 扫描期间有新的文件夹变动则紧接着再扫一次
+    QMetaObject::invokeMethod(this, [this]() {
+        if (scanning_) return;
+        job_.reset();
+        if (rescanPending_) {
+            rescanPending_ = false;
+            if (folders_.isEmpty()) finishScan(std::make_shared<LibrarySnapshot>(), IngestionSummary{});
+            else startScan();
+        }
+    }, Qt::QueuedConnection);
 }
 
 std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<MusicCatalog> catalog) {

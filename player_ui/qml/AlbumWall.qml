@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls.Basic
 import PlayerUi
 
 // 专辑墙:列数随宽度自适应,卡片宽度精确铺满;代理复用,缓冲区预加载封面
@@ -69,39 +68,6 @@ Item {
                 onOpen: wall.openAlbum(model.albumIndex, cardItem.coverItem)
                 onPlay: player.playAlbum(model.albumIndex, 0)
             }
-        }
-
-        ScrollBar.vertical: ScrollBar {
-            policy: ScrollBar.AsNeeded
-            contentItem: Rectangle {
-                implicitWidth: 4
-                radius: 2
-                color: Qt.rgba(1, 1, 1, parent.pressed ? 0.4 : 0.18)
-            }
-        }
-    }
-
-    // 空曲库引导
-    Column {
-        visible: library.albumCount === 0 && !library.scanning
-        anchors.centerIn: parent
-        anchors.verticalCenterOffset: -40
-        spacing: 18
-        Icon { anchors.horizontalCenter: parent.horizontalCenter; name: "disc"; size: 64; opacity: 0.35 }
-        Text {
-            anchors.horizontalCenter: parent.horizontalCenter
-            text: qsTr("你的母带库还是空的")
-            color: Theme.text
-            font.family: Theme.fontFamily
-            font.pixelSize: 22
-            font.weight: Font.DemiBold
-        }
-        Text {
-            anchors.horizontalCenter: parent.horizontalCenter
-            text: qsTr("添加一个音乐文件夹,FLAC / WAV / DSD / APE / M4A / CUE 都会被识别")
-            color: Theme.textTertiary
-            font.family: Theme.fontFamily
-            font.pixelSize: 13
         }
     }
 }
