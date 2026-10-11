@@ -16,24 +16,28 @@ Item {
 
     readonly property bool hovered: mouse.containsMouse || playMouse.containsMouse
 
+    // 投影:悬停时加深并下沉,配合封面上浮形成「拿起」的纵深感
+    SoftShadow {
+        target: coverBox
+        spread: 22
+        offsetY: card.hovered ? 20 : 12
+        strength: card.hovered ? 1.0 : 0.62
+        Behavior on strength { NumberAnimation { duration: Theme.normal } }
+        Behavior on offsetY { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
+    }
+
     Item {
         id: coverBox
         width: parent.width
         height: width
-        scale: card.hovered ? 1.035 : 1
+        y: card.hovered ? -6 : 0
+        scale: card.hovered ? 1.02 : 1
+        Behavior on y { YAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
         Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
 
-        // 悬停时的强调色柔光 (只动 opacity)
-        Rectangle {
-            anchors.fill: parent
-            anchors.margins: -6
-            radius: Theme.radiusM + 6
-            color: Theme.accentAlpha(0.22)
-            opacity: card.hovered ? 1 : 0
-            Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
-        }
         RoundedImage {
             anchors.fill: parent
+            radius: 10
             source: card.cover
             decodeSize: Math.ceil(card.width * 1.5)
         }
@@ -53,7 +57,7 @@ Item {
             Icon {
                 anchors.centerIn: parent
                 anchors.horizontalCenterOffset: 1
-                name: Qt.colorEqual(Theme.onAccent, "#15120e") ? "play-dark" : "play"
+                name: Theme.accentIsLight ? "play-dark" : "play"
                 size: 20
             }
             MouseArea {
@@ -92,8 +96,7 @@ Item {
     }
 
     Column {
-        anchors.top: coverBox.bottom
-        anchors.topMargin: 12
+        y: coverBox.width + 14
         width: parent.width
         spacing: 3
         Text {
@@ -103,7 +106,7 @@ Item {
             color: card.isPlaying ? Theme.accent : Theme.text
             font.family: Theme.fontFamily
             font.pixelSize: 14
-            font.weight: Font.Medium
+            font.weight: Font.DemiBold
         }
         Row {
             width: parent.width

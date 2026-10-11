@@ -8,7 +8,7 @@ Rectangle {
     width: 380
     height: col.implicitHeight + 40
     radius: Theme.radiusL
-    color: Qt.rgba(0.07, 0.07, 0.09, 0.96)
+    color: Theme.panel
     border.width: 1
     border.color: Theme.hairline
     opacity: shown ? 1 : 0

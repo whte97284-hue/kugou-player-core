@@ -16,6 +16,9 @@ Item {
     // 与用户手动滚到底完全一致:最大 contentY 包含底部留白
     function scrollToEnd() { grid.contentY = grid.originY + grid.contentHeight - grid.height + grid.bottomMargin }
     function coverOf(index) {
+        if (grid.headerItem && grid.headerItem.albumIndex === index && grid.headerItem.coverItem
+                && grid.contentY < grid.headerItem.height * 0.6)
+            return grid.headerItem.coverItem
         for (let i = 0; i < grid.contentItem.children.length; ++i) {
             const c = grid.contentItem.children[i]
             if (c.albumIndex === index && c.coverItem) return c.coverItem
@@ -30,8 +33,10 @@ Item {
         anchors.rightMargin: wall.sidePadding
         model: albumModel
         cellWidth: wall.cellW
-        cellHeight: wall.cellW - 24 + 74
+        cellHeight: wall.cellW - 28 + 84
         cacheBuffer: 1200
+        property bool userScrolled: false
+        onMovementStarted: userScrolled = true
         reuseItems: true
         boundsBehavior: Flickable.StopAtBounds
         maximumFlickVelocity: 5200
@@ -39,27 +44,11 @@ Item {
         topMargin: 0
         bottomMargin: wall.bottomInset
 
-        header: Item {
+        header: HeroBanner {
             width: grid.width
-            height: 150
-            Text {
-                y: 62
-                text: qsTr("专辑")
-                color: Theme.text
-                font.family: Theme.fontFamily
-                font.pixelSize: 40
-                font.weight: Font.Bold
-                font.letterSpacing: -0.5
-            }
-            Text {
-                y: 112
-                text: library.albumCount > 0
-                      ? qsTr("%1 张专辑  ·  %2 首曲目").arg(library.albumCount).arg(library.trackCount)
-                      : ""
-                color: Theme.textTertiary
-                font.family: Theme.fontFamily
-                font.pixelSize: 13
-            }
+            onOpenAlbum: (index, coverItem) => wall.openAlbum(index, coverItem)
+            // 扫描完成后横幅变高:用户尚未滚动时保持停在顶部,避免横幅被推出视野
+            onHeightChanged: if (!grid.userScrolled) Qt.callLater(grid.positionViewAtBeginning)
         }
 
         delegate: Item {
@@ -70,7 +59,7 @@ Item {
             readonly property Item coverItem: cardItem.coverItem
             AlbumCard {
                 id: cardItem
-                width: cell.width - 24
+                width: cell.width - 28
                 height: cell.height
                 title: model.title
                 artist: model.artist

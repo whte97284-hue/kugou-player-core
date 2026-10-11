@@ -27,9 +27,8 @@ Window {
         id: scene
         anchors.fill: parent
 
-        Backdrop {
+        Aurora {
             anchors.fill: parent
-            source: player.backdrop
         }
 
         Item {
@@ -60,6 +59,14 @@ Window {
                 Behavior on scale { ScaleAnimator { duration: Theme.slow; easing.type: Easing.OutQuint } }
                 onBack: root.closeAlbum()
             }
+        }
+
+        NowPlaying {
+            id: nowPlaying
+            anchors.fill: parent
+            z: 5
+            onCloseRequested: shown = false
+            onOpenAlbum: (index) => { shown = false; root.openAlbum(index, null) }
         }
 
         SideNav {
@@ -178,12 +185,16 @@ Window {
     PlayIsland {
         id: island
         glassSource: scene
-        width: Math.min(1080, root.width - Theme.navWidth - 56)
+        width: Math.min(920, root.width - Theme.navWidth - 96)
         x: Theme.navWidth + (root.width - Theme.navWidth - width) / 2
-        y: root.height - height - 20
+        y: root.height - height - 24
         z: 20
+        // 沉浸页有自己的控制区,岛下沉隐去
+        opacity: nowPlaying.shown ? 0 : 1
+        visible: opacity > 0
+        Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
         onChainClicked: chain.shown = !chain.shown
-        onTitleClicked: if (player.albumIndex >= 0) root.openAlbum(player.albumIndex, null)
+        onExpandRequested: nowPlaying.shown = true
     }
 
     SignalChain {
@@ -247,7 +258,11 @@ Window {
     Shortcut { sequence: "Space"; enabled: !palette.shown; onActivated: player.toggle() }
     Shortcut { sequence: "Ctrl+Right"; onActivated: player.next() }
     Shortcut { sequence: "Ctrl+Left"; onActivated: player.previous() }
-    Shortcut { sequence: "Escape"; enabled: !palette.shown; onActivated: chain.shown ? (chain.shown = false) : root.closeAlbum() }
+    Shortcut {
+        sequence: "Escape"
+        enabled: !palette.shown
+        onActivated: chain.shown ? (chain.shown = false) : (nowPlaying.shown ? (nowPlaying.shown = false) : root.closeAlbum())
+    }
 
     // 在任意位置直接打字即唤出搜索
     Item {
@@ -293,5 +308,10 @@ Window {
     function automationSearch(q) { palette.open(String(q)) }
     function automationCloseSearch() { palette.close() }
     function automationShowChain() { chain.shown = true }
+    function automationNowPlaying(on) { nowPlaying.shown = !!on }
+    function automationPlayTitle(t) {
+        for (let i = 0; i < library.albumCount; ++i)
+            if (library.albumInfo(i).title === String(t)) { player.playAlbum(i, 0); return }
+    }
     function automationHideChain() { chain.shown = false }
 }

@@ -25,5 +25,9 @@ private:
     QThreadPool pool_;
 };
 
-// 从封面提取强调色:偏好饱和、亮度适中、占比高的颜色,并保证在深色背景上可读
+// 从封面提取强调色:选出主导色相后驯化 (限饱和、定亮度、蓝紫品红降饱和),高级不刺眼
+QColor TameAccent(const QColor& in);
 QColor ExtractAccentColor(const QImage& img);
+
+// 背景调色板:由驯化后的强调色推导「主色深调 / 辅助色 / 主色次深 / 暖中性」4 色,用于极光背景
+QList<QColor> ExtractPalette(const QImage& img);

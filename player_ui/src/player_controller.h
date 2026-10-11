@@ -27,6 +27,8 @@ class PlayerController : public QObject {
     Q_PROPERTY(double duration READ duration NOTIFY trackChanged)
     Q_PROPERTY(double volume READ volume WRITE setVolume NOTIFY volumeChanged)
     Q_PROPERTY(QColor accent READ accent NOTIFY accentChanged)
+    Q_PROPERTY(QVariantList palette READ palette NOTIFY accentChanged)
+    Q_PROPERTY(double bass READ bass NOTIFY spectrumChanged)
     Q_PROPERTY(QVariantList spectrum READ spectrum NOTIFY spectrumChanged)
     Q_PROPERTY(int queueLength READ queueLength NOTIFY queueChanged)
     Q_PROPERTY(int queuePosition READ queuePosition NOTIFY queueChanged)
@@ -53,6 +55,8 @@ public:
     double volume() const { return volume_; }
     void setVolume(double v);
     QColor accent() const { return accent_; }
+    QVariantList palette() const { return palette_; }
+    double bass() const { return bass_; }
     QVariantList spectrum() const { return spectrum_; }
     int queueLength() const { return static_cast<int>(queue_.size()); }
     int queuePosition() const { return queueIndex_; }
@@ -94,7 +98,9 @@ private:
     bool playing_ = false;
     double position_ = 0;
     double volume_ = 0.85;
-    QColor accent_{"#d8b06a"};
+    QColor accent_{"#c8a46e"};
+    QVariantList palette_{QColor("#2e2619"), QColor("#231b16"), QColor("#3a3020"), QColor("#1b1816")};
+    double bass_ = 0;
     QVariantList spectrum_;
     QString error_;
     QTimer timer_;

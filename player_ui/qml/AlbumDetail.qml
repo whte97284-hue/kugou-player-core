@@ -61,19 +61,31 @@ Item {
                 onClicked: page.back()
             }
 
+            Vinyl {
+                width: hero.coverSize * 0.94
+                height: width
+                y: heroCoverItem.y + (hero.coverSize - height) / 2
+                x: page.isCurrentAlbum ? hero.coverSize * 0.42 : hero.coverSize * 0.04
+                Behavior on x { NumberAnimation { duration: 1000; easing.type: Easing.OutCubic } }
+                cover: albumTracks.cover
+                spinning: page.isCurrentAlbum && player.playing
+                labelSize: 256
+            }
+            SoftShadow { target: heroCoverItem; spread: 36; offsetY: 20 }
             RoundedImage {
                 id: heroCoverItem
                 y: 104
                 width: hero.coverSize
                 height: hero.coverSize
-                radius: 16
+                radius: 10
                 source: albumTracks.cover
                 decodeSize: 640
             }
 
             Column {
                 anchors.left: heroCoverItem.right
-                anchors.leftMargin: 40
+                anchors.leftMargin: page.isCurrentAlbum ? hero.coverSize * 0.42 + 44 : 44
+                Behavior on anchors.leftMargin { NumberAnimation { duration: 1000; easing.type: Easing.OutCubic } }
                 anchors.right: parent.right
                 anchors.bottom: heroCoverItem.bottom
                 spacing: 10
@@ -136,7 +148,7 @@ Item {
                             spacing: 8
                             Icon {
                                 anchors.verticalCenter: parent.verticalCenter
-                                name: Qt.colorEqual(Theme.onAccent, "#15120e") ? (page.isCurrentAlbum && player.playing ? "pause-dark" : "play-dark")
+                                name: Theme.accentIsLight ? (page.isCurrentAlbum && player.playing ? "pause-dark" : "play-dark")
                                                                                 : (page.isCurrentAlbum && player.playing ? "pause" : "play")
                                 size: 18
                             }

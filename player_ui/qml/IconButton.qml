@@ -26,7 +26,7 @@ Item {
     Icon {
         anchors.centerIn: parent
         // 填充按钮在浅色强调色上自动切换为深色图标,保证对比度
-        name: btn.filled && Qt.colorEqual(Theme.onAccent, "#15120e") ? btn.icon + "-dark" : btn.icon
+        name: btn.filled && Theme.accentIsLight ? btn.icon + "-dark" : btn.icon
         size: btn.iconSize
         opacity: btn.filled ? 1 : (mouse.containsMouse ? 1 : btn.restOpacity)
         Behavior on opacity { OpacityAnimator { duration: Theme.fast } }

@@ -19,7 +19,6 @@ qt_add_qml_module(KugouPlayer
     QML_FILES
         qml/Main.qml
         qml/Theme.qml
-        qml/Backdrop.qml
         qml/TitleBar.qml
         qml/SideNav.qml
         qml/AlbumWall.qml
@@ -35,6 +34,13 @@ qt_add_qml_module(KugouPlayer
         qml/CommandPalette.qml
         qml/QualityBadge.qml
         qml/RoundedImage.qml
+        qml/Aurora.qml
+        qml/Vinyl.qml
+        qml/SoftShadow.qml
+        qml/EdgeProgress.qml
+        qml/VolumeControl.qml
+        qml/NowPlaying.qml
+        qml/HeroBanner.qml
         qml/ScanToast.qml
 )
 
@@ -44,6 +50,10 @@ qt_add_shaders(KugouPlayer "shaders"
         shaders/grain.frag
         shaders/rounded.frag
         shaders/frosted.frag
+        shaders/aurora.frag
+        shaders/vinyl.frag
+        shaders/sheen.frag
+        shaders/glow.frag
 )
 
 target_link_libraries(KugouPlayer PRIVATE player_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::QuickControls2 Qt6::Svg)
@@ -60,3 +70,4 @@ endif()
 
 file(GLOB PLAYER_ICONS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} icons/*.svg)
 qt_add_resources(KugouPlayer "icons" PREFIX "/" FILES ${PLAYER_ICONS})
+qt_add_resources(KugouPlayer "images" PREFIX "/" FILES images/shadow.png)

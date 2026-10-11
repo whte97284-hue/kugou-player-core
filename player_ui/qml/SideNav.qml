@@ -14,7 +14,7 @@ Item {
         id: panel
         width: nav.expanded ? 196 : Theme.navWidth
         height: parent.height
-        color: nav.expanded ? Qt.rgba(0.07, 0.07, 0.09, 0.92) : Qt.rgba(0, 0, 0, 0.18)
+        color: nav.expanded ? Theme.panel : Qt.rgba(0, 0, 0, 0.12)
         Behavior on width { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
         Behavior on color { ColorAnimation { duration: Theme.normal } }
         Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: Theme.hairline }

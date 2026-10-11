@@ -52,7 +52,7 @@ Item {
         width: tip.implicitWidth + 14
         height: 22
         radius: 6
-        color: Qt.rgba(0.1, 0.1, 0.12, 0.95)
+        color: Theme.tooltip
         Text {
             id: tip
             anchors.centerIn: parent

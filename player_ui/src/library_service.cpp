@@ -1,6 +1,7 @@
 #include "library_service.h"
 
 #include <QCoreApplication>
+#include <QDate>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
@@ -243,4 +244,39 @@ QString LibraryService::qualityBadge(int i) const {
                                                                            : QString::number(a.maxRate / 1000));
     if (a.lossless) return tr("无损");
     return {};
+}
+
+int LibraryService::featuredAlbum() const {
+    auto s = snapshot();
+    const int n = static_cast<int>(s->albums.size());
+    if (n == 0) return -1;
+    std::vector<int> pool;
+    for (int i = 0; i < n; ++i) {
+        const AlbumInfo& a = s->albums[i];
+        if (a.coverTrack && (a.coverTrack->has_cover || !a.coverTrack->external_cover_path.empty()) && (a.hires || a.dsd))
+            pool.push_back(i);
+    }
+    if (pool.empty())
+        for (int i = 0; i < n; ++i) pool.push_back(i);
+    uint seed = qHash(QDate::currentDate().toJulianDay());
+    return pool[seed % pool.size()];
+}
+
+QVariantMap LibraryService::albumInfo(int i) const {
+    QVariantMap m;
+    auto s = snapshot();
+    if (i < 0 || i >= static_cast<int>(s->albums.size())) return m;
+    const AlbumInfo& a = s->albums[i];
+    m["index"] = i;
+    m["title"] = a.title;
+    m["artist"] = a.artist;
+    m["year"] = a.year;
+    m["cover"] = QString("image://cover/a/%1/%2").arg(generation_).arg(i);
+    m["badge"] = qualityBadge(i);
+    m["trackCount"] = static_cast<int>(a.tracks.size());
+    QStringList parts;
+    if (!a.year.isEmpty()) parts << a.year;
+    parts << tr("%1 首").arg(a.tracks.size()) << formatDuration(a.totalMs);
+    m["summary"] = parts.join(QStringLiteral("  ·  "));
+    return m;
 }

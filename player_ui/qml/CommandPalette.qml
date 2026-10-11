@@ -45,7 +45,7 @@ Item {
         width: Math.min(680, parent.width - 80)
         height: 64 + (results.count > 0 ? Math.min(results.contentHeight + 16, parent.height * 0.56) : (input.text.length ? 64 : 0))
         radius: Theme.radiusL
-        color: Qt.rgba(0.08, 0.08, 0.1, 0.97)
+        color: Theme.panel
         border.width: 1
         border.color: Qt.rgba(1, 1, 1, 0.1)
         clip: true

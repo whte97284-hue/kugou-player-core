@@ -201,11 +201,15 @@ void PlayerController::tick() {
     if (playing_ != isPlaying && !isPlaying && engine_->GetState() == PlaybackState::Stopped) setPlaying(false);
 
     std::vector<float> bars = engine_->GetVisualizer().GetSpectrumBars();
-    double energy = 0;
+    double energy = 0, low = 0;
     for (size_t i = 0; i < bars.size() && i < 32; ++i) {
         spectrum_[static_cast<int>(i)] = bars[i];
         energy += bars[i];
+        if (i < 8) low += bars[i];
     }
+    // 低频能量 (约 30~250 Hz) 快升慢降,驱动界面的「呼吸光」
+    low /= 8.0;
+    bass_ = low > bass_ ? bass_ * 0.4 + low * 0.6 : bass_ * 0.9 + low * 0.1;
     emit spectrumChanged();
     // 暂停且频谱已完全衰减后停止定时器,空闲时零 CPU
     if (!isPlaying && energy < 1e-3) timer_.stop();
@@ -268,9 +272,12 @@ void PlayerController::extractAccent() {
         QImage img = CoverProvider::LoadTrackCover(copy, 256);
         if (img.isNull()) img = CoverProvider::Placeholder(QString::fromStdWString(copy.album), 64);
         QColor c = ExtractAccentColor(img);
-        QMetaObject::invokeMethod(self, [self, req, c]() {
+        QList<QColor> pal = ExtractPalette(img);
+        QMetaObject::invokeMethod(self, [self, req, c, pal]() {
             if (!self || req != self->accentRequest_) return; // 期间已切歌,丢弃过期结果
             self->accent_ = c;
+            self->palette_.clear();
+            for (const QColor& p : pal) self->palette_.append(p);
             emit self->accentChanged();
         }, Qt::QueuedConnection);
     });

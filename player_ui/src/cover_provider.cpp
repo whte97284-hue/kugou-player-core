@@ -15,6 +15,21 @@
 #include "library_service.h"
 #include "music_catalog.hpp"
 
+const char* const kDefaultAccent = "#c8a46e"; // 香槟金
+
+// 强调色「驯化」:限制饱和度与亮度,蓝紫 / 品红色系额外降饱和,杜绝电光霓虹色
+QColor TameAccent(const QColor& in) {
+    float h, s, l;
+    in.getHslF(&h, &s, &l);
+    if (h < 0) return QColor(kDefaultAccent);
+    s = std::clamp(s, 0.28f, 0.55f);
+    if (h > 0.52f && h < 0.86f) s *= 0.68f;        // 青蓝 ~ 紫:雾霾蓝 / 灰紫
+    else if (h >= 0.86f && h < 0.97f) s *= 0.78f;  // 品红 ~ 玫瑰:脏粉
+    else if (h > 0.22f && h <= 0.52f) s *= 0.85f;  // 绿 ~ 青绿:鼠尾草 / 松石灰
+    l = std::clamp(l, 0.62f, 0.70f);
+    return QColor::fromHslF(h, s, l);
+}
+
 namespace {
 
 // ---------------- 内存 LRU (跨线程共享) ----------------
@@ -166,9 +181,12 @@ QImage CoverProvider::LoadTrackCover(const TrackItem& t, int maxEdge) {
 
 QImage CoverProvider::Placeholder(const QString& seed, int edge) {
     // 由标题哈希决定色相的柔和双色渐变,每张无封面专辑都有稳定且不同的观感
+    // 低饱和大地色系 (陶土 / 鼠尾草 / 驼色 / 石板),与整体暖中性色调一致
+    static const char* const kEarth[][2] = {{"#8a6f5a", "#3a2e27"}, {"#7d8a74", "#2c3229"}, {"#a08a6a", "#3b3226"},
+                                            {"#6f7a80", "#262b2e"}, {"#94736b", "#36292a"}, {"#8c8270", "#302c25"}};
     uint h = qHash(seed);
-    QColor a = QColor::fromHsl(int(h % 360), 70, 70);
-    QColor b = QColor::fromHsl(int((h / 360 + h % 360 + 40) % 360), 90, 35);
+    QColor a(kEarth[h % 6][0]);
+    QColor b(kEarth[h % 6][1]);
     QImage img(edge, edge, QImage::Format_RGB32);
     QPainter p(&img);
     QLinearGradient g(0, 0, edge, edge);
@@ -200,7 +218,7 @@ QImage CoverProvider::BlurSmall(const QImage& src) {
 }
 
 QColor ExtractAccentColor(const QImage& src) {
-    if (src.isNull()) return QColor("#d8b06a");
+    if (src.isNull()) return QColor(kDefaultAccent);
     QImage img = src.scaled(48, 48, Qt::IgnoreAspectRatio, Qt::SmoothTransformation).convertToFormat(QImage::Format_RGB32);
     // 色相直方图 (36 桶),权重 = 饱和度 × 亮度适中度
     struct Bin { double w = 0, r = 0, g = 0, b = 0; };
@@ -231,14 +249,28 @@ QColor ExtractAccentColor(const QImage& src) {
             best = i;
     if (best < 0 || total < 1.0 || bins[best].w <= 0) {
         // 近乎黑白的封面:用暖白色强调
-        return QColor("#e8dcc8");
+        return QColor(kDefaultAccent);
     }
     const Bin& b = bins[best];
     QColor c = QColor::fromRgbF(float(b.r / b.w), float(b.g / b.w), float(b.b / b.w));
     float hh, s, l;
     c.getHslF(&hh, &s, &l);
-    // 深色背景上的可读性:亮度拉到 0.62~0.75,饱和度不低于 0.45
-    l = std::clamp(l, 0.62f, 0.75f);
-    s = std::clamp(s, 0.45f, 0.85f);
-    return QColor::fromHslF(hh, s, l);
+    return TameAccent(QColor::fromHslF(hh, s, l));
+}
+
+QList<QColor> ExtractPalette(const QImage& src) {
+    // 一个主色 + 一个辅助色 + 暖中性色:全部由驯化后的强调色推导,保证和谐,不让封面杂色乱入
+    QColor accent = ExtractAccentColor(src);
+    float h, s, l;
+    accent.getHslF(&h, &s, &l);
+    if (h < 0) h = 0.1f;
+    // 辅助色:邻近色相向暖色方向偏移约 25°,低饱和深色
+    float warmDir = (h > 0.1f && h < 0.6f) ? -1.f : 1.f;
+    float hs = std::fmod(h + warmDir * 0.07f + 1.f, 1.f);
+    QList<QColor> out;
+    out << QColor::fromHslF(h, s * 0.62f, 0.22f)          // 主色深调
+        << QColor::fromHslF(hs, s * 0.45f, 0.17f)         // 辅助色深调
+        << QColor::fromHslF(h, s * 0.50f, 0.27f)          // 主色稍亮,形成层次
+        << QColor("#1b1816");                             // 暖中性
+    return out;
 }

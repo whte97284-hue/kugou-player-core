@@ -38,6 +38,21 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
     steps->push_back({"04_albums_playing", [call] { call("automationBack"); }, 1500});
     steps->push_back({"05_palette", [call] { call("automationSearch", QStringLiteral("chen")); }, 1200});
     steps->push_back({"06_chain", [call] { call("automationCloseSearch"); call("automationShowChain"); }, 1200});
+    steps->push_back({"09_now_playing", [call] { call("automationHideChain"); call("automationNowPlaying", true); }, 2200});
+    steps->push_back({"10_back_to_wall", [call] { call("automationNowPlaying", false); }, 1200});
+    steps->push_back({"11_np_ultraviolet", [call] {
+        call("automationPlayTitle", QStringLiteral("Ultraviolet"));
+        call("automationNowPlaying", true);
+    }, 2600});
+    steps->push_back({"12_wall_neon", [call] {
+        call("automationNowPlaying", false);
+        call("automationPlayTitle", QStringLiteral("Neon Tide"));
+    }, 2600});
+    steps->push_back({"13_np_forest", [call] {
+        call("automationPlayTitle", QStringLiteral("森林物语"));
+        call("automationNowPlaying", true);
+    }, 2600});
+    steps->push_back({"14_wall_forest", [call] { call("automationNowPlaying", false); }, 1400});
     steps->push_back({"08_wall_end", [call] { call("automationHideChain"); call("automationScrollEnd"); }, 1500});
     steps->push_back({"07_small_window", [window, call] {
         call("automationHideChain");

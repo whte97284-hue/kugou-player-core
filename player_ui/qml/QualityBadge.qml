@@ -11,9 +11,9 @@ Rectangle {
     implicitWidth: label.implicitWidth + 12
     implicitHeight: label.implicitHeight + 4
     radius: 4
-    color: premium ? Qt.rgba(0.91, 0.77, 0.42, 0.12) : Qt.rgba(1, 1, 1, 0.06)
+    color: premium ? Theme.perfectAlpha(0.10) : Qt.rgba(1, 1, 1, 0.06)
     border.width: 1
-    border.color: premium ? Qt.rgba(0.91, 0.77, 0.42, 0.45) : Qt.rgba(1, 1, 1, 0.12)
+    border.color: premium ? Theme.perfectAlpha(0.42) : Qt.rgba(1, 1, 1, 0.12)
     Text {
         id: label
         anchors.centerIn: parent

@@ -5,23 +5,34 @@ import QtQuick
 QtObject {
     id: theme
 
-    property color accent: "#d8b06a"
+    // ---- 强调色 (随专辑封面,已在 C++ 侧驯化:限饱和、定亮度、蓝紫品红降饱和) ----
+    property color accent: "#c8a46e"
     Behavior on accent { ColorAnimation { duration: 900; easing.type: Easing.OutCubic } }
 
-    readonly property color base: "#0b0b0e"
-    readonly property color text: "#f5f2ec"
-    readonly property color textSecondary: Qt.rgba(1, 1, 1, 0.62)
-    readonly property color textTertiary: Qt.rgba(1, 1, 1, 0.38)
-    readonly property color hairline: Qt.rgba(1, 1, 1, 0.08)
-    readonly property color hover: Qt.rgba(1, 1, 1, 0.055)
-    readonly property color pressed: Qt.rgba(1, 1, 1, 0.09)
-    readonly property color perfect: "#e9c46a"   // Hi-Res / DSD 品质标签 (金)
-    readonly property color ok: "#7fdcae"        // 信号链:无损直通 (翡翠绿)
-    readonly property color warn: "#ff9a52"      // 信号链:存在转换 (琥珀橙)
+    // ---- 暖中性色:暖炭黑底、暖白文字,像胶片与高端音响面板,而非冷蓝科技感 ----
+    readonly property color base: "#100f0e"
+    readonly property color panel: Qt.rgba(0.082, 0.075, 0.068, 0.96)   // 弹出面板
+    readonly property color tooltip: Qt.rgba(0.11, 0.10, 0.09, 0.96)
+    readonly property color text: "#f3efe9"
+    readonly property color textSecondary: Qt.rgba(0.953, 0.937, 0.914, 0.64)
+    readonly property color textTertiary: Qt.rgba(0.953, 0.937, 0.914, 0.40)
+    readonly property color hairline: Qt.rgba(1, 0.96, 0.9, 0.08)
+    readonly property color hover: Qt.rgba(1, 0.96, 0.9, 0.055)
+    readonly property color pressed: Qt.rgba(1, 0.96, 0.9, 0.09)
+
+    // ---- 功能色 (低饱和,与强调色并存不抢戏) ----
+    readonly property color perfect: "#d6b77e"   // Hi-Res / DSD 品质标签:香槟金
+    readonly property color ok: "#9fbf9a"        // 信号链无损直通:鼠尾草绿
+    readonly property color warn: "#d9a066"      // 信号链存在转换:琥珀
+    function okAlpha(a) { return Qt.rgba(ok.r, ok.g, ok.b, a) }
+    function warnAlpha(a) { return Qt.rgba(warn.r, warn.g, warn.b, a) }
+    function perfectAlpha(a) { return Qt.rgba(perfect.r, perfect.g, perfect.b, a) }
 
     // 强调色的派生色:用于按钮底色、柔光
     function accentAlpha(a) { return Qt.rgba(accent.r, accent.g, accent.b, a) }
-    readonly property color onAccent: (accent.r * 0.299 + accent.g * 0.587 + accent.b * 0.114) > 0.62 ? "#15120e" : "#ffffff"
+    // 强调色偏亮时,其上的文字与图标改用深色 (驯化后的强调色大多属于此类,深字更显精致)
+    readonly property bool accentIsLight: (accent.r * 0.299 + accent.g * 0.587 + accent.b * 0.114) > 0.46
+    readonly property color onAccent: accentIsLight ? "#15120e" : "#ffffff"
 
     readonly property string fontFamily: {
         const preferred = ["Microsoft YaHei UI", "PingFang SC", "HarmonyOS Sans SC", "Noto Sans CJK SC", "Source Han Sans SC", "Noto Sans SC"]

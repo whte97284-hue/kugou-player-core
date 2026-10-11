@@ -3,6 +3,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
+#include <QVariantMap>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -65,6 +66,10 @@ public:
     Q_INVOKABLE void addFolder(const QString& path);
     Q_INVOKABLE void rescan();
     Q_INVOKABLE QString qualityBadge(int albumIndex) const;
+    // 今日推荐:有封面的 Hi-Res 专辑优先,按日期稳定挑选 (同一天内不变)
+    Q_INVOKABLE int featuredAlbum() const;
+    // 专辑摘要:title / artist / year / cover / badge / summary / trackCount
+    Q_INVOKABLE QVariantMap albumInfo(int albumIndex) const;
 
     static QString formatDuration(uint64_t ms);
     static QString trackQuality(const TrackItem& t);

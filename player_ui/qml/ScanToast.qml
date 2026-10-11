@@ -8,7 +8,7 @@ Rectangle {
     width: Math.max(220, label.implicitWidth + 44)
     height: 38
     radius: 19
-    color: Qt.rgba(0.08, 0.08, 0.1, 0.9)
+    color: Theme.panel
     border.width: 1
     border.color: Theme.hairline
     opacity: shown ? 1 : 0
