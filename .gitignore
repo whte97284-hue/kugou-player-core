@@ -57,6 +57,14 @@ desktop.ini
 *.lib
 *.dll
 *.exp
+
+# Whitelist decryption core tools
+!tools/kgg/kgg-dec.exe
+!tools/kgg/infra.dll
+!tools/ncm/ncmdump.exe
+!tools/kgm/kgm-dec.exe
+!tools/kgm/kgm_decoder.cpp
+
 temp_kgm_process/
 player_core/test/*.obj
 player_core/test/*.exe
