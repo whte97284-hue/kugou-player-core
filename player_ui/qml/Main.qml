@@ -441,7 +441,9 @@ Window {
 
     DecryptPrompt {
         id: decryptPrompt
-        z: 44
+        z: 24
+        anchors.horizontalCenter: island.horizontalCenter
+        y: island.y - height - 14
     }
     Connections {
         target: decrypt

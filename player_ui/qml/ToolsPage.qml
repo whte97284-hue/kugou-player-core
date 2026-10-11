@@ -2,15 +2,14 @@ import QtQuick
 import QtQuick.Dialogs
 import PlayerUi
 
-// 解密工具页:三个解密内核作为工具摆在顶部 (状态一眼可见);
-// 中间是投放区:拖入 / 选择文件或文件夹即开始解密,进行中变成进度环;
-// 下方:产物目录 (打开 / 更换 / 加入曲库)、曲库中待解密的文件、扫描时的处理方式、本次结果
+// 解密:页面中央只有一个圆 (与空曲库引导同一视觉语言)
+//  · 点击选择文件,拖入文件或文件夹;进行中变为进度环,悬停可取消
+//  · 圆下方几行小字:支持的格式 (状态点)、产物目录、扫描时的处理方式;完成后列出结果
 Item {
     id: page
     property int bottomInset: 140
-    readonly property int sidePadding: width > 1400 ? 56 : 40
-    readonly property real contentW: Math.min(980, width - sidePadding * 2)
     readonly property var pend: decrypt.pending
+    readonly property bool hot: drop.containsDrag || circleMouse.containsMouse
 
     FileDialog {
         id: filePicker
@@ -32,426 +31,280 @@ Item {
         if (decrypt.decryptUrls(list) === 0) Nav.toast("lock", qsTr("没有找到可解密的文件"))
     }
 
+    DropArea {
+        id: drop
+        anchors.fill: parent
+        keys: ["text/uri-list"]
+        onDropped: (d) => { if (d.hasUrls) page.feed(d.urls); d.acceptProposedAction() }
+    }
+
     Flickable {
         id: flick
         anchors.fill: parent
-        contentHeight: col.height + page.bottomInset + 40
+        contentHeight: Math.max(height, col.y + col.height + page.bottomInset)
         boundsBehavior: Flickable.StopAtBounds
-        clip: true
         SmoothScroll { flickable: flick }
 
         Column {
             id: col
-            x: (page.width - page.contentW) / 2
-            y: 60
-            width: page.contentW
+            width: Math.min(560, page.width - 80)
+            x: (page.width - width) / 2
+            // 没有结果时整体居中,出现结果后平滑上移
+            y: decrypt.results.length ? 72 : Math.max(72, (page.height - page.bottomInset - 330) / 2)
+            Behavior on y { NumberAnimation { duration: 520; easing.type: Easing.OutQuint } }
             spacing: 0
 
-            // ---------------- 工具卡 ----------------
-            Row {
-                id: cards
-                width: parent.width
-                spacing: 16
-                Repeater {
-                    model: decrypt.decoders
-                    delegate: Rectangle {
-                        id: tool
-                        width: (cards.width - cards.spacing * 2) / 3
-                        height: 150
-                        radius: 18
-                        color: tm.containsMouse ? Theme.pressed : Theme.hover
-                        border.width: 1
-                        border.color: modelData.available ? Theme.hairline : Theme.warnAlpha(0.3)
-                        Behavior on color { ColorAnimation { duration: Theme.fast } }
-                        // 依次浮现
-                        opacity: 0
-                        transform: Translate { id: rise; y: 14 }
-                        Component.onCompleted: appear.start()
-                        SequentialAnimation {
-                            id: appear
-                            PauseAnimation { duration: 60 + index * 70 }
-                            ParallelAnimation {
-                                OpacityAnimator { target: tool; to: 1; duration: 380; easing.type: Easing.OutCubic }
-                                NumberAnimation { target: rise; property: "y"; to: 0; duration: 480; easing.type: Easing.OutQuint }
-                            }
-                        }
+            // ---------------- 圆 ----------------
+            Item {
+                id: dial
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: 168; height: 168
+                scale: circleMouse.pressed ? 0.97 : (page.hot && !decrypt.busy ? 1.03 : 1)
+                Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
 
-                        Text {
-                            x: 22; y: 18
-                            text: modelData.id.toUpperCase()
-                            color: modelData.available ? Theme.accent : Theme.textTertiary
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 30
-                            font.weight: Font.Bold
-                            font.letterSpacing: 1.5
-                        }
-                        // 原生内核 / 外部程序
-                        Icon {
-                            anchors.right: parent.right
-                            anchors.rightMargin: 20
-                            y: 24
-                            name: modelData.native ? "cpu" : "external"
-                            size: 18
-                            opacity: 0.45
-                        }
-                        Text {
-                            x: 22; y: 62
-                            text: modelData.name
-                            color: Theme.textSecondary
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 13
-                        }
-                        Row {
-                            x: 22
-                            anchors.bottom: parent.bottom
-                            anchors.bottomMargin: 20
-                            spacing: 6
-                            Repeater {
-                                model: modelData.exts
-                                QualityBadge { text: modelData; premium: false }
-                            }
-                        }
-                        // 状态:可用为绿点;不可用为琥珀点 + 原因
-                        Row {
-                            anchors.right: parent.right
-                            anchors.rightMargin: 20
-                            anchors.bottom: parent.bottom
-                            anchors.bottomMargin: 22
-                            spacing: 6
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                visible: !modelData.available
-                                text: modelData.reason
-                                color: Theme.warn
-                                font.family: Theme.fontFamily
-                                font.pixelSize: 11
-                            }
-                            Rectangle {
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: 7; height: 7; radius: 3.5
-                                color: modelData.available ? Theme.ok : Theme.warn
-                            }
-                        }
-                        MouseArea { id: tm; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                    }
-                }
-            }
-
-            Item { width: 1; height: 22 }
-
-            // ---------------- 投放区 ----------------
-            Rectangle {
-                id: zone
-                width: parent.width
-                height: 220
-                radius: 22
-                color: dropHover ? Theme.accentAlpha(0.08) : "transparent"
-                border.width: 1.5
-                border.color: dropHover || zm.containsMouse ? Theme.accentAlpha(0.6) : Theme.hairline
-                Behavior on color { ColorAnimation { duration: Theme.normal } }
-                readonly property bool dropHover: drop.containsDrag
-
-                DropArea {
-                    id: drop
+                Rectangle {
                     anchors.fill: parent
-                    keys: ["text/uri-list"]
-                    onDropped: (d) => { if (d.hasUrls) page.feed(d.urls); d.acceptProposedAction() }
+                    anchors.margins: 3
+                    radius: width / 2
+                    color: Theme.accentAlpha(page.hot ? 0.08 : 0.035)
+                    Behavior on color { ColorAnimation { duration: Theme.normal } }
                 }
-                MouseArea { id: zm; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-
-                // 空闲:锁 + 两个入口 (文件 / 文件夹)
-                Column {
+                ShaderEffect {
+                    anchors.fill: parent
+                    property color color: Theme.accent
+                    property color trackColor: Theme.accentAlpha(decrypt.busy ? 0.26 : (page.hot ? 0.75 : 0.42))
+                    property real side: width
+                    property real arcWidth: 3
+                    property real trackWidth: 1.5
+                    property real start: 0
+                    property real span: decrypt.busy ? Math.max(0.02, decrypt.progress) : 0
+                    Behavior on span { NumberAnimation { duration: 280; easing.type: Easing.OutCubic } }
+                    Behavior on trackColor { ColorAnimation { duration: Theme.normal } }
+                    fragmentShader: "qrc:/shaders/ring.frag.qsb"
+                }
+                // 空闲:锁 (悬停 / 拖入时打开)
+                Icon {
                     anchors.centerIn: parent
-                    spacing: 20
+                    name: page.hot ? "unlock" : "lock"
+                    size: 30
+                    tint: Theme.accent
+                    opacity: decrypt.busy ? 0 : 1
+                    scale: decrypt.busy ? 0.6 : (page.hot ? 1.1 : 1)
+                    Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+                    Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutBack } }
+                }
+                // 进行中:计数,悬停变 ×
+                Text {
+                    anchors.centerIn: parent
+                    text: decrypt.done + " / " + decrypt.total
+                    color: Theme.text
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 26
+                    font.weight: Font.Light
+                    opacity: decrypt.busy && !circleMouse.containsMouse ? 1 : 0
+                    Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+                }
+                Icon {
+                    anchors.centerIn: parent
+                    name: "close"
+                    size: 22
+                    opacity: decrypt.busy && circleMouse.containsMouse ? 0.85 : 0
+                    Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+                }
+                MouseArea {
+                    id: circleMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: decrypt.busy ? decrypt.cancel() : filePicker.open()
+                }
+                // 选文件夹:圆右下角一个小入口
+                IconButton {
+                    x: parent.width - 30
+                    y: parent.height - 34
+                    width: 34; height: 34
+                    icon: "folder-open"
+                    iconSize: 15
+                    restOpacity: 0.5
                     opacity: decrypt.busy ? 0 : 1
                     visible: opacity > 0
                     Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
-                    Icon {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        name: zone.dropHover ? "unlock" : "lock"
-                        size: 40
-                        tint: zone.dropHover ? Theme.accent : "transparent"
-                        opacity: zone.dropHover ? 1 : 0.4
-                        scale: zone.dropHover ? 1.12 : 1
-                        Behavior on scale { ScaleAnimator { duration: 260; easing.type: Easing.OutBack } }
-                    }
-                    Row {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        spacing: 12
-                        IconButton { width: 48; height: 48; outlined: true; icon: "note"; iconSize: 18; onClicked: filePicker.open() }
-                        IconButton { width: 48; height: 48; outlined: true; icon: "folder-open"; iconSize: 18; onClicked: folderPicker.open() }
-                    }
-                }
-
-                // 进行中:进度环 + 计数 + 当前文件;悬停环心变 × 可取消
-                Item {
-                    anchors.centerIn: parent
-                    width: 130; height: 130
-                    anchors.verticalCenterOffset: -12
-                    opacity: decrypt.busy ? 1 : 0
-                    visible: opacity > 0
-                    scale: decrypt.busy ? 1 : 0.85
-                    Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
-                    Behavior on scale { ScaleAnimator { duration: 420; easing.type: Easing.OutBack } }
-                    ShaderEffect {
-                        anchors.fill: parent
-                        property color color: Theme.accent
-                        property color trackColor: Theme.accentAlpha(0.22)
-                        property real side: width
-                        property real arcWidth: 3
-                        property real trackWidth: 1.5
-                        property real start: 0
-                        property real span: decrypt.progress
-                        Behavior on span { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
-                        fragmentShader: "qrc:/shaders/ring.frag.qsb"
-                    }
-                    Text {
-                        anchors.centerIn: parent
-                        visible: !cm.containsMouse
-                        text: decrypt.done + " / " + decrypt.total
-                        color: Theme.text
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 20
-                        font.weight: Font.Light
-                    }
-                    Icon { anchors.centerIn: parent; visible: cm.containsMouse; name: "close"; size: 20 }
-                    MouseArea { id: cm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: decrypt.cancel() }
-                }
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.bottom: parent.bottom
-                    anchors.bottomMargin: 14
-                    width: parent.width - 60
-                    horizontalAlignment: Text.AlignHCenter
-                    visible: decrypt.busy
-                    text: decrypt.current
-                    elide: Text.ElideMiddle
-                    color: Theme.textTertiary
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 12
+                    onClicked: folderPicker.open()
                 }
             }
 
             Item { width: 1; height: 16 }
-
-            // ---------------- 产物目录 ----------------
-            Rectangle {
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
                 width: parent.width
-                height: 56
-                radius: 16
-                color: Theme.hover
-                Icon { id: outIcon; x: 18; anchors.verticalCenter: parent.verticalCenter; name: "folder-open"; size: 18; opacity: 0.55 }
-                Text {
-                    anchors.left: outIcon.right
-                    anchors.leftMargin: 12
-                    anchors.right: outButtons.left
-                    anchors.rightMargin: 12
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: decrypt.outputDir
-                    elide: Text.ElideMiddle
-                    color: Theme.textSecondary
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 13
-                }
-                Row {
-                    id: outButtons
-                    anchors.right: parent.right
-                    anchors.rightMargin: 10
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 4
-                    IconButton { width: 38; height: 38; icon: "edit"; iconSize: 15; tip: qsTr("更换"); onClicked: outPicker.open() }
-                    IconButton { width: 38; height: 38; icon: "external"; iconSize: 15; onClicked: decrypt.openOutputFolder() }
-                    IconButton {
-                        width: 38; height: 38
-                        icon: "library-add"
-                        iconSize: 16
-                        onClicked: { decrypt.addOutputToLibrary(); Nav.toast("library-add", qsTr("已加入曲库")) }
+                horizontalAlignment: Text.AlignHCenter
+                text: decrypt.current
+                elide: Text.ElideMiddle
+                color: Theme.textTertiary
+                font.family: Theme.fontFamily
+                font.pixelSize: 12
+                opacity: decrypt.busy ? 1 : 0
+                Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+            }
+            Item { width: 1; height: 16 }
+
+            // ---------------- 格式 (状态点;不可用的悬停显示原因) ----------------
+            Row {
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: 22
+                Repeater {
+                    model: decrypt.decoders
+                    Row {
+                        spacing: 7
+                        opacity: modelData.available ? 1 : 0.45
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 5; height: 5; radius: 2.5
+                            color: modelData.available ? Theme.ok : Theme.warn
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: modelData.id.toUpperCase()
+                            color: Theme.textSecondary
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 12
+                            font.letterSpacing: 1
+                            MouseArea { id: fm; anchors.fill: parent; anchors.margins: -6; hoverEnabled: true }
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: modelData.reason
+                            color: Theme.warn
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 11
+                            visible: !modelData.available && fm.containsMouse
+                        }
                     }
                 }
             }
 
             // ---------------- 曲库中待解密 ----------------
-            Item { width: 1; height: (page.pend.total || 0) > 0 ? 12 : 0 }
+            Item { width: 1; height: (page.pend.total || 0) > 0 ? 22 : 0 }
             Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
                 visible: (page.pend.total || 0) > 0
-                width: parent.width
-                height: visible ? 64 : 0
-                radius: 16
-                color: Theme.accentAlpha(0.08)
-                border.width: 1
-                border.color: Theme.accentAlpha(0.25)
-                Icon { id: pl; x: 20; anchors.verticalCenter: parent.verticalCenter; name: "lock"; size: 18; tint: Theme.accent }
-                Text {
-                    id: pn
-                    anchors.left: pl.right
-                    anchors.leftMargin: 12
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: (page.pend.total || 0).toLocaleString(Qt.locale(), "f", 0)
-                    color: Theme.text
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 20
-                    font.weight: Font.DemiBold
-                }
+                width: pendRow.implicitWidth + 30
+                height: visible ? 36 : 0
+                radius: 18
+                color: pm.containsMouse ? Theme.accentAlpha(0.16) : Theme.accentAlpha(0.08)
+                Behavior on color { ColorAnimation { duration: Theme.fast } }
                 Row {
-                    anchors.left: pn.right
-                    anchors.leftMargin: 16
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 6
-                    Repeater {
-                        model: page.pend.kinds || []
-                        QualityBadge { text: modelData.id.toUpperCase() + " " + modelData.count; premium: false }
+                    id: pendRow
+                    anchors.centerIn: parent
+                    spacing: 8
+                    Icon { anchors.verticalCenter: parent.verticalCenter; name: "lock"; size: 14; tint: Theme.accent }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: page.pend.total || 0
+                        color: Theme.text
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 13
                     }
                 }
-                IconButton {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 12
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: 44; height: 44
-                    filled: true
-                    icon: "unlock"
-                    iconSize: 18
+                MouseArea {
+                    id: pm
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
                     enabled: !decrypt.busy
                     onClicked: decrypt.decryptPending()
                 }
             }
 
-            // ---------------- 扫描时的处理方式 ----------------
-            Item { width: 1; height: 22 }
+            // ---------------- 产物目录 ----------------
+            Item { width: 1; height: 30 }
             Row {
-                spacing: 14
-                Icon { anchors.verticalCenter: parent.verticalCenter; name: "refresh"; size: 15; opacity: 0.4 }
-                Rectangle {
-                    id: seg
-                    width: 3 * 96 + 8
-                    height: 40
-                    radius: 20
-                    color: Theme.hover
-                    border.width: 1
-                    border.color: Theme.hairline
-                    readonly property var opts: [
-                        { icon: "ask", label: qsTr("询问") },
-                        { icon: "auto", label: qsTr("自动") },
-                        { icon: "close", label: qsTr("不解密") }
-                    ]
-                    // 选中滑块
-                    Rectangle {
-                        x: 4 + decrypt.policy * 96
-                        y: 4
-                        width: 96; height: 32
-                        radius: 16
-                        color: Theme.accentAlpha(0.2)
-                        Behavior on x { NumberAnimation { duration: 320; easing.type: Easing.OutQuint } }
-                    }
-                    Row {
-                        x: 4; y: 4
-                        Repeater {
-                            model: seg.opts
-                            Item {
-                                width: 96; height: 32
-                                readonly property bool on: decrypt.policy === index
-                                Row {
-                                    anchors.centerIn: parent
-                                    spacing: 6
-                                    Icon {
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        name: modelData.icon
-                                        size: 13
-                                        tint: on ? Theme.accent : "transparent"
-                                        opacity: on ? 1 : 0.5
-                                    }
-                                    Text {
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        text: modelData.label
-                                        color: on ? Theme.text : Theme.textTertiary
-                                        font.family: Theme.fontFamily
-                                        font.pixelSize: 12
-                                    }
-                                }
-                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: decrypt.policy = index }
-                            }
-                        }
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: 6
+                Icon { anchors.verticalCenter: parent.verticalCenter; name: "folder-open"; size: 13; opacity: 0.4 }
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.min(implicitWidth, col.width - 100)
+                    text: decrypt.outputDir
+                    elide: Text.ElideMiddle
+                    color: om.containsMouse ? Theme.textSecondary : Theme.textTertiary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12
+                    MouseArea { id: om; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: outPicker.open() }
+                }
+                IconButton { anchors.verticalCenter: parent.verticalCenter; width: 26; height: 26; icon: "external"; iconSize: 12; restOpacity: 0.4; onClicked: decrypt.openOutputFolder() }
+                IconButton {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 26; height: 26
+                    icon: "library-add"
+                    iconSize: 12
+                    restOpacity: 0.4
+                    onClicked: { decrypt.addOutputToLibrary(); Nav.toast("library-add", qsTr("已加入曲库")) }
+                }
+            }
+
+            // ---------------- 扫描时:询问 · 自动 · 不解密 ----------------
+            Item { width: 1; height: 4 }
+            Row {
+                anchors.horizontalCenter: parent.horizontalCenter
+                Repeater {
+                    model: [qsTr("询问"), qsTr("自动"), qsTr("不解密")]
+                    Text {
+                        readonly property bool on: decrypt.policy === index
+                        text: modelData
+                        leftPadding: 8
+                        rightPadding: 8
+                        topPadding: 4
+                        bottomPadding: 4
+                        color: on ? Theme.accent : (sm.containsMouse ? Theme.textSecondary : Theme.textTertiary)
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 12
+                        MouseArea { id: sm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: decrypt.policy = index }
                     }
                 }
             }
 
             // ---------------- 结果 ----------------
-            Item { width: 1; height: decrypt.results.length ? 26 : 0 }
-            Row {
-                visible: decrypt.results.length > 0
-                spacing: 16
-                height: visible ? 28 : 0
-                Row {
-                    spacing: 6
-                    anchors.verticalCenter: parent.verticalCenter
-                    Icon { anchors.verticalCenter: parent.verticalCenter; name: "check"; size: 14; tint: Theme.ok }
-                    Text { anchors.verticalCenter: parent.verticalCenter; text: decrypt.okCount; color: Theme.textSecondary; font.family: Theme.fontFamily; font.pixelSize: 12 }
-                }
-                Row {
-                    visible: decrypt.failCount > 0
-                    spacing: 6
-                    anchors.verticalCenter: parent.verticalCenter
-                    Icon { anchors.verticalCenter: parent.verticalCenter; name: "close"; size: 13; tint: Theme.warn }
-                    Text { anchors.verticalCenter: parent.verticalCenter; text: decrypt.failCount; color: Theme.textSecondary; font.family: Theme.fontFamily; font.pixelSize: 12 }
-                }
-                IconButton {
-                    anchors.verticalCenter: parent.verticalCenter
-                    visible: !decrypt.busy
-                    width: 28; height: 28
-                    icon: "trash"
-                    iconSize: 13
-                    onClicked: decrypt.clearResults()
-                }
-            }
+            Item { width: 1; height: decrypt.results.length ? 34 : 0 }
             Repeater {
                 model: decrypt.results
                 delegate: Item {
                     width: col.width
-                    height: 46
+                    height: 36
                     opacity: 0
                     Component.onCompleted: fade.start()
                     OpacityAnimator on opacity { id: fade; running: false; to: 1; duration: 260 }
                     Icon {
                         id: st
-                        x: 6
                         anchors.verticalCenter: parent.verticalCenter
                         name: modelData.ok ? "check" : "close"
-                        size: 15
-                        tint: modelData.ok ? Theme.ok : Theme.warn
-                    }
-                    QualityBadge {
-                        id: kb
-                        anchors.left: st.right
-                        anchors.leftMargin: 12
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: modelData.kind.toUpperCase()
-                        premium: false
+                        size: 13
+                        tint: modelData.ok ? Theme.accent : Theme.warn
                     }
                     Text {
-                        anchors.left: kb.right
+                        anchors.left: st.right
                         anchors.leftMargin: 12
                         anchors.right: msg.left
-                        anchors.rightMargin: 16
+                        anchors.rightMargin: 14
                         anchors.verticalCenter: parent.verticalCenter
                         text: modelData.name
                         elide: Text.ElideMiddle
-                        color: modelData.ok ? Theme.text : Theme.textSecondary
+                        color: modelData.ok ? Theme.textSecondary : Theme.textTertiary
                         font.family: Theme.fontFamily
                         font.pixelSize: 13
                     }
                     Text {
                         id: msg
                         anchors.right: parent.right
-                        anchors.rightMargin: 6
                         anchors.verticalCenter: parent.verticalCenter
-                        width: Math.min(implicitWidth, parent.width * 0.4)
+                        width: modelData.ok ? 0 : Math.min(implicitWidth, parent.width * 0.4)
                         horizontalAlignment: Text.AlignRight
-                        text: modelData.ok ? modelData.output.replace(/^.*[\\/]/, "") : modelData.message
-                        elide: Text.ElideMiddle
-                        color: modelData.ok ? Theme.textTertiary : Theme.warn
+                        text: modelData.ok ? "" : modelData.message
+                        elide: Text.ElideRight
+                        color: Theme.warn
                         font.family: Theme.fontFamily
-                        font.pixelSize: 12
+                        font.pixelSize: 11
                     }
-                    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.hairline; opacity: 0.6 }
                 }
             }
         }
