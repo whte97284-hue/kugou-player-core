@@ -14,17 +14,21 @@ set CORE_SRC=%PARSER_SRC% src\music_catalog.cpp src\song_cleaner.cpp src\pinyin_
 set P2_SRC=%CORE_SRC% src\fft_visualizer.cpp src\audio_playback_engine.cpp src\audio_ingestion_pipeline.cpp
 set CFLAGS=/nologo /utf-8 /std:c++17 /Zc:__cplusplus /permissive- /O2 /EHsc /MD /Gy
 
-echo [1/3] Building test_runner.exe ...
+echo [1/4] Building test_runner.exe ...
 cl.exe %CFLAGS% test\test_runner.cpp %CORE_SRC% /Fe:test\test_runner.exe /link /OPT:REF
 if errorlevel 1 goto :fail_build1
 
-echo [2/3] Building test_phase2_runner.exe ...
+echo [2/4] Building test_phase2_runner.exe ...
 cl.exe %CFLAGS% test\test_phase2_runner.cpp %P2_SRC% /Fe:test\test_phase2_runner.exe /link /OPT:REF ole32.lib winmm.lib user32.lib
 if errorlevel 1 goto :fail_build2
 
-echo [3/3] Building test_hires_runner.exe ...
+echo [3/4] Building test_hires_runner.exe ...
 cl.exe %CFLAGS% test\test_hires_runner.cpp %P2_SRC% /Fe:test\test_hires_runner.exe /link /OPT:REF ole32.lib winmm.lib user32.lib
 if errorlevel 1 goto :fail_build3
+
+echo [4/4] Building library_audit.exe ...
+cl.exe %CFLAGS% tests\library_audit.cpp %PARSER_SRC% /Fe:test\library_audit.exe /link /OPT:REF
+if errorlevel 1 goto :fail_build4
 
 del /q *.obj test\*.obj 2>nul
 echo.
@@ -49,6 +53,10 @@ exit /b 1
 
 :fail_build3
 echo [ERROR] Failed to build test_hires_runner.exe
+exit /b 1
+
+:fail_build4
+echo [ERROR] Failed to build library_audit.exe
 exit /b 1
 
 :end
