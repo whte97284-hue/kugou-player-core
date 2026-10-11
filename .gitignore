@@ -83,3 +83,8 @@ KugouDecoder.spec
 # 敏感文件
 .env
 .env.local
+
+# 播放器内核本地运行产物
+player_core/test/*.cache
+player_core/test/*.cache.tmp
+player_core/test/ingestion_output/

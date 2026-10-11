@@ -52,6 +52,9 @@ struct IngestionSummary {
     size_t thread_count = 0;
     int storage_seek_penalty = -1;  // 1 = 机械盘, 0 = 固态盘, -1 = 未知
     bool cancelled = false;
+    size_t cache_hits = 0;          // 增量缓存命中 (未读盘) 的文件数
+    size_t cache_misses = 0;        // 实际解析的文件数
+    bool cache_saved = false;
 };
 
 class AudioIngestionPipeline {
@@ -65,6 +68,8 @@ public:
     void SetThreadCount(size_t threads);               // 0 = 按存储类型自适应 (机械盘 4 / 固态盘按核心数)
     void SetLazyCoverExtract(bool lazy);               // 开启后入库不读取封面图片,仅记录偏移,光速构建万级曲库
     void SetSplitCueSheets(bool split);                // 默认开启:整轨 + CUE 自动拆分为独立曲目
+    // 增量扫描缓存文件 (仅惰性封面模式生效)。设置后,大小与修改时间未变的文件直接复用上次解析结果,零磁盘读取
+    void SetScanCacheFile(const std::wstring& path);
 
     // 输入源管理
     void AddInputPath(const std::wstring& path);
@@ -101,6 +106,7 @@ private:
     size_t thread_count_ = 0;
     bool lazy_cover_extract_ = false;
     bool split_cue_ = true;
+    std::wstring scan_cache_path_;
 
     std::atomic<bool> is_running_{false};
     std::atomic<bool> cancel_requested_{false};

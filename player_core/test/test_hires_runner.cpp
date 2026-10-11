@@ -164,6 +164,8 @@ int main() {
     hiresPipeline.SetLazyCoverExtract(true); // 两阶段惰性读取：不落盘数千张封面
     size_t hwThreads = 8;
     hiresPipeline.SetThreadCount(hwThreads);
+    const std::wstring kScanCache = L"player_core\\test\\hires_scan.cache";
+    hiresPipeline.SetScanCacheFile(kScanCache);
     hiresPipeline.AddInputPath(HIRES_ROOT);
 
     logger.Log(L"  - 扫描源路径: " + HIRES_ROOT);
@@ -222,6 +224,9 @@ int main() {
     logger.Log(L"  - 总耗时 (Wall Time): " + std::to_wstring(totalWallSec) + L" 秒");
     double speed = hiresSummary.total_scanned > 0 ? (hiresSummary.total_scanned / totalWallSec) : 0.0;
     logger.Log(L"  - 平均解析吞吐量: " + std::to_wstring(speed) + L" 首/秒");
+    logger.Log(L"  - 增量缓存: 命中 " + std::to_wstring(hiresSummary.cache_hits) + L" / 实际解析 " +
+               std::to_wstring(hiresSummary.cache_misses) +
+               (hiresSummary.cache_hits > 0 ? L" (缓存来自上一次运行,本次不是冷扫描)" : L" (首次全量扫描)"));
 
     AssertCheck(L"扫描到有效音频数量 >= 3000 首", hiresSummary.total_scanned >= 3000,
                 std::to_wstring(hiresSummary.total_scanned) + L" 首");
@@ -229,6 +234,29 @@ int main() {
                 std::to_wstring(hiresSummary.success_count) + L" 首");
     AssertCheck(L"单机并发吞吐量 >= 50 首/秒", speed >= 50.0,
                 std::to_wstring(speed) + L" 首/秒");
+
+    // ------------------------------------------------------------------------
+    // 梯度 2b: 增量扫描 —— 再扫一遍同一个库,未变化的文件直接复用缓存
+    // ------------------------------------------------------------------------
+    {
+        logger.Log(L"\n▶ 【梯度 2b】增量扫描 (库未变化,复用上一轮写入的缓存):");
+        AudioIngestionPipeline incPipeline;
+        incPipeline.SetTargetLibraryDir(L"player_core\\test\\ingestion_output");
+        incPipeline.SetLazyCoverExtract(true);
+        incPipeline.SetScanCacheFile(kScanCache);
+        incPipeline.AddInputPath(HIRES_ROOT);
+        MusicCatalog incCatalog;
+        auto ti0 = std::chrono::high_resolution_clock::now();
+        incPipeline.RunSync(incCatalog);
+        double incSec = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - ti0).count();
+        IngestionSummary inc = incPipeline.GetLastSummary();
+        logger.Log(L"  - 目录枚举: " + std::to_wstring(inc.enumerate_seconds) + L" 秒, 总耗时: " + std::to_wstring(incSec) + L" 秒");
+        logger.Log(L"  - 缓存命中: " + std::to_wstring(inc.cache_hits) + L", 实际解析: " + std::to_wstring(inc.cache_misses) +
+                   L", 解析阶段读盘: " + std::to_wstring(inc.bytes_read / 1024) + L" KB");
+        AssertCheck(L"增量扫描曲目数与全量扫描一致", incCatalog.GetAllTracks().size() == hiresCatalog.GetAllTracks().size(),
+                    std::to_wstring(incCatalog.GetAllTracks().size()) + L" 首");
+        AssertCheck(L"库未变化时全部命中缓存", inc.cache_misses == 0, std::to_wstring(inc.cache_misses) + L" 个未命中");
+    }
 
     // ========================================================================
     // 梯度 3: 4000+ 首曲库分类、拼音索引、智能检索与去重折叠压测

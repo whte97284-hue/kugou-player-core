@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <cstdio>
 
 namespace platform {
 
@@ -170,6 +171,18 @@ void MappedFile::Close() {
     size_ = 0;
 }
 
+bool GetFileInfo(const std::wstring& path, uint64_t& size, uint64_t& mtime) {
+    WIN32_FILE_ATTRIBUTE_DATA d;
+    if (!GetFileAttributesExW(LongPath(path).c_str(), GetFileExInfoStandard, &d)) return false;
+    size = (static_cast<uint64_t>(d.nFileSizeHigh) << 32) | d.nFileSizeLow;
+    mtime = (static_cast<uint64_t>(d.ftLastWriteTime.dwHighDateTime) << 32) | d.ftLastWriteTime.dwLowDateTime;
+    return true;
+}
+
+bool AtomicReplaceFile(const std::wstring& from, const std::wstring& to) {
+    return MoveFileExW(LongPath(from).c_str(), LongPath(to).c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+}
+
 bool RemoveFile(const std::wstring& path) { return DeleteFileW(LongPath(path).c_str()) != 0; }
 
 bool EnumerateFilesRecursive(const std::wstring& root,
@@ -205,6 +218,7 @@ bool EnumerateFilesRecursive(const std::wstring& root,
                 e.name = name;
                 e.path = prefix + name;
                 e.size = (static_cast<uint64_t>(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
+                e.mtime = (static_cast<uint64_t>(fd.ftLastWriteTime.dwHighDateTime) << 32) | fd.ftLastWriteTime.dwLowDateTime;
                 files.push_back(std::move(e));
             }
         } while (FindNextFileW(h, &fd));
@@ -366,6 +380,18 @@ void MappedFile::Close() {
     size_ = 0;
 }
 
+bool GetFileInfo(const std::wstring& path, uint64_t& size, uint64_t& mtime) {
+    struct stat st;
+    if (stat(NativePath(path).c_str(), &st) != 0) return false;
+    size = static_cast<uint64_t>(st.st_size);
+    mtime = static_cast<uint64_t>(st.st_mtim.tv_sec) * 1000000000ull + static_cast<uint64_t>(st.st_mtim.tv_nsec);
+    return true;
+}
+
+bool AtomicReplaceFile(const std::wstring& from, const std::wstring& to) {
+    return ::rename(NativePath(from).c_str(), NativePath(to).c_str()) == 0;
+}
+
 bool RemoveFile(const std::wstring& path) { return ::unlink(NativePath(path).c_str()) == 0; }
 
 bool EnumerateFilesRecursive(const std::wstring& root,
@@ -401,6 +427,7 @@ bool EnumerateFilesRecursive(const std::wstring& root,
                 e.name = wname;
                 e.path = prefix + wname;
                 e.size = static_cast<uint64_t>(st.st_size);
+                e.mtime = static_cast<uint64_t>(st.st_mtim.tv_sec) * 1000000000ull + static_cast<uint64_t>(st.st_mtim.tv_nsec);
                 files.push_back(std::move(e));
             }
         }

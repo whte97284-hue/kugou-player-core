@@ -2,6 +2,7 @@
 #include "../include/audio_tag_parser.hpp"
 #include "../include/cue_sheet.hpp"
 #include "../include/platform_io.hpp"
+#include "../include/scan_cache.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -108,6 +109,7 @@ struct WorkItem {
     std::wstring path;
     std::wstring ext;
     uint64_t size = 0;
+    uint64_t mtime = 0;
     std::wstring folder_cover;
     CueBinding cue;
 };
@@ -150,6 +152,11 @@ void AudioIngestionPipeline::SetLazyCoverExtract(bool lazy) {
 void AudioIngestionPipeline::SetSplitCueSheets(bool split) {
     std::lock_guard<std::mutex> lock(pipeline_mutex_);
     split_cue_ = split;
+}
+
+void AudioIngestionPipeline::SetScanCacheFile(const std::wstring& path) {
+    std::lock_guard<std::mutex> lock(pipeline_mutex_);
+    scan_cache_path_ = path;
 }
 
 void AudioIngestionPipeline::AddInputPath(const std::wstring& path) {
@@ -269,6 +276,7 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
     std::wstring targetDir, maskPath;
     size_t requestedThreads;
     bool lazy, splitCue;
+    std::wstring cachePath;
     {
         std::lock_guard<std::mutex> lock(pipeline_mutex_);
         inputs = input_paths_;
@@ -277,7 +285,12 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
         requestedThreads = thread_count_;
         lazy = lazy_cover_extract_;
         splitCue = split_cue_;
+        cachePath = scan_cache_path_;
     }
+    // 增量缓存只保存封面偏移,因此仅在惰性封面模式下启用
+    const bool useCache = !cachePath.empty() && lazy;
+    ScanCache cache;
+    if (useCache) cache.Load(cachePath);
 
     IngestionSummary summary;
 
@@ -304,6 +317,7 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
                     w.path = f.path;
                     w.ext = e;
                     w.size = f.size;
+                    w.mtime = f.mtime;
                     w.folder_cover = cover;
                     byName[Lower(f.name)] = items.size();
                     byStem[Lower(StemOf(f.name))] = items.size();
@@ -341,8 +355,7 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
             WorkItem w;
             w.path = input;
             w.ext = ExtLower(input);
-            platform::ReadOnlyFile f;
-            if (f.Open(input, true)) w.size = f.Size();
+            platform::GetFileInfo(input, w.size, w.mtime);
             items.push_back(std::move(w));
         }
     }
@@ -384,7 +397,10 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
 
     std::atomic<size_t> nextIndex{0};
     std::atomic<uint64_t> bytesRead{0};
-    std::atomic<size_t> cueTracks{0}, externalCovers{0}, skippedVideos{0};
+    std::atomic<size_t> cueTracks{0}, externalCovers{0}, skippedVideos{0}, cacheHits{0}, cacheMisses{0};
+    // 每个条目的最新解析结果 (命中或新解析),运行结束后整体写回缓存;按下标写入,无需加锁
+    std::vector<ScanCacheEntry> fresh(useCache ? total : 0);
+    std::vector<uint8_t> freshValid(useCache ? total : 0, 0);
     std::mutex catalogMutex, progressMutex;
     size_t progressDone = 0;
     auto progressFn = on_progress;
@@ -407,6 +423,19 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
             batch.push_back(std::move(t));
         };
 
+        auto lookup = [&](const WorkItem& w) -> const ScanCacheEntry* {
+            return useCache ? cache.Find(w.path, w.size, w.mtime) : nullptr;
+        };
+        auto remember = [&](size_t idx, const WorkItem& w, bool ok, const AudioMetadata& meta, const std::wstring& target) {
+            if (!useCache || w.mtime == 0) return;
+            fresh[idx].size = w.size;
+            fresh[idx].mtime = w.mtime;
+            fresh[idx].parse_ok = ok;
+            fresh[idx].meta = meta;
+            fresh[idx].target_path = target;
+            freshValid[idx] = 1;
+        };
+
         while (!cancel_requested_.load()) {
             size_t idx = nextIndex.fetch_add(1);
             if (idx >= total) break;
@@ -418,23 +447,50 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
             AudioMetadata probe;
             bool probed = false;
             bool kgmByMagic = false;
+            bool countedMiss = false;
             if (!IsEncryptedExt(w.ext) && w.ext != L".ncm" && w.ext != L".kgg") {
-                probed = AudioTagParser::ParseFile(w.path, probe, parseOpt);
-                bytesRead.fetch_add(probe.io_bytes_read);
+                const ScanCacheEntry* hit = lookup(w);
+                if (hit && !hit->target_path.empty()) {
+                    // 缓存记录表明这是改名的酷狗加密文件:直接交给解密分支,不再探测文件头
+                    probed = true;
+                    probe.error_code = "encrypted_kgm";
+                } else if (hit) {
+                    probe = hit->meta;
+                    probe.io_read_calls = 0;
+                    probe.io_bytes_read = 0;
+                    probed = hit->parse_ok;
+                    cacheHits.fetch_add(1);
+                } else {
+                    probed = AudioTagParser::ParseFile(w.path, probe, parseOpt);
+                    bytesRead.fetch_add(probe.io_bytes_read);
+                    cacheMisses.fetch_add(1);
+                    countedMiss = true;
+                }
                 kgmByMagic = probed && (probe.error_code == "encrypted_kgm" || probe.error_code == "encrypted_vpr");
+                if (!kgmByMagic) remember(idx, w, probed, probe, L"");
             }
 
             if (IsEncryptedExt(w.ext) || kgmByMagic) {
                 item.was_encrypted = true;
                 std::wstring decPath, msg;
-                if (DecryptKgm(w.path, targetDir, decPath, msg)) {
+                const ScanCacheEntry* hit = lookup(w);
+                if (hit && hit->parse_ok && !hit->target_path.empty() && platform::PathExists(hit->target_path)) {
+                    // 源文件未变且解密产物仍在:跳过解密与解析
+                    cacheHits.fetch_add(1);
+                    item.target_path = hit->target_path;
+                    item.success = true;
+                    msg = L"已解密 (增量缓存命中)";
+                    addTrack(hit->target_path, hit->meta, w);
+                    remember(idx, w, true, hit->meta, hit->target_path);
+                } else if (DecryptKgm(w.path, targetDir, decPath, msg)) {
+                    if (!countedMiss) cacheMisses.fetch_add(1);
                     item.target_path = decPath;
                     item.success = true;
                     AudioMetadata meta;
-                    if (AudioTagParser::ParseFile(decPath, meta, parseOpt)) {
-                        bytesRead.fetch_add(meta.io_bytes_read);
-                        addTrack(decPath, meta, w);
-                    }
+                    bool ok = AudioTagParser::ParseFile(decPath, meta, parseOpt);
+                    bytesRead.fetch_add(meta.io_bytes_read);
+                    if (ok) addTrack(decPath, meta, w);
+                    remember(idx, w, ok, meta, decPath);
                 } else {
                     item.success = false;
                 }
@@ -455,8 +511,15 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
                     addTrack(candidate, meta, w);
                 } else {
                     AudioMetadata raw;
-                    AudioTagParser::ParseFile(w.path, raw, parseOpt); // NCM 头部元数据可直接解出歌名/歌手/时长
-                    bytesRead.fetch_add(raw.io_bytes_read);
+                    if (const ScanCacheEntry* hit = lookup(w)) {
+                        raw = hit->meta;
+                        cacheHits.fetch_add(1);
+                    } else {
+                        AudioTagParser::ParseFile(w.path, raw, parseOpt); // NCM 头部元数据可直接解出歌名/歌手/时长
+                        bytesRead.fetch_add(raw.io_bytes_read);
+                        cacheMisses.fetch_add(1);
+                    }
+                    remember(idx, w, true, raw, L"");
                     if (raw.format.empty()) raw.format = (w.ext == L".ncm") ? L"NCM" : L"KGG";
                     item.target_path = w.path;
                     item.message = raw.title.empty() ? L"入库登记待转换源" : L"入库登记待转换源 (已解出加密元数据)";
@@ -545,6 +608,15 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
         else summary.failed_count++;
         if (r.was_encrypted) summary.transcoded_count++;
         out.push_back(std::move(r));
+    }
+    summary.cache_hits = cacheHits.load();
+    summary.cache_misses = cacheMisses.load();
+    // 写回缓存:只保留本次仍存在的文件 (已删除的文件自然淘汰);被取消时不覆盖旧缓存
+    if (useCache && !cancel_requested_.load()) {
+        ScanCache next;
+        for (size_t i = 0; i < total; ++i)
+            if (freshValid[i]) next.Put(items[i].path, std::move(fresh[i]));
+        summary.cache_saved = next.Save(cachePath);
     }
     summary.skipped_count = skippedVideos.load();
     summary.failed_count -= summary.skipped_count; // 视频文件属于正常跳过,不计入失败

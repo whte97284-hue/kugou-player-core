@@ -84,8 +84,14 @@ struct DirEntry {
     std::wstring path;     // 完整路径
     std::wstring name;     // 文件名
     uint64_t size = 0;
+    uint64_t mtime = 0;    // 最后修改时间 (平台原生刻度,仅用于判断是否变化)
     bool is_directory = false;
 };
+
+// 单个文件的大小与修改时间 (失败返回 false)
+bool GetFileInfo(const std::wstring& path, uint64_t& size, uint64_t& mtime);
+// 原子替换:写临时文件后改名覆盖目标
+bool AtomicReplaceFile(const std::wstring& from, const std::wstring& to);
 
 // 高速递归目录遍历 (自动跳过 IsJunkDirectoryName / IsJunkFileName 条目)。Windows 下使用 FindFirstFileExW(FindExInfoBasic + LARGE_FETCH),
 // 一次系统调用即可拿到文件名与大小,避免 std::filesystem 对每个文件的额外 stat。

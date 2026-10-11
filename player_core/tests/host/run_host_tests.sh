@@ -7,7 +7,7 @@ OUT=${1:-build/host}
 mkdir -p "$OUT"
 CORE="src/platform_io.cpp src/tag_common.cpp src/tag_id3_mpeg.cpp src/tag_flac_ogg.cpp src/tag_riff_dsd.cpp
       src/tag_mp4_ape_ncm.cpp src/audio_tag_parser.cpp src/cue_sheet.cpp src/music_catalog.cpp src/song_cleaner.cpp
-      src/pinyin_table.cpp src/audio_ingestion_pipeline.cpp"
+      src/pinyin_table.cpp src/audio_ingestion_pipeline.cpp src/scan_cache.cpp"
 SAN="-O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all"
 
 echo "== 生成真实样本 (ffmpeg + mutagen)"
@@ -24,6 +24,6 @@ python3 tests/host/check_fixtures.py "$OUT/tag_probe" "$OUT/fx"
 echo "== 2. 入库 / 曲库 / 检索 / CUE / KGM 集成测试"
 "$OUT/core_host" "$OUT/fx" "$OUT/work"
 echo "== 3. 吞吐压测 (O2)"
-"$OUT/core_host_o2" "$OUT/fx" "$OUT/work" 165 | sed -n '/\[4\]/,$p'
+"$OUT/core_host_o2" "$OUT/fx" "$OUT/work" 165 | sed -n '/\[5\]/,$p'
 echo "== 4. 变异模糊测试"
 "$OUT/fuzz" "${FUZZ_ITERS:-500}" $(ls "$OUT"/fx/* | grep -v manifest)

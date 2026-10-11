@@ -11,7 +11,7 @@ if errorlevel 1 goto :fail_vcvars
 
 set PARSER_SRC=src\platform_io.cpp src\tag_common.cpp src\tag_id3_mpeg.cpp src\tag_flac_ogg.cpp src\tag_riff_dsd.cpp src\tag_mp4_ape_ncm.cpp src\audio_tag_parser.cpp src\cue_sheet.cpp
 set CORE_SRC=%PARSER_SRC% src\music_catalog.cpp src\song_cleaner.cpp src\pinyin_table.cpp src\playlist_manager.cpp src\play_queue_controller.cpp
-set P2_SRC=%CORE_SRC% src\fft_visualizer.cpp src\audio_playback_engine.cpp src\audio_ingestion_pipeline.cpp
+set P2_SRC=%CORE_SRC% src\fft_visualizer.cpp src\audio_playback_engine.cpp src\audio_ingestion_pipeline.cpp src\scan_cache.cpp
 set CFLAGS=/nologo /utf-8 /std:c++17 /Zc:__cplusplus /permissive- /O2 /EHsc /MD /Gy
 
 echo [1/4] Building test_runner.exe ...

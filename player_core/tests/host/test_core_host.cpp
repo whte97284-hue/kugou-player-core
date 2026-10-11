@@ -6,6 +6,7 @@
 #include "../../include/music_catalog.hpp"
 #include "../../include/pinyin_table.hpp"
 #include "../../include/platform_io.hpp"
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -236,8 +237,57 @@ int main(int argc, char** argv) {
                 st.lossless_count, st.hires_count, st.with_cover_count, st.total_artists, st.total_albums);
 
     // ------------------------------------------------------------------
+    std::printf("\n[4] 增量扫描缓存\n");
+    {
+        std::wstring cacheFile = W((work / "scan.cache").string());
+        auto scan = [&](MusicCatalog& cat) {
+            AudioIngestionPipeline p;
+            p.SetTargetLibraryDir(W((work / "decoded").string()));
+            p.SetKgmMaskPath(W(maskPath.string()));
+            p.SetLazyCoverExtract(true);
+            p.SetScanCacheFile(cacheFile);
+            p.AddInputPath(W(lib.string()));
+            p.RunSync(cat);
+            return p.GetLastSummary();
+        };
+        auto fingerprint = [](const MusicCatalog& cat) {
+            std::vector<std::wstring> v;
+            for (const auto& t : cat.GetAllTracks())
+                v.push_back(t.file_path + L"|" + t.title + L"|" + t.artist + L"|" + t.album + L"|" +
+                            std::to_wstring(t.duration_ms) + L"|" + std::to_wstring(t.sample_rate) + L"|" +
+                            std::to_wstring(t.cover_offset) + L"|" + t.external_cover_path);
+            std::sort(v.begin(), v.end());
+            return v;
+        };
+        MusicCatalog c1, c2, c3, c4;
+        IngestionSummary s1 = scan(c1);
+        IngestionSummary s2 = scan(c2);
+        std::printf("  首次: 解析 %zu / 命中 %zu / 读盘 %llu KB;再次: 解析 %zu / 命中 %zu / 读盘 %llu KB\n",
+                    s1.cache_misses, s1.cache_hits, static_cast<unsigned long long>(s1.bytes_read / 1024),
+                    s2.cache_misses, s2.cache_hits, static_cast<unsigned long long>(s2.bytes_read / 1024));
+        Check("首次扫描写入缓存", s1.cache_saved && s1.cache_misses > 0 && s1.cache_hits == 0);
+        Check("再次扫描全部命中缓存、解析阶段零读盘", s2.cache_misses == 0 && s2.cache_hits == s1.cache_misses && s2.bytes_read == 0);
+        Check("缓存命中构建的曲库与首次完全一致 (含 CUE、封面偏移、伴生封面)", fingerprint(c1) == fingerprint(c2) &&
+              c1.GetAllTracks().size() == c2.GetAllTracks().size());
+
+        // 修改一个文件 (追加字节 -> 大小变化),只应重新解析这一个
+        fs::path changed = lib / "formats" / "mp3_raw_cbr_noxing.mp3";
+        { std::ofstream(changed, std::ios::binary | std::ios::app).write("\0\0\0\0", 4); }
+        IngestionSummary s3 = scan(c3);
+        Check("文件变化后仅重新解析变化的文件", s3.cache_misses == 1 && s3.cache_hits == s1.cache_misses - 1,
+              std::to_string(s3.cache_misses) + " miss");
+
+        // 缓存文件损坏:安全退化为全量扫描
+        { std::fstream f(work / "scan.cache", std::ios::in | std::ios::out | std::ios::binary); f.seekp(40); f.write("garbage!", 8); }
+        { std::ofstream f(work / "scan.cache", std::ios::binary | std::ios::app); }
+        fs::resize_file(work / "scan.cache", fs::file_size(work / "scan.cache") / 2);
+        IngestionSummary s4 = scan(c4);
+        Check("缓存损坏时安全退化为全量扫描,结果仍正确", s4.cache_hits == 0 && fingerprint(c4).size() == fingerprint(c1).size());
+    }
+
+    // ------------------------------------------------------------------
     if (benchCopies > 0) {
-        std::printf("\n[4] 吞吐压测:复制 %d 份样本库\n", benchCopies);
+        std::printf("\n[5] 吞吐压测:复制 %d 份样本库\n", benchCopies);
         fs::path bench = work / "bench";
         for (int i = 0; i < benchCopies; ++i) {
             fs::path d = bench / ("disc_" + std::to_string(i));
