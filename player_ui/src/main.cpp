@@ -44,6 +44,7 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         call("automationPlayTitle", QStringLiteral("Ultraviolet"));
         call("automationNowPlaying", true);
     }, 2600});
+    steps->push_back({"11b_np_lyrics_gbk", [call] { call("automationPlayTitle", QStringLiteral("晚风与诗")); }, 2200});
     steps->push_back({"12_wall_neon", [call] {
         call("automationNowPlaying", false);
         call("automationPlayTitle", QStringLiteral("Neon Tide"));

@@ -66,7 +66,7 @@ Window {
             anchors.fill: parent
             z: 5
             onCloseRequested: shown = false
-            onOpenAlbum: (index) => { shown = false; root.openAlbum(index, null) }
+            onChainClicked: chain.shown = !chain.shown
         }
 
         SideNav {
@@ -200,8 +200,9 @@ Window {
     SignalChain {
         id: chain
         z: 30
-        x: Math.min(root.width - width - 24, island.x + island.width - width - 10)
-        y: island.y - height - 12
+        // 沉浸页中从左栏信号链行展开,其余情况从播放岛上方展开
+        x: nowPlaying.shown ? Math.max(24, (root.width - width) / 2) : Math.min(root.width - width - 24, island.x + island.width - width - 10)
+        y: nowPlaying.shown ? (root.height - height) / 2 : island.y - height - 12
     }
     MouseArea {
         anchors.fill: parent

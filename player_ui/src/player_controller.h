@@ -32,6 +32,10 @@ class PlayerController : public QObject {
     Q_PROPERTY(QVariantList spectrum READ spectrum NOTIFY spectrumChanged)
     Q_PROPERTY(int queueLength READ queueLength NOTIFY queueChanged)
     Q_PROPERTY(int queuePosition READ queuePosition NOTIFY queueChanged)
+    Q_PROPERTY(QVariantList queueTracks READ queueTracks NOTIFY queueChanged)
+    Q_PROPERTY(QVariantList lyrics READ lyrics NOTIFY lyricsChanged)
+    Q_PROPERTY(int lyricIndex READ lyricIndex NOTIFY lyricIndexChanged)
+    Q_PROPERTY(QString chainSummary READ chainSummary NOTIFY signalChainChanged)
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorChanged)
 
 public:
@@ -61,6 +65,10 @@ public:
     int queueLength() const { return static_cast<int>(queue_.size()); }
     int queuePosition() const { return queueIndex_; }
     QString errorText() const { return error_; }
+    QVariantList queueTracks() const;
+    QVariantList lyrics() const { return lyrics_; }
+    int lyricIndex() const { return lyricIndex_; }
+    QString chainSummary() const;
 
     Q_INVOKABLE void playAlbum(int albumIndex, int startRow = 0);
     Q_INVOKABLE void playTrack(double trackId);
@@ -68,6 +76,7 @@ public:
     Q_INVOKABLE void next();
     Q_INVOKABLE void previous();
     Q_INVOKABLE void seek(double seconds);
+    Q_INVOKABLE void playQueueIndex(int index);
 
 signals:
     void trackChanged();
@@ -79,11 +88,15 @@ signals:
     void spectrumChanged();
     void queueChanged();
     void errorChanged();
+    void lyricsChanged();
+    void lyricIndexChanged();
 
 private:
     bool openIndex(int index, bool autoPlay);
     void rebuildSignalChain();
     void tick();
+    void loadLyrics();
+    void updateLyricIndex();
     void extractAccent();
     void setPlaying(bool p);
 
@@ -105,4 +118,7 @@ private:
     QString error_;
     QTimer timer_;
     int accentRequest_ = 0;
+    QVariantList lyrics_;
+    std::vector<qint64> lyricTimes_; // 毫秒,相对于当前曲目起点
+    int lyricIndex_ = -1;
 };

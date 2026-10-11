@@ -4,6 +4,12 @@
 #include <QSettings>
 #include <QThreadPool>
 #include <QVariantMap>
+#include <QFile>
+#include <QFileInfo>
+#include <QRegularExpression>
+#include <algorithm>
+#include "audio_tag_parser.hpp"
+#include "platform_io.hpp"
 
 #include "cover_provider.h"
 
@@ -140,6 +146,7 @@ bool PlayerController::openIndex(int index, bool autoPlay) {
         emit positionChanged();
         rebuildSignalChain();
         extractAccent();
+        loadLyrics();
         return true;
     }
     return false;
@@ -188,6 +195,7 @@ void PlayerController::seek(double seconds) {
     engine_->SeekTo(seconds);
     position_ = engine_->GetPositionSeconds();
     emit positionChanged();
+    updateLyricIndex();
 }
 
 void PlayerController::tick() {
@@ -211,6 +219,7 @@ void PlayerController::tick() {
     low /= 8.0;
     bass_ = low > bass_ ? bass_ * 0.4 + low * 0.6 : bass_ * 0.9 + low * 0.1;
     emit spectrumChanged();
+    updateLyricIndex();
     // 暂停且频谱已完全衰减后停止定时器,空闲时零 CPU
     if (!isPlaying && energy < 1e-3) timer_.stop();
 }
@@ -281,4 +290,99 @@ void PlayerController::extractAccent() {
             emit self->accentChanged();
         }, Qt::QueuedConnection);
     });
+}
+
+QVariantList PlayerController::queueTracks() const {
+    QVariantList list;
+    if (!snap_) return list;
+    for (size_t i = 0; i < queue_.size(); ++i) {
+        const TrackItem* t = snap_->catalog.FindById(queue_[i]);
+        if (!t) continue;
+        QVariantMap m;
+        m["index"] = static_cast<int>(i);
+        m["trackId"] = static_cast<double>(t->id);
+        m["number"] = t->track_no > 0 ? t->track_no : static_cast<int>(i) + 1;
+        m["title"] = Q(t->title);
+        m["artist"] = Q(t->artist);
+        m["duration"] = LibraryService::formatDuration(t->duration_ms);
+        list.append(m);
+    }
+    return list;
+}
+
+void PlayerController::playQueueIndex(int index) { openIndex(index, true); }
+
+QString PlayerController::chainSummary() const {
+    QStringList parts;
+    for (const QVariant& v : chain_) parts << v.toMap().value("label").toString();
+    return parts.join(QStringLiteral("  ·  "));
+}
+
+// 读取同名 .lrc 歌词 (自动识别 UTF-8 / UTF-16 / GBK),支持一行多时间戳与 [offset:] 标签
+void PlayerController::loadLyrics() {
+    lyrics_.clear();
+    lyricTimes_.clear();
+    lyricIndex_ = -1;
+    if (current_) {
+        QString path = Q(current_->file_path);
+        QFileInfo fi(path);
+        QString base = fi.path() + "/" + fi.completeBaseName();
+        QByteArray raw;
+        for (const QString& ext : {QStringLiteral(".lrc"), QStringLiteral(".LRC")}) {
+            platform::ReadOnlyFile f;
+            if (f.Open((base + ext).toStdWString(), false) && f.Size() > 0 && f.Size() < (1 << 20)) {
+                raw.resize(static_cast<int>(f.Size()));
+                f.ReadAt(0, raw.data(), static_cast<size_t>(raw.size()));
+                break;
+            }
+        }
+        if (!raw.isEmpty()) {
+            QString text = QString::fromStdWString(AudioTagParser::DecodeTextAuto(raw.toStdString()));
+            static const QRegularExpression tagRe(QStringLiteral("\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?\\]"));
+            static const QRegularExpression offRe(QStringLiteral("\\[offset:\\s*([+-]?\\d+)\\]"), QRegularExpression::CaseInsensitiveOption);
+            qint64 offset = 0;
+            auto om = offRe.match(text);
+            if (om.hasMatch()) offset = om.captured(1).toLongLong();
+            std::vector<std::pair<qint64, QString>> lines;
+            for (const QString& line : text.split(QRegularExpression(QStringLiteral("[\\r\\n]+")))) {
+                std::vector<qint64> times;
+                int pos = 0;
+                QRegularExpressionMatch m;
+                while ((m = tagRe.match(line, pos)).hasMatch() && m.capturedStart() == pos) {
+                    QString frac = m.captured(3);
+                    qint64 ms = m.captured(1).toLongLong() * 60000 + m.captured(2).toLongLong() * 1000;
+                    if (!frac.isEmpty()) ms += frac.length() == 1 ? frac.toLongLong() * 100 : frac.length() == 2 ? frac.toLongLong() * 10 : frac.toLongLong();
+                    times.push_back(ms - offset);
+                    pos = m.capturedEnd();
+                }
+                QString body = line.mid(pos).trimmed();
+                if (times.empty() || body.isEmpty()) continue;
+                for (qint64 t : times) lines.emplace_back(t, body);
+            }
+            std::stable_sort(lines.begin(), lines.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            // CUE 分轨:歌词时间轴通常按整轨计,换算到分轨起点
+            qint64 shift = current_->is_cue_track ? static_cast<qint64>(current_->cue_start_ms) : 0;
+            for (const auto& l : lines) {
+                if (l.first - shift < 0 && shift > 0) continue;
+                lyricTimes_.push_back(l.first - shift);
+                QVariantMap m;
+                m["text"] = l.second;
+                m["time"] = static_cast<double>(l.first - shift) / 1000.0;
+                lyrics_.append(m);
+            }
+        }
+    }
+    emit lyricsChanged();
+    emit lyricIndexChanged();
+}
+
+void PlayerController::updateLyricIndex() {
+    if (lyricTimes_.empty()) return;
+    qint64 ms = static_cast<qint64>(position_ * 1000.0) + 120; // 略微提前,视觉上与演唱同步
+    auto it = std::upper_bound(lyricTimes_.begin(), lyricTimes_.end(), ms);
+    int idx = static_cast<int>(it - lyricTimes_.begin()) - 1;
+    if (idx != lyricIndex_) {
+        lyricIndex_ = idx;
+        emit lyricIndexChanged();
+    }
 }

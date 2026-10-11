@@ -139,6 +139,27 @@ for ai, (album, artist, style, pal, rate, bits, n) in enumerate(ALBUMS):
                 p.type, p.mime, p.data = 3, "image/jpeg", art
                 f.add_picture(p)
             f.save()
+    # 演示歌词 (同名 .lrc;曲目很短,按 0.6 秒一行排布)
+    if album in ("森林物语", "アダマス", "晚风与诗"):
+        verses = {
+            "森林物语": ["风穿过整片森林", "落叶在脚边轻声回应", "我把名字刻在树上", "等你某天恰好经过", "阳光从枝桠间漏下", "像一封迟到的信",
+                         "我们曾在这里迷路", "也在这里找到彼此", "雨后的泥土很香", "鸟群掠过湖面"],
+            "アダマス": ["Shine bright, my adamas", "暗闇を切り裂いて", "この手で掴む未来", "誰にも砕けない光", "叫べ 心のままに",
+                       "響け 夜明けの空へ", "Never give up tonight", "輝きを抱いて"],
+            "晚风与诗": ["晚风吹过旧街口", "路灯一盏一盏亮了", "你说写诗太慢", "可我只想慢慢写你", "云在天边走散", "又在你眼里重逢",
+                       "把今天折进信封", "寄给明天的我们"],
+        }[album]
+        for t in range(n):
+            disc = 2 if (album == "森林物语" and t >= 6) else 1
+            sub = os.path.join(d, f"CD{disc}") if album == "森林物语" else d
+            title = titles[t % len(titles)]
+            lines = [f"[ti:{title}]", f"[ar:{artist}]"]
+            for k in range(10):
+                ms = int(k * 600)
+                lines.append(f"[{ms // 60000:02d}:{(ms // 1000) % 60:02d}.{(ms % 1000) // 10:02d}]{verses[(t + k) % len(verses)]}")
+            enc = "gbk" if album == "晚风与诗" else "utf-8"  # 一张专辑用 GBK,验证编码识别
+            open(os.path.join(sub, f"{t + 1:02d}. {title}.lrc"), "w", encoding=enc).write("\n".join(lines) + "\n")
+
     if art and ai % 3 == 1:  # 部分专辑只有目录封面 cover.jpg
         open(os.path.join(d, "cover.jpg"), "wb").write(art)
 print("demo library:", OUT)

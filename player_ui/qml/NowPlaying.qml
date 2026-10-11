@@ -1,175 +1,121 @@
 import QtQuick
 import PlayerUi
 
-// 沉浸播放页:封套 + 滑出旋转的黑胶;大标题;信号链标签;大号控制;底部带倒影的宽频谱
+// 沉浸播放页 v3:两栏网格,每个元素都有用途
+//  左栏「播放卡」:封面 → 歌名歌手 → 进度 → 控制 → 音量 → 一行信号链,全部与封面左右对齐
+//  右栏:歌词 (当前行居中高亮、平滑滚动、点击跳转);无歌词时为「接下来播放」
+//  背景:暖炭黑 + 封面后的强调色柔光 + 右下一束很淡的辅助色光,只用两种颜色
 Item {
     id: np
     property bool shown: false
     signal closeRequested()
-    signal openAlbum(int index)
+    signal chainClicked()
 
     opacity: shown ? 1 : 0
     visible: opacity > 0
-    scale: shown ? 1 : 0.97
-    Behavior on opacity { OpacityAnimator { duration: Theme.slow; easing.type: Easing.OutCubic } }
-    Behavior on scale { ScaleAnimator { duration: Theme.slow; easing.type: Easing.OutQuint } }
+    Behavior on opacity { OpacityAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
 
-    // 独立的极光背景,完全覆盖下层页面;再叠一层轻微压暗突出前景
-    Aurora { anchors.fill: parent; visible: np.visible }
-    Rectangle { anchors.fill: parent; color: Qt.rgba(0.03, 0.025, 0.02, 0.18) }
+    // ---------------- 背景 ----------------
+    Rectangle { anchors.fill: parent; color: Theme.base }
     MouseArea { anchors.fill: parent; hoverEnabled: true; onWheel: (w) => w.accepted = true }
 
-    readonly property real s: Math.min(np.height * 0.50, np.width * 0.30, 470)
-    readonly property real leftX: Math.max(64, np.width * 0.08)
-    readonly property real coverY: (np.height - s) / 2 - np.height * 0.06
+    readonly property real padX: Math.max(64, width * 0.07)
+    readonly property real contentW: Math.min(width - padX * 2, 1240)
+    readonly property real originX: (width - contentW) / 2
+    readonly property real coverSize: Math.max(280, Math.min(height * 0.46, contentW * 0.36, 440))
+    readonly property real gap: Math.max(64, contentW * 0.07)
+    readonly property real columnH: coverSize + 300
+    readonly property real topY: Math.max(64, (height - columnH) / 2)
 
-    IconButton {
-        x: 28
-        y: 26
-        icon: "back"
-        iconSize: 20
-        rotation: -90
-        onClicked: np.closeRequested()
+    ShaderEffect {
+        x: np.originX + np.coverSize / 2 - width / 2
+        y: np.topY + np.coverSize / 2 - height / 2
+        width: np.coverSize * 2.6
+        height: width
+        property color color: Theme.accent
+        property real intensity: 0.30
+        fragmentShader: "qrc:/shaders/glow.frag.qsb"
+    }
+    ShaderEffect {
+        x: np.width * 0.55
+        y: np.height * 0.45
+        width: np.width * 0.8
+        height: np.height
+        property color color: player.palette && player.palette.length > 2 ? Qt.lighter(player.palette[2], 2.2) : Theme.accent
+        property real intensity: 0.12
+        fragmentShader: "qrc:/shaders/glow.frag.qsb"
+    }
+    ShaderEffect {
+        anchors.fill: parent
+        property size size: Qt.size(width, height)
+        property real strength: 0.022
+        fragmentShader: "qrc:/shaders/grain.frag.qsb"
     }
 
-    // ---- 封套 + 黑胶 ----
-    Item {
-        id: art
-        x: np.leftX
-        y: np.coverY
-        width: np.s
-        height: np.s
-
-        Vinyl {
-            id: disc
-            width: np.s * 0.95
-            height: width
-            y: (np.s - height) / 2
-            x: player.playing ? np.s * 0.44 : np.s * 0.05
-            Behavior on x { NumberAnimation { duration: 1100; easing.type: Easing.OutCubic } }
-            cover: player.cover
-            spinning: player.playing
-            labelSize: 384
+    // 收起
+    Row {
+        x: 24
+        y: 22
+        spacing: 2
+        IconButton {
+            icon: "back"
+            iconSize: 18
+            rotation: -90
+            onClicked: np.closeRequested()
         }
-        SoftShadow { target: sleeve; spread: 44; offsetY: 26; strength: 1.0 }
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: qsTr("收起")
+            color: Theme.textTertiary
+            font.family: Theme.fontFamily
+            font.pixelSize: 13
+        }
+    }
+
+    // ---------------- 左栏:播放卡 ----------------
+    Item {
+        id: card
+        x: np.originX
+        y: np.topY
+        width: np.coverSize
+        height: np.columnH
+
+        SoftShadow { target: cover; spread: 40; offsetY: 24; strength: 0.95 }
         RoundedImage {
-            id: sleeve
-            width: np.s
-            height: np.s
-            radius: 10
+            id: cover
+            width: np.coverSize
+            height: np.coverSize
+            radius: 14
             source: player.cover
             decodeSize: 1024
         }
-        MouseArea {
-            anchors.fill: sleeve
-            cursorShape: Qt.PointingHandCursor
-            onClicked: if (player.albumIndex >= 0) np.openAlbum(player.albumIndex)
-        }
-    }
 
-    // ---- 右侧信息与控制 ----
-    Column {
-        id: info
-        x: art.x + np.s * 1.44 + 72
-        width: Math.max(320, np.width - x - np.width * 0.07)
-        anchors.verticalCenter: art.verticalCenter
-        spacing: 12
+        Column {
+            anchors.top: cover.bottom
+            anchors.topMargin: 26
+            width: parent.width
+            spacing: 0
 
-        Row {
-            spacing: 10
-            Row {
-                anchors.verticalCenter: parent.verticalCenter
-                height: 12
-                spacing: 2
-                Repeater {
-                    model: 4
-                    Rectangle {
-                        anchors.bottom: parent.bottom
-                        width: 3
-                        radius: 1.5
-                        height: 3 + 9 * (player.playing ? (player.spectrum[2 + index * 6] || 0) : 0.15)
-                        color: Theme.accent
-                    }
-                }
+            Text {
+                width: parent.width
+                text: player.title
+                elide: Text.ElideRight
+                color: Theme.text
+                font.family: Theme.fontFamily
+                font.pixelSize: 24
+                font.weight: Font.Bold
             }
             Text {
-                text: player.playing ? qsTr("正在播放") : qsTr("已暂停")
-                color: Theme.accent
+                topPadding: 4
+                width: parent.width
+                text: player.artist + (player.album.length ? "  —  " + player.album : "")
+                elide: Text.ElideRight
+                color: Theme.textSecondary
                 font.family: Theme.fontFamily
-                font.pixelSize: 12
-                font.weight: Font.DemiBold
-                font.letterSpacing: 2.5
+                font.pixelSize: 15
             }
-        }
-        Text {
-            width: parent.width
-            text: player.title
-            wrapMode: Text.WordWrap
-            maximumLineCount: 2
-            elide: Text.ElideRight
-            color: Theme.text
-            font.family: Theme.fontFamily
-            font.pixelSize: Math.min(56, Math.max(34, np.width * 0.034))
-            font.weight: Font.Bold
-            font.letterSpacing: -0.8
-            lineHeight: 1.04
-        }
-        Text {
-            width: parent.width
-            text: player.artist
-            elide: Text.ElideRight
-            color: Theme.textSecondary
-            font.family: Theme.fontFamily
-            font.pixelSize: 20
-            font.weight: Font.Medium
-        }
-        Text {
-            width: parent.width
-            text: player.album
-            elide: Text.ElideRight
-            color: Theme.textTertiary
-            font.family: Theme.fontFamily
-            font.pixelSize: 14
-        }
-        Item { width: 1; height: 6 }
 
-        // 信号链标签
-        Flow {
-            width: parent.width
-            spacing: 8
-            Repeater {
-                model: player.signalChain
-                Rectangle {
-                    height: 26
-                    width: chipText.implicitWidth + 26
-                    radius: 13
-                    color: Qt.rgba(1, 1, 1, 0.05)
-                    border.width: 1
-                    border.color: modelData.ok ? Theme.okAlpha(0.38) : Theme.warnAlpha(0.32)
-                    Rectangle {
-                        x: 10
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 6; height: 6; radius: 3
-                        color: modelData.ok ? Theme.ok : Theme.warn
-                    }
-                    Text {
-                        id: chipText
-                        x: 21
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: modelData.label
-                        color: Theme.textSecondary
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 12
-                    }
-                }
-            }
-        }
-        Item { width: 1; height: 14 }
-
-        // 进度
-        Column {
-            width: Math.min(parent.width, 560)
-            spacing: 4
+            Item { width: 1; height: 22 }
             SeekBar {
                 id: seek
                 width: parent.width
@@ -179,7 +125,7 @@ Item {
             }
             Item {
                 width: parent.width
-                height: 16
+                height: 18
                 Text {
                     text: seek.fmt(seek.dragging ? seek.dragValue : player.position)
                     color: Theme.textTertiary
@@ -194,62 +140,239 @@ Item {
                     font.pixelSize: 12
                 }
             }
-        }
-        Item { width: 1; height: 6 }
 
-        // 大号控制
-        Row {
-            spacing: 26
-            IconButton { icon: "prev"; iconSize: 26; width: 56; height: 56; anchors.verticalCenter: parent.verticalCenter; onClicked: player.previous() }
+            Item { width: 1; height: 14 }
             Item {
-                width: 80
-                height: 80
-                Rectangle {
+                width: parent.width
+                height: 66
+                Row {
                     anchors.centerIn: parent
-                    width: 80; height: 80; radius: 40
-                    color: Theme.accentAlpha(0.28)
-                    scale: player.playing ? 1.0 + 0.28 * Math.min(1, player.bass * 1.4) : 1.0
-                    opacity: player.playing ? 1 : 0
-                    Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
-                }
-                IconButton {
-                    anchors.centerIn: parent
-                    icon: player.playing ? "pause" : "play"
-                    iconSize: 30
-                    width: 76; height: 76
-                    filled: true
-                    onClicked: player.toggle()
+                    spacing: 34
+                    IconButton { icon: "prev"; iconSize: 22; width: 48; height: 48; anchors.verticalCenter: parent.verticalCenter; onClicked: player.previous() }
+                    IconButton {
+                        icon: player.playing ? "pause" : "play"
+                        iconSize: 26
+                        width: 66; height: 66
+                        filled: true
+                        onClicked: player.toggle()
+                    }
+                    IconButton { icon: "next"; iconSize: 22; width: 48; height: 48; anchors.verticalCenter: parent.verticalCenter; onClicked: player.next() }
                 }
             }
-            IconButton { icon: "next"; iconSize: 26; width: 56; height: 56; anchors.verticalCenter: parent.verticalCenter; onClicked: player.next() }
-            Item { width: 12; height: 1 }
-            VolumeControl { anchors.verticalCenter: parent.verticalCenter }
+
+            Item { width: 1; height: 16 }
+            Row {
+                width: parent.width
+                spacing: 12
+                Icon { anchors.verticalCenter: parent.verticalCenter; name: "mute"; size: 15; opacity: 0.45 }
+                SeekBar {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width - 15 * 2 - 24
+                    showTip: false
+                    position: player.volume
+                    duration: 1
+                    onSeekRequested: (v) => player.volume = v
+                    onDragValueChanged: if (dragging) player.volume = dragValue
+                }
+                Icon { anchors.verticalCenter: parent.verticalCenter; name: "volume"; size: 15; opacity: 0.45 }
+            }
+
+            Item { width: 1; height: 18 }
+            // 一行信号链:点击展开详情
+            Item {
+                width: parent.width
+                height: 20
+                Rectangle {
+                    id: dot
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 6; height: 6; radius: 3
+                    color: player.bitPerfect ? Theme.ok : Theme.warn
+                }
+                Text {
+                    anchors.left: dot.right
+                    anchors.leftMargin: 9
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: player.chainSummary
+                    elide: Text.ElideRight
+                    color: chainMouse.containsMouse ? Theme.textSecondary : Theme.textTertiary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12
+                }
+                MouseArea {
+                    id: chainMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: np.chainClicked()
+                }
+            }
         }
     }
 
-    // ---- 底部频谱 + 倒影 ----
+    // ---------------- 右栏:歌词 / 接下来播放 ----------------
     Item {
-        id: specBox
-        x: np.leftX
-        width: np.width - np.leftX * 2
-        height: 70
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: 58
-        opacity: 0.85
-        Spectrum {
-            anchors.fill: parent
-            bars: 32
-            gap: Math.max(4, width / 32 * 0.32)
+        id: side
+        x: card.x + card.width + np.gap
+        y: np.topY
+        width: np.originX + np.contentW - x
+        height: np.columnH
+
+        readonly property bool hasLyrics: player.lyrics.length > 0
+        property string tab: hasLyrics ? "lyrics" : "queue"
+        onHasLyricsChanged: tab = hasLyrics ? "lyrics" : "queue"
+
+        Row {
+            id: tabs
+            spacing: 28
+            Repeater {
+                model: [{ key: "lyrics", label: qsTr("歌词") }, { key: "queue", label: qsTr("接下来播放") }]
+                Item {
+                    width: tabText.implicitWidth
+                    height: 34
+                    readonly property bool active: side.tab === modelData.key
+                    Text {
+                        id: tabText
+                        text: modelData.label
+                        color: active ? Theme.text : Theme.textTertiary
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 15
+                        font.weight: active ? Font.DemiBold : Font.Normal
+                    }
+                    Rectangle {
+                        anchors.bottom: parent.bottom
+                        width: parent.width
+                        height: 2
+                        radius: 1
+                        color: Theme.accent
+                        opacity: active ? 1 : 0
+                        Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: side.tab = modelData.key
+                    }
+                }
+            }
         }
-    }
-    Spectrum {
-        x: specBox.x
-        width: specBox.width
-        height: specBox.height
-        y: specBox.y + specBox.height + 2
-        bars: 32
-        gap: Math.max(4, width / 32 * 0.32)
-        transform: Scale { origin.y: specBox.height / 2; yScale: -1 }
-        opacity: 0.16
+
+        // 歌词
+        ListView {
+            id: lyricView
+            anchors.top: tabs.bottom
+            anchors.topMargin: 18
+            width: parent.width
+            height: parent.height - tabs.height - 18
+            clip: true
+            visible: side.tab === "lyrics"
+            model: player.lyrics
+            currentIndex: Math.max(0, player.lyricIndex)
+            spacing: 6
+            highlightRangeMode: ListView.ApplyRange
+            preferredHighlightBegin: height * 0.32
+            preferredHighlightEnd: height * 0.32 + 64
+            highlightMoveDuration: 520
+            highlightMoveVelocity: -1
+            boundsBehavior: Flickable.StopAtBounds
+            delegate: Item {
+                width: lyricView.width
+                height: line.implicitHeight + 14
+                readonly property int dist: Math.abs(index - player.lyricIndex)
+                readonly property bool current: index === player.lyricIndex
+                Text {
+                    id: line
+                    width: parent.width
+                    y: 7
+                    text: modelData.text
+                    wrapMode: Text.WordWrap
+                    color: current ? Theme.text : Theme.textSecondary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 24
+                    font.weight: Font.DemiBold
+                    lineHeight: 1.2
+                    opacity: current ? 1 : Math.max(0.22, 0.62 - dist * 0.09)
+                    scale: current ? 1 : 0.94
+                    transformOrigin: Item.Left
+                    Behavior on opacity { OpacityAnimator { duration: 360 } }
+                    Behavior on scale { ScaleAnimator { duration: 360; easing.type: Easing.OutCubic } }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: player.seek(modelData.time)
+                }
+            }
+        }
+        Text {
+            anchors.top: tabs.bottom
+            anchors.topMargin: 24
+            visible: side.tab === "lyrics" && !side.hasLyrics
+            text: qsTr("没有找到歌词 · 将同名 .lrc 文件放在歌曲旁即可显示")
+            color: Theme.textTertiary
+            font.family: Theme.fontFamily
+            font.pixelSize: 14
+        }
+
+        // 接下来播放
+        ListView {
+            id: queueView
+            anchors.top: tabs.bottom
+            anchors.topMargin: 18
+            width: parent.width
+            height: parent.height - tabs.height - 18
+            clip: true
+            visible: side.tab === "queue"
+            model: player.queueTracks
+            boundsBehavior: Flickable.StopAtBounds
+            spacing: 2
+            delegate: Item {
+                width: queueView.width
+                height: 50
+                readonly property bool current: modelData.index === player.queuePosition
+                readonly property bool played: modelData.index < player.queuePosition
+                Rectangle {
+                    anchors.fill: parent
+                    radius: Theme.radiusM
+                    color: current ? Theme.accentAlpha(0.12) : (rowMouse.containsMouse ? Theme.hover : "transparent")
+                }
+                Text {
+                    x: 14
+                    width: 26
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: modelData.number
+                    color: current ? Theme.accent : Theme.textTertiary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 13
+                }
+                Text {
+                    x: 50
+                    width: parent.width - 50 - 70
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: modelData.title
+                    elide: Text.ElideRight
+                    color: current ? Theme.accent : (played ? Theme.textTertiary : Theme.text)
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 14
+                    font.weight: current ? Font.DemiBold : Font.Normal
+                }
+                Text {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 14
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: modelData.duration
+                    color: Theme.textTertiary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12
+                }
+                MouseArea {
+                    id: rowMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: player.playQueueIndex(modelData.index)
+                }
+            }
+        }
     }
 }
