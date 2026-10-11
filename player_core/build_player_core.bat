@@ -1,0 +1,54 @@
+@echo off
+setlocal
+cd /d "%~dp0."
+
+set VCVARS=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat
+
+if not exist "%VCVARS%" goto :no_vcvars
+
+call "%VCVARS%" >nul
+if errorlevel 1 goto :fail_vcvars
+
+set CORE_SRC=src\audio_tag_parser.cpp src\music_catalog.cpp src\song_cleaner.cpp src\pinyin_table.cpp src\playlist_manager.cpp src\play_queue_controller.cpp
+set P2_SRC=%CORE_SRC% src\fft_visualizer.cpp src\audio_playback_engine.cpp src\audio_ingestion_pipeline.cpp
+set CFLAGS=/nologo /utf-8 /std:c++17 /Zc:__cplusplus /permissive- /O2 /EHsc /MD /Gy
+
+echo [1/3] Building test_runner.exe ...
+cl.exe %CFLAGS% test\test_runner.cpp %CORE_SRC% /Fe:test\test_runner.exe /link /OPT:REF
+if errorlevel 1 goto :fail_build1
+
+echo [2/3] Building test_phase2_runner.exe ...
+cl.exe %CFLAGS% test\test_phase2_runner.cpp %P2_SRC% /Fe:test\test_phase2_runner.exe /link /OPT:REF ole32.lib winmm.lib user32.lib
+if errorlevel 1 goto :fail_build2
+
+echo [3/3] Building test_hires_runner.exe ...
+cl.exe %CFLAGS% test\test_hires_runner.cpp %P2_SRC% /Fe:test\test_hires_runner.exe /link /OPT:REF ole32.lib winmm.lib user32.lib
+if errorlevel 1 goto :fail_build3
+
+del /q *.obj test\*.obj 2>nul
+echo.
+echo [OK] Build succeeded.
+goto :end
+
+:no_vcvars
+echo [ERROR] Cannot find vcvars64.bat
+exit /b 1
+
+:fail_vcvars
+echo [ERROR] Failed to initialize MSVC x64 environment
+exit /b 1
+
+:fail_build1
+echo [ERROR] Failed to build test_runner.exe
+exit /b 1
+
+:fail_build2
+echo [ERROR] Failed to build test_phase2_runner.exe
+exit /b 1
+
+:fail_build3
+echo [ERROR] Failed to build test_hires_runner.exe
+exit /b 1
+
+:end
+endlocal

@@ -72,7 +72,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (filesQueue.some(f => f.file.name === file.name && f.file.size === file.size)) return;
 
             const ext = file.name.split('.').pop().toLowerCase();
-            if (['kgg', 'kgm', 'kgma', 'flac', 'ogg'].includes(ext)) {
+            if (['kgg', 'kgm', 'kgma', 'ncm', 'flac', 'ogg'].includes(ext)) {
                 filesQueue.push({
                     file: file,
                     id: Math.random().toString(36).substr(2, 9),

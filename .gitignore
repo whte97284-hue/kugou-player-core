@@ -48,6 +48,27 @@ desktop.ini
 
 # Logs
 *.log
+
+# C++ Build & Test Artifacts
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.lib
+*.dll
+*.exp
+temp_kgm_process/
+player_core/test/*.obj
+player_core/test/*.exe
+player_core/test/*.pdb
+player_core/test/*.ilk
+player_core/test/ingestion_output/
+player_core/test/test_export.m3u8
+player_core/test/playlists.json
+player_core/test/audit_report.txt
+player_core/test/phase2_audit_report.txt
+player_core/test/hires_audit_report.txt
+tools/kgm/kgm.mask
 npm-debug.log*
 
 # 打包输出

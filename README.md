@@ -9,7 +9,7 @@
   </p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-2.1.0-blue.svg?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-2.2.0-blue.svg?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License">
     <img src="https://img.shields.io/badge/platform-Windows-lightgrey.svg?style=flat-square" alt="Platform">
     <img src="https://img.shields.io/badge/build-Electron-9cf.svg?style=flat-square" alt="Electron">
@@ -42,7 +42,7 @@
 
 ## 核心特性
 
-- **高效转码**：支持 KGM (.kgm) 与 KGG (.kgg) 格式的无损/高保真解码。
+- **高效转码**：支持酷狗 KGM (.kgm/.kgma)、KGG (.kgg) 和网易云 NCM (.ncm) 格式的无损/高保真解码。
 - **批量处理**：支持拖拽多个文件或文件夹进行并发转换，实时显示任务进度。
 - **现代化 UI**：内置多套精美主题（经典终端、深海蓝、赛博粉等），支持深色模式。
 - **资产管理**：集成的归档库功能，支持对已转换音频的搜索、播放与管理。
@@ -78,9 +78,17 @@
 
 ### 格式转换
 
-1. **拖拽导入**：在主界面直接将 `.kgm` 或 `.kgg` 文件拖入中央区域。
+1. **拖拽导入**：在主界面直接将 `.kgm`、`.kgg` 或 `.ncm` 文件拖入中央区域。
 2. **选择文件**：点击中央区域，通过文件资源管理器选择文件。
 3. **自动处理**：导入后软件将自动开始转换，界面下方会显示详细的进度条和日志状态。
+
+### 支持格式
+
+| 平台 | 格式 | 扩展名 | 说明 |
+| :--- | :--- | :--- | :--- |
+| 酷狗音乐 | KGM/KGMA | `.kgm` `.kgma` | 需要 kgm.mask 文件 |
+| 酷狗音乐 | KGG | `.kgg` | 需要本机播放记录 |
+| 网易云音乐 | NCM | `.ncm` | 可直接解码，支持封面和标签 |
 
 ### 资源管理
 
@@ -109,7 +117,7 @@
 | **前端容器** | Electron (Chromium) | 提供跨平台 GUI 容器，负责系统级交互（文件拖拽、剪贴板、任务栏等）。 |
 | **用户界面** | HTML5 / CSS3 / ES6 | 构建响应式界面，处理用户交互逻辑与状态管理。 |
 | **后端服务** | Python Flask | 提供 RESTful API，处理业务逻辑，如文件系统操作、配置管理等。 |
-| **解码核心** | CLI Tools (Unlock Music) | 底层二进制工具，负责实际的音频解密与转码工作。 |
+| **解码核心** | CLI Tools (kgg-dec, kgm-dec, ncmdump) | 底层二进制工具，负责实际的音频解密与转码工作。 |
 | **构建工具** | Electron-Builder / PyInstaller | 负责将前后端及依赖环境打包为可分发的 Windows 可执行文件。 |
 
 ---
@@ -157,8 +165,10 @@ KugouConverterWeb/
 
 本项目基于 **MIT License** 开源。
 
-核心解码算法来源于开源社区项目 [Unlock Music](https://github.com/unlock-music)，遵循其原有的许可协议。
+核心解码工具来源于以下开源项目：
+- [Unlock Music](https://github.com/unlock-music) - KGM/KGG 解码
+- [ncmdump](https://github.com/taurusxin/ncmdump) - NCM 解码
 
 ---
 
-Copyright © 2024 KugouConverter Project. All Rights Reserved.
+Copyright © 2024-2026 AudioDecoder Project. All Rights Reserved.

@@ -41,7 +41,7 @@
                         DEC</text>
                 </svg>
                 <span>酷狗音频解码终端</span>
-                <span class="version">v2.1</span>
+                <span class="version">v2.2</span>
             </div>
             <div class="nav-tabs">
                 <button class="nav-tab active" data-page="convert">[ 转换中心 ]</button>
@@ -69,7 +69,7 @@
                             <span class="ascii-icon">[ + ]</span>
                         </div>
                         <h3 class="instruction">将加密音频拖入此处</h3>
-                        <p class="sub-instruction">支持格式: .KGMA .KGG .FLAC .OGG</p>
+                        <p class="sub-instruction">支持格式: .KGMA .KGG .NCM .FLAC .OGG</p>
                         <div class="upload-buttons">
                             <button class="select-file-btn" onclick="document.getElementById('file-input').click()">
                                 &lt; 选择文件 &gt;
@@ -78,7 +78,7 @@
                                 &lt; 选择文件夹 &gt;
                             </button>
                         </div>
-                        <input type="file" id="file-input" multiple hidden accept=".kgm,.kgma,.kgg,.flac,.ogg">
+                        <input type="file" id="file-input" multiple hidden accept=".kgm,.kgma,.kgg,.ncm,.flac,.ogg">
                         <input type="file" id="folder-input" webkitdirectory hidden>
                     </div>
                 </div>
@@ -327,9 +327,9 @@
                                 <img src="{{ url_for('static', filename='icon.svg') }}" alt="logo">
                             </div>
                             <div class="about-info">
-                                <h4>酷狗音频解码终端</h4>
-                                <p class="about-version">Version 2.1.0</p>
-                                <p class="about-desc">一款简洁高效的酷狗加密音频解码工具</p>
+                                <h4>音频解码终端</h4>
+                                <p class="about-version">Version 2.2.0</p>
+                                <p class="about-desc">支持酷狗/网易云加密音频的解码工具</p>
                             </div>
                         </div>
 
@@ -368,6 +368,10 @@
                                 <li>
                                     <span class="credit-name">kgg-dec</span>
                                     <span class="credit-desc">KGG 格式解密核心</span>
+                                </li>
+                                <li>
+                                    <span class="credit-name">ncmdump</span>
+                                    <span class="credit-desc">网易云 NCM 格式解密</span>
                                 </li>
                                 <li>
                                     <span class="credit-name">Flask</span>
@@ -416,7 +420,7 @@
                                 <div class="step-content">
                                     <h4>导入文件</h4>
                                     <p>将加密音频文件拖入“输入模块”区域，或点击“选择文件/文件夹”按钮</p>
-                                    <p class="step-tip">支持格式: .KGMA .KGM .KGG .FLAC .OGG</p>
+                                    <p class="step-tip">支持格式: .KGMA .KGM .KGG .NCM .FLAC .OGG</p>
                                 </div>
                             </div>
                             <div class="step-item">
@@ -468,6 +472,35 @@
                             <div class="help-explain">
                                 <p class="explain-title">原理说明：</p>
                                 <p>KGG 文件使用本地 eKey 加密。当您在酷狗播放歌曲时，酷狗会在本地生成并缓存解密密钥。解码工具需要读取这个密钥才能解密文件。</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- NCM 解码说明 -->
+                    <div class="help-section info-section">
+                        <h3 class="help-title">
+                            <span class="help-icon">♪</span>
+                            NCM 格式解码说明 (网易云音乐)
+                        </h3>
+                        <div class="help-notice">
+                            <p><strong>NCM 是网易云音乐的专有加密格式。</strong></p>
+                            <ul class="requirement-list">
+                                <li>
+                                    <span class="req-icon">✓</span>
+                                    <span>NCM 文件通常位于网易云音乐的 <strong>下载目录</strong></span>
+                                </li>
+                                <li>
+                                    <span class="req-icon">✓</span>
+                                    <span>默认路径: <code>C:\用户\你的用户名\Music\CloudMusic</code></span>
+                                </li>
+                                <li>
+                                    <span class="req-icon">✓</span>
+                                    <span>解码后会自动保留 <strong>歌曲信息和封面</strong></span>
+                                </li>
+                            </ul>
+                            <div class="help-explain">
+                                <p class="explain-title">与 KGG 的区别：</p>
+                                <p>NCM 文件不依赖本机播放记录，可以直接解码。从其他电脑复制过来的 NCM 文件也能正常解密。</p>
                             </div>
                         </div>
                     </div>
@@ -533,6 +566,11 @@
                             <div class="format-card">
                                 <span class="format-ext">.KGM</span>
                                 <span class="format-desc">酷狗加密音频</span>
+                                <span class="format-note">直接解码</span>
+                            </div>
+                            <div class="format-card">
+                                <span class="format-ext">.NCM</span>
+                                <span class="format-desc">网易云音乐格式</span>
                                 <span class="format-note">直接解码</span>
                             </div>
                             <div class="format-card">

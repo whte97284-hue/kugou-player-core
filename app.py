@@ -99,11 +99,15 @@ TOOL_PATHS = {
         'cwd': os.path.join(TOOLS_DIR, 'kgg')
     },
     'kgm': {
-        # 使用 IXarea Unlock Music 工具 (酷狗kgm转换.exe)
-        # 它需要 kgm.mask 和待转换文件在同一目录下运行
-        'exe': os.path.join(PARENT_DIR, 'kgm kmga转mp3  flac', 'kgm转换器', '酷狗kgm转换.exe'),
-        'mask': os.path.join(PARENT_DIR, 'kgm kmga转mp3  flac', 'kgm转换器', 'kgm.mask'),
-        'cwd': os.path.join(PARENT_DIR, 'kgm kmga转mp3  flac', 'kgm转换器')
+        # KGM 解码工具 - 统一放在 tools/kgm 目录
+        'exe': os.path.join(TOOLS_DIR, 'kgm', 'kgm-dec.exe'),
+        'mask': os.path.join(TOOLS_DIR, 'kgm', 'kgm.mask'),
+        'cwd': os.path.join(TOOLS_DIR, 'kgm')
+    },
+    'ncm': {
+        # NCM 解码工具 - 网易云音乐格式
+        'exe': os.path.join(TOOLS_DIR, 'ncm', 'ncmdump.exe'),
+        'cwd': os.path.join(TOOLS_DIR, 'ncm')
     }
 }
 
@@ -326,6 +330,56 @@ def process_kgg(input_path, output_dir):
                 pass
         return False, str(e)
 
+# NCM 处理 - 网易云音乐格式
+def process_ncm(input_path, output_dir):
+    """
+    使用 ncmdump.exe 解密 NCM 文件
+    NCM 是网易云音乐的加密格式
+    """
+    tool = TOOL_PATHS['ncm']
+    
+    if not os.path.exists(tool['exe']):
+        return False, f"ncmdump.exe 未找到: {tool['exe']}"
+    
+    try:
+        filename = os.path.basename(input_path)
+        logger.info(f"开始处理 NCM 文件: {filename}")
+        
+        # ncmdump 用法: ncmdump.exe -o <输出目录> <输入文件>
+        result = subprocess.run(
+            [tool['exe'], '-o', output_dir, input_path],
+            cwd=tool['cwd'],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        
+        output_text = (result.stdout or '') + (result.stderr or '')
+        logger.info(f"NCM工具输出: {output_text}")
+        
+        # 检查是否成功生成了文件
+        # ncmdump 会生成同名但扩展名为 .mp3 或 .flac 的文件
+        base_name = os.path.splitext(filename)[0]
+        success = False
+        
+        for ext in ['.mp3', '.flac']:
+            output_file = os.path.join(output_dir, base_name + ext)
+            if os.path.exists(output_file):
+                logger.info(f"输出文件: {base_name + ext}")
+                success = True
+                break
+        
+        if success:
+            return True, "解密成功"
+        else:
+            return False, "未生成输出文件，可能文件格式不支持或已损坏"
+            
+    except subprocess.TimeoutExpired:
+        return False, "转换超时"
+    except Exception as e:
+        logger.error(f"NCM处理异常: {str(e)}")
+        return False, str(e)
+
 
 # ----------------- Flask Routes -----------------
 
@@ -413,9 +467,11 @@ def convert():
     elif ext in ['kgm', 'kgma']:
         # 使用 Unlock Music 工具进行解密
         success, message = process_kgm(input_path, OUTPUT_FOLDER)
-    elif ext in ['flac', 'ogg']:
-        # 已经是无损格式，可能是为了转 MP3?
-        # 暂时直接复制到输出目录
+    elif ext in ['ncm']:
+        # 网易云音乐 NCM 格式
+        success, message = process_ncm(input_path, OUTPUT_FOLDER)
+    elif ext in ['flac', 'ogg', 'mp3']:
+        # 已经是通用格式，直接复制到输出目录
         shutil.copy(input_path, os.path.join(OUTPUT_FOLDER, filename))
         success = True
         message = "Copied (Already decoded)"
@@ -598,7 +654,7 @@ def batch_delete_archive():
     })
 # ==================== 监控文件夹功能 ====================
 
-SUPPORTED_EXTENSIONS = {'.kgg', '.kgm', '.kgma'}
+SUPPORTED_EXTENSIONS = {'.kgg', '.kgm', '.kgma', '.ncm'}
 
 def scan_watch_folder():
     """扫描监控文件夹，返回新文件列表"""
@@ -678,6 +734,8 @@ def auto_process_file(file_info):
         try:
             if ext == '.kgg':
                 success, msg = process_kgg(filepath, OUTPUT_FOLDER)
+            elif ext == '.ncm':
+                success, msg = process_ncm(filepath, OUTPUT_FOLDER)
             else:
                 success, msg = process_kgm(filepath, OUTPUT_FOLDER)
             
