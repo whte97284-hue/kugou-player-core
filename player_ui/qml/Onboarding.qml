@@ -1,238 +1,146 @@
 import QtQuick
 import PlayerUi
 
-// 曲库为空时的引导与首次导入视图
-//  · 空闲:标题 + 选择文件夹主按钮 + 拖放提示 + 支持格式
-//  · 导入中:大号计数 (已识别 / 总数) + 细进度线 + 当前文件 + 取消
-//  · 扫完却没找到音乐:说明原因并可重新选择
+// 空曲库 / 首次导入:无文字,只有一个圆
+//  · 空闲:细环 + 中心加号,向外缓慢扩散的涟漪;点击选择文件夹 (也可直接拖入窗口)
+//  · 查找文件:一段短弧绕环旋转
+//  · 识别中:弧线随进度画满一圈,中心是已识别数量;悬停数量变为 ×,点击取消
+//  · 扫完却没找到音乐:圆轻轻摇头,回到加号
 Item {
     id: ob
     signal pickFolder()
 
     readonly property bool importing: library.scanning
-    readonly property bool foundNothing: !importing && library.folders.length > 0 && library.trackCount === 0
+    readonly property bool indeterminate: importing && library.scanTotal === 0
+    readonly property real side: 168
 
-    // ---------------- 空闲 / 未找到 ----------------
-    Column {
+    // 中心略高于几何中心,视觉上更稳
+    Item {
+        id: dial
+        width: ob.side
+        height: ob.side
         anchors.centerIn: parent
-        anchors.verticalCenterOffset: -30
-        spacing: 0
-        opacity: ob.importing ? 0 : 1
-        visible: opacity > 0
-        Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+        anchors.verticalCenterOffset: -24
+        transform: Translate { id: nudge }
+        scale: mouse.pressed ? 0.97 : (mouse.containsMouse && !ob.importing ? 1.03 : 1)
+        Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
 
-        // 唱片标识:强调色细环 + 中心点,缓慢呼吸
-        Item {
-            anchors.horizontalCenter: parent.horizontalCenter
-            width: 92; height: 92
+        // 涟漪:空闲时一圈细环向外扩散并淡出
+        Repeater {
+            model: 2
             Rectangle {
-                anchors.fill: parent
+                id: ripple
+                anchors.centerIn: parent
+                width: ob.side
+                height: ob.side
                 radius: width / 2
                 color: "transparent"
                 border.width: 1
-                border.color: Theme.accentAlpha(0.35)
-            }
-            Rectangle {
-                anchors.centerIn: parent
-                width: 58; height: 58; radius: 29
-                color: Theme.accentAlpha(0.10)
-                border.width: 1
-                border.color: Theme.accentAlpha(0.55)
-                SequentialAnimation on scale {
-                    loops: Animation.Infinite
+                border.color: Theme.accentAlpha(0.5)
+                opacity: 0
+                visible: !ob.importing
+                SequentialAnimation {
                     running: ob.visible && !ob.importing
-                    ScaleAnimator { from: 1; to: 1.08; duration: 1800; easing.type: Easing.InOutSine }
-                    ScaleAnimator { from: 1.08; to: 1; duration: 1800; easing.type: Easing.InOutSine }
+                    loops: Animation.Infinite
+                    PauseAnimation { duration: index * 1600 }
+                    ParallelAnimation {
+                        ScaleAnimator { target: ripple; from: 1; to: 1.55; duration: 3200; easing.type: Easing.OutCubic }
+                        OpacityAnimator { target: ripple; from: 0.7; to: 0; duration: 3200; easing.type: Easing.OutCubic }
+                    }
+                    PauseAnimation { duration: (1 - index) * 1600 }
                 }
             }
-            Rectangle { anchors.centerIn: parent; width: 10; height: 10; radius: 5; color: Theme.accent }
         }
 
-        Item { width: 1; height: 34 }
+        // 圆面:悬停时透出一层极淡的强调色
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: 3
+            radius: width / 2
+            color: Theme.accentAlpha(mouse.containsMouse ? 0.08 : 0.035)
+            Behavior on color { ColorAnimation { duration: Theme.normal } }
+        }
+
+        ShaderEffect {
+            id: ring
+            anchors.fill: parent
+            property color color: Theme.accent
+            property color trackColor: Theme.accentAlpha(ob.importing ? 0.26 : (mouse.containsMouse ? 0.75 : 0.42))
+            property real side: width
+            property real arcWidth: 3
+            property real trackWidth: 1.5
+            property real start: 0
+            property real span: ob.indeterminate ? 0.18 : (ob.importing ? library.progress : 0)
+            Behavior on span { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
+            Behavior on trackColor { ColorAnimation { duration: Theme.normal } }
+            fragmentShader: "qrc:/shaders/ring.frag.qsb"
+
+            NumberAnimation on start {
+                running: ob.indeterminate && ob.visible
+                from: 0; to: 1
+                duration: 1100
+                loops: Animation.Infinite
+            }
+            onVisibleChanged: if (!ob.indeterminate) start = 0
+        }
+
+        // 中心:加号 (空闲) / 数量 (识别中) / × (识别中悬停)
+        Item {
+            id: plus
+            anchors.centerIn: parent
+            width: 34; height: 34
+            opacity: ob.importing ? 0 : 1
+            scale: ob.importing ? 0.6 : (mouse.containsMouse ? 1.12 : 1)
+            Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+            Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutBack } }
+            Rectangle { anchors.centerIn: parent; width: parent.width; height: 2.5; radius: 1.25; color: Theme.accent }
+            Rectangle { anchors.centerIn: parent; width: 2.5; height: parent.height; radius: 1.25; color: Theme.accent }
+        }
+
         Text {
-            anchors.horizontalCenter: parent.horizontalCenter
-            text: ob.foundNothing ? qsTr("这里没有找到可播放的音乐") : qsTr("把你的音乐带进来")
+            id: count
+            anchors.centerIn: parent
+            property real shown: library.scanDone
+            Behavior on shown { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+            text: Math.round(shown).toLocaleString(Qt.locale(), "f", 0)
             color: Theme.text
             font.family: Theme.fontFamily
-            font.pixelSize: 30
-            font.weight: Font.Bold
-        }
-        Item { width: 1; height: 12 }
-        Text {
-            anchors.horizontalCenter: parent.horizontalCenter
-            horizontalAlignment: Text.AlignHCenter
-            text: ob.foundNothing
-                  ? qsTr("已扫描所选文件夹,但没有识别到音频文件。换一个文件夹试试。")
-                  : qsTr("选择存放音乐的文件夹,子文件夹会一并扫描。标签、封面、CUE 分轨都会自动识别。")
-            color: Theme.textSecondary
-            font.family: Theme.fontFamily
-            font.pixelSize: 14
+            font.pixelSize: shown >= 10000 ? 28 : 34
+            font.weight: Font.Light
+            opacity: ob.importing && !ob.indeterminate && !mouse.containsMouse ? 1 : 0
+            Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
         }
 
-        Item { width: 1; height: 36 }
-        // 主按钮
-        Rectangle {
-            id: primary
-            anchors.horizontalCenter: parent.horizontalCenter
-            width: btnRow.implicitWidth + 56
-            height: 50
-            radius: 25
-            color: Theme.accent
-            scale: btnMouse.pressed ? 0.97 : (btnMouse.containsMouse ? 1.02 : 1)
-            Behavior on scale { ScaleAnimator { duration: Theme.fast; easing.type: Easing.OutCubic } }
-            Row {
-                id: btnRow
-                anchors.centerIn: parent
-                spacing: 10
-                Icon {
-                    anchors.verticalCenter: parent.verticalCenter
-                    name: Theme.accentIsLight ? "folder-dark" : "folder"
-                    size: 18
-                }
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: qsTr("选择音乐文件夹")
-                    color: Theme.onAccent
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 15
-                    font.weight: Font.DemiBold
-                }
-            }
-            MouseArea {
-                id: btnMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: ob.pickFolder()
-            }
-        }
-        Item { width: 1; height: 16 }
-        Text {
-            anchors.horizontalCenter: parent.horizontalCenter
-            text: qsTr("也可以直接把文件夹拖进窗口")
-            color: Theme.textTertiary
-            font.family: Theme.fontFamily
-            font.pixelSize: 12
+        Icon {
+            anchors.centerIn: parent
+            name: "close"
+            size: 22
+            opacity: ob.importing && mouse.containsMouse ? 0.85 : 0
+            Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
         }
 
-        Item { width: 1; height: 48 }
-        // 支持格式:一行细字,中点分隔
-        Text {
-            anchors.horizontalCenter: parent.horizontalCenter
-            text: "FLAC  ·  WAV  ·  AIFF  ·  ALAC  ·  APE  ·  DSF / DFF  ·  MP3  ·  AAC  ·  OGG / OPUS  ·  CUE  ·  KGM / NCM"
-            color: Theme.textTertiary
-            opacity: 0.8
-            font.family: Theme.fontFamily
-            font.pixelSize: 11
-            font.letterSpacing: 1
+        MouseArea {
+            id: mouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: ob.importing ? library.cancelScan() : ob.pickFolder()
         }
     }
 
-    // ---------------- 导入中 ----------------
-    Column {
-        id: prog
-        anchors.centerIn: parent
-        anchors.verticalCenterOffset: -30
-        width: Math.min(520, ob.width - 80)
-        spacing: 0
-        opacity: ob.importing ? 1 : 0
-        visible: opacity > 0
-        Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
-
-        // 数字平滑滚动,而不是每次跳变
-        property real shown: library.scanDone
-        Behavior on shown { NumberAnimation { duration: 240; easing.type: Easing.OutCubic } }
-
-        Text {
-            text: library.scanTotal > 0 ? qsTr("正在识别你的音乐") : qsTr("正在查找音乐文件")
-            color: Theme.textSecondary
-            font.family: Theme.fontFamily
-            font.pixelSize: 14
-        }
-        Item { width: 1; height: 10 }
-        Row {
-            spacing: 10
-            Text {
-                text: Math.round(prog.shown).toLocaleString(Qt.locale(), "f", 0)
-                color: Theme.text
-                font.family: Theme.fontFamily
-                font.pixelSize: 64
-                font.weight: Font.Bold
-            }
-            Text {
-                anchors.baseline: parent.children[0].baseline
-                visible: library.scanTotal > 0
-                text: "/ " + library.scanTotal.toLocaleString(Qt.locale(), "f", 0) + qsTr(" 个文件")
-                color: Theme.textTertiary
-                font.family: Theme.fontFamily
-                font.pixelSize: 18
-            }
-        }
-        Item { width: 1; height: 22 }
-        // 进度线:总数未知时是一段往复移动的光带
-        Item {
-            width: parent.width
-            height: 3
-            clip: true
-            Rectangle { anchors.fill: parent; radius: 1.5; color: Theme.hairline }
-            Rectangle {
-                visible: library.scanTotal > 0
-                height: parent.height
-                radius: 1.5
-                width: parent.width * library.progress
-                color: Theme.accent
-                Behavior on width { NumberAnimation { duration: 240; easing.type: Easing.OutCubic } }
-            }
-            Rectangle {
-                id: seekerBar
-                visible: library.scanTotal === 0
-                width: parent.width * 0.28
-                height: parent.height
-                radius: 1.5
-                gradient: Gradient {
-                    orientation: Gradient.Horizontal
-                    GradientStop { position: 0; color: Theme.accentAlpha(0) }
-                    GradientStop { position: 0.5; color: Theme.accent }
-                    GradientStop { position: 1; color: Theme.accentAlpha(0) }
-                }
-                XAnimator on x {
-                    from: -seekerBar.width; to: prog.width
-                    duration: 1400
-                    loops: Animation.Infinite
-                    running: seekerBar.visible && ob.importing
-                }
-            }
-        }
-        Item { width: 1; height: 14 }
-        Item {
-            width: parent.width
-            height: 20
-            Text {
-                anchors.left: parent.left
-                anchors.right: cancelText.left
-                anchors.rightMargin: 20
-                text: library.scanFile
-                elide: Text.ElideMiddle
-                color: Theme.textTertiary
-                font.family: Theme.fontFamily
-                font.pixelSize: 12
-            }
-            Text {
-                id: cancelText
-                anchors.right: parent.right
-                text: qsTr("取消")
-                color: cancelMouse.containsMouse ? Theme.text : Theme.textSecondary
-                font.family: Theme.fontFamily
-                font.pixelSize: 13
-                MouseArea {
-                    id: cancelMouse
-                    anchors.fill: parent
-                    anchors.margins: -8
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: library.cancelScan()
-                }
-            }
+    // 扫完没有找到音乐:摇头示意
+    SequentialAnimation {
+        id: shake
+        loops: 1
+        NumberAnimation { target: nudge; property: "x"; to: -10; duration: 70; easing.type: Easing.OutQuad }
+        NumberAnimation { target: nudge; property: "x"; to: 8; duration: 90 }
+        NumberAnimation { target: nudge; property: "x"; to: -5; duration: 80 }
+        NumberAnimation { target: nudge; property: "x"; to: 0; duration: 90; easing.type: Easing.OutQuad }
+    }
+    Connections {
+        target: library
+        function onScanningChanged() {
+            if (!library.scanning && library.trackCount === 0 && !(library.lastScan.cancelled === true)) shake.restart()
         }
     }
 }

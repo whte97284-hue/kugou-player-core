@@ -63,7 +63,6 @@ Window {
             // 曲库为空:引导选择文件夹;首次导入时显示识别进度
             Onboarding {
                 anchors.fill: parent
-                anchors.bottomMargin: 60
                 visible: opacity > 0
                 opacity: library.albumCount === 0 && !root.detailShown ? 1 : 0
                 Behavior on opacity { OpacityAnimator { duration: Theme.slow; easing.type: Easing.OutCubic } }
@@ -297,19 +296,7 @@ Window {
             opacity: drop.containsDrag ? 1 : 0
             visible: opacity > 0
             Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
-            Column {
-                anchors.centerIn: parent
-                spacing: 12
-                Icon { anchors.horizontalCenter: parent.horizontalCenter; name: "folder"; size: 40 }
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: qsTr("松开以添加到曲库")
-                    color: Theme.text
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 20
-                    font.weight: Font.DemiBold
-                }
-            }
+            Icon { anchors.centerIn: parent; name: "folder"; size: 44; opacity: 0.9 }
         }
     }
 
