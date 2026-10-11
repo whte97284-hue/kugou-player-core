@@ -5,7 +5,7 @@ import PlayerUi
 Rectangle {
     id: toast
     property bool shown: enabled && (library.scanning || hold.running)
-    width: Math.max(220, label.implicitWidth + 44)
+    width: Math.max(120, label.implicitWidth + 50)
     height: 38
     radius: 19
     color: Theme.panel
@@ -26,7 +26,7 @@ Rectangle {
         anchors.leftMargin: 16
         anchors.verticalCenter: parent.verticalCenter
         width: 8; height: 8; radius: 4
-        color: library.scanning ? Theme.accent : Theme.perfect
+        color: Theme.accent
         SequentialAnimation on opacity {
             running: library.scanning
             loops: Animation.Infinite
@@ -39,7 +39,9 @@ Rectangle {
         anchors.left: parent.left
         anchors.leftMargin: 32
         anchors.verticalCenter: parent.verticalCenter
-        text: library.statusText
+        // 扫描中:已识别 / 总数;完成:曲目数 (纯数字,配合左侧状态点)
+        text: library.scanning ? (library.scanTotal > 0 ? library.scanDone + " / " + library.scanTotal : "···")
+                               : library.trackCount.toLocaleString(Qt.locale(), "f", 0)
         color: Theme.textSecondary
         font.family: Theme.fontFamily
         font.pixelSize: 13

@@ -53,28 +53,23 @@ Item {
     }
 
     // 收起
-    Row {
+    IconButton {
         x: 24
-        y: 22
-        spacing: 2
-        IconButton {
-            icon: "back"
-            iconSize: 18
-            rotation: -90
-            onClicked: np.closeRequested()
-        }
-        Text {
-            anchors.verticalCenter: parent.verticalCenter
-            text: qsTr("收起")
-            color: Theme.textTertiary
-            font.family: Theme.fontFamily
-            font.pixelSize: 13
-        }
+        y: 20
+        icon: "back"
+        iconSize: 18
+        rotation: -90
+        onClicked: np.closeRequested()
     }
 
     // ---------------- 左栏:播放卡 ----------------
     Item {
         id: card
+        // 进场:左栏先上浮,右栏稍晚跟上;退场同步下沉
+        transform: Translate {
+            y: np.shown ? 0 : 36
+            Behavior on y { NumberAnimation { duration: 520; easing.type: Easing.OutQuint } }
+        }
         x: np.originX
         y: np.topY
         width: np.coverSize
@@ -96,14 +91,30 @@ Item {
             width: parent.width
             spacing: 0
 
-            Text {
+            Item {
                 width: parent.width
-                text: player.title
-                elide: Text.ElideRight
-                color: Theme.text
-                font.family: Theme.fontFamily
-                font.pixelSize: 24
-                font.weight: Font.Bold
+                height: titleText.implicitHeight
+                Text {
+                    id: titleText
+                    width: parent.width - 40
+                    text: player.title
+                    elide: Text.ElideRight
+                    color: Theme.text
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 24
+                    font.weight: Font.Bold
+                }
+                IconButton {
+                    readonly property bool fav: playlists.revision >= 0 && player.hasTrack && playlists.isFavorite(player.trackId)
+                    anchors.right: parent.right
+                    anchors.rightMargin: -8
+                    anchors.verticalCenter: titleText.verticalCenter
+                    width: 38; height: 38
+                    icon: fav ? "heart-filled" : "heart"
+                    iconTint: fav ? Theme.accent : "transparent"
+                    iconSize: 19
+                    onClicked: playlists.toggleFavorite(player.trackId)
+                }
             }
             Text {
                 topPadding: 4
@@ -145,9 +156,31 @@ Item {
             Item {
                 width: parent.width
                 height: 66
+                IconButton {
+                    anchors.left: parent.left
+                    anchors.leftMargin: -8
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 40; height: 40
+                    icon: "shuffle"
+                    iconSize: 17
+                    iconTint: player.shuffle ? Theme.accent : "transparent"
+                    restOpacity: player.shuffle ? 1 : 0.5
+                    onClicked: player.shuffle = !player.shuffle
+                }
+                IconButton {
+                    anchors.right: parent.right
+                    anchors.rightMargin: -8
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 40; height: 40
+                    icon: player.repeatMode === 2 ? "repeat-one" : "repeat"
+                    iconSize: 17
+                    iconTint: player.repeatMode > 0 ? Theme.accent : "transparent"
+                    restOpacity: player.repeatMode > 0 ? 1 : 0.5
+                    onClicked: player.repeatMode = (player.repeatMode + 1) % 3
+                }
                 Row {
                     anchors.centerIn: parent
-                    spacing: 34
+                    spacing: 30
                     IconButton { icon: "prev"; iconSize: 22; width: 48; height: 48; anchors.verticalCenter: parent.verticalCenter; onClicked: player.previous() }
                     IconButton {
                         icon: player.playing ? "pause" : "play"
@@ -213,6 +246,12 @@ Item {
     // ---------------- 右栏:歌词 / 接下来播放 ----------------
     Item {
         id: side
+        opacity: np.shown ? 1 : 0
+        Behavior on opacity { SequentialAnimation { PauseAnimation { duration: np.shown ? 90 : 0 } OpacityAnimator { duration: 380; easing.type: Easing.OutCubic } } }
+        transform: Translate {
+            y: np.shown ? 0 : 48
+            Behavior on y { SequentialAnimation { PauseAnimation { duration: np.shown ? 90 : 0 } NumberAnimation { duration: 560; easing.type: Easing.OutQuint } } }
+        }
         x: card.x + card.width + np.gap
         y: np.topY
         width: np.originX + np.contentW - x
@@ -224,32 +263,38 @@ Item {
 
         Row {
             id: tabs
-            spacing: 28
+            spacing: 8
             Repeater {
-                model: [{ key: "lyrics", label: qsTr("歌词") }, { key: "queue", label: qsTr("接下来播放") }]
+                model: [{ key: "lyrics", icon: "lyrics" }, { key: "queue", icon: "queue" }]
                 Item {
-                    width: tabText.implicitWidth
+                    width: 40
                     height: 34
                     readonly property bool active: side.tab === modelData.key
-                    Text {
-                        id: tabText
-                        text: modelData.label
-                        color: active ? Theme.text : Theme.textTertiary
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 15
-                        font.weight: active ? Font.DemiBold : Font.Normal
+                    Icon {
+                        anchors.centerIn: parent
+                        anchors.verticalCenterOffset: -3
+                        name: modelData.icon
+                        size: 20
+                        tint: active ? Theme.accent : "transparent"
+                        opacity: active || tm.containsMouse ? 1 : 0.45
+                        Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
                     }
                     Rectangle {
                         anchors.bottom: parent.bottom
-                        width: parent.width
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: 18
                         height: 2
                         radius: 1
                         color: Theme.accent
                         opacity: active ? 1 : 0
-                        Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+                        scale: active ? 1 : 0.3
+                        Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+                        Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
                     }
                     MouseArea {
+                        id: tm
                         anchors.fill: parent
+                        hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: side.tab = modelData.key
                     }
@@ -304,14 +349,13 @@ Item {
                 }
             }
         }
-        Text {
+        Icon {
             anchors.top: tabs.bottom
-            anchors.topMargin: 24
+            anchors.topMargin: 40
             visible: side.tab === "lyrics" && !side.hasLyrics
-            text: qsTr("没有找到歌词 · 将同名 .lrc 文件放在歌曲旁即可显示")
-            color: Theme.textTertiary
-            font.family: Theme.fontFamily
-            font.pixelSize: 14
+            name: "lyrics"
+            size: 36
+            opacity: 0.15
         }
 
         // 接下来播放
@@ -323,54 +367,102 @@ Item {
             height: parent.height - tabs.height - 18
             clip: true
             visible: side.tab === "queue"
-            model: player.queueTracks
+            model: player.queueModel
             boundsBehavior: Flickable.StopAtBounds
             spacing: 2
+            cacheBuffer: 400
+            reuseItems: true
+            SmoothScroll { flickable: queueView }
+            onVisibleChanged: if (visible) positionViewAtIndex(Math.max(0, player.queuePosition - 1), ListView.Beginning)
             delegate: Item {
                 width: queueView.width
-                height: 50
-                readonly property bool current: modelData.index === player.queuePosition
-                readonly property bool played: modelData.index < player.queuePosition
+                height: 54
+                readonly property bool current: model.queueIndex === player.queuePosition
+                readonly property bool played: model.queueIndex < player.queuePosition
+                readonly property bool hovered: rowMouse.containsMouse || rm.hovered
                 Rectangle {
                     anchors.fill: parent
                     radius: Theme.radiusM
-                    color: current ? Theme.accentAlpha(0.12) : (rowMouse.containsMouse ? Theme.hover : "transparent")
-                }
-                Text {
-                    x: 14
-                    width: 26
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: modelData.number
-                    color: current ? Theme.accent : Theme.textTertiary
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 13
-                }
-                Text {
-                    x: 50
-                    width: parent.width - 50 - 70
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: modelData.title
-                    elide: Text.ElideRight
-                    color: current ? Theme.accent : (played ? Theme.textTertiary : Theme.text)
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 14
-                    font.weight: current ? Font.DemiBold : Font.Normal
-                }
-                Text {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 14
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: modelData.duration
-                    color: Theme.textTertiary
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 12
+                    color: current ? Theme.accentAlpha(0.12) : (hovered ? Theme.hover : "transparent")
                 }
                 MouseArea {
                     id: rowMouse
                     anchors.fill: parent
                     hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: player.playQueueIndex(modelData.index)
+                    onClicked: (e) => {
+                        if (e.button === Qt.RightButton) {
+                            const p = mapToItem(null, e.x, e.y)
+                            Nav.trackMenu(model.trackId, p.x, p.y, {})
+                        } else player.playQueueIndex(model.queueIndex)
+                    }
+                }
+                RoundedImage {
+                    id: qc
+                    x: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 38; height: 38
+                    radius: 6
+                    source: model.cover
+                    decodeSize: 76
+                    opacity: played && !current ? 0.5 : 1
+                }
+                Loader {
+                    anchors.centerIn: qc
+                    active: current
+                    sourceComponent: Rectangle {
+                        width: 38; height: 38; radius: 6
+                        color: Qt.rgba(0, 0, 0, 0.5)
+                        PlayingBars { anchors.centerIn: parent; maxHeight: 13 }
+                    }
+                }
+                Column {
+                    anchors.left: qc.right
+                    anchors.leftMargin: 14
+                    anchors.right: dur.left
+                    anchors.rightMargin: 12
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 2
+                    Text {
+                        width: parent.width
+                        text: model.title
+                        elide: Text.ElideRight
+                        color: current ? Theme.accent : (played ? Theme.textTertiary : Theme.text)
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 14
+                        font.weight: current ? Font.DemiBold : Font.Normal
+                    }
+                    Text {
+                        width: parent.width
+                        text: model.artist
+                        elide: Text.ElideRight
+                        color: Theme.textTertiary
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 12
+                    }
+                }
+                Text {
+                    id: dur
+                    anchors.right: rm.left
+                    anchors.rightMargin: 4
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: model.duration
+                    color: Theme.textTertiary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12
+                }
+                IconButton {
+                    id: rm
+                    anchors.right: parent.right
+                    anchors.rightMargin: 4
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 30; height: 30
+                    icon: "close"
+                    iconSize: 12
+                    enabled: !current
+                    opacity: hovered && !current ? 1 : 0
+                    onClicked: player.removeFromQueue(model.queueIndex)
                 }
             }
         }

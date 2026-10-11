@@ -2,7 +2,7 @@ import QtQuick
 import PlayerUi
 
 // 极光背景:封面 4 主色在 GPU 上缓慢流动融合;切歌时颜色 1.6 秒平滑过渡;
-// 低音能量让色团轻微膨胀变亮;窗口失去焦点时暂停动画,空闲零开销
+// 低音能量让色团轻微膨胀变亮;窗口失去焦点时暂停动画;低分辨率渲染,滚动时不与列表争抢 GPU
 Item {
     id: root
     property var colors: player.palette
@@ -15,9 +15,13 @@ Item {
     Behavior on c2 { ColorAnimation { duration: 1600; easing.type: Easing.InOutQuad } }
     Behavior on c3 { ColorAnimation { duration: 1600; easing.type: Easing.InOutQuad } }
 
+    // 色团本身就是极柔和的渐变:以 1/4 分辨率渲染再放大,观感不变,填充开销降到 1/16
     ShaderEffect {
         id: fx
         anchors.fill: parent
+        layer.enabled: true
+        layer.smooth: true
+        layer.textureSize: Qt.size(Math.max(1, Math.round(width / 4)), Math.max(1, Math.round(height / 4)))
         property size size: Qt.size(width, height)
         property real time: 0
         property real energy: player.playing ? Math.min(1, player.bass * 1.4) : 0

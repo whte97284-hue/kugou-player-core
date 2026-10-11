@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <algorithm>
+#include <random>
 #include "audio_tag_parser.hpp"
 #include "platform_io.hpp"
 
@@ -34,13 +35,19 @@ PlayerController::PlayerController(LibraryService* lib, QObject* parent) : QObje
     QSettings s;
     volume_ = s.value("player/volume", 0.85).toDouble();
     for (int i = 0; i < 32; ++i) spectrum_.append(0.0);
+    shuffle_ = s.value("player/shuffle", false).toBool();
+    exclusive_ = s.value("audio/exclusive", false).toBool();
+    repeat_ = std::clamp(s.value("player/repeat", 0).toInt(), 0, 2);
     timer_.setInterval(16); // 约 60Hz 推送进度与频谱
     timer_.setTimerType(Qt::PreciseTimer);
     connect(&timer_, &QTimer::timeout, this, &PlayerController::tick);
 }
 
 PlayerController::~PlayerController() {
-    QSettings().setValue("player/volume", volume_);
+    QSettings st;
+    st.setValue("player/volume", volume_);
+    st.setValue("player/shuffle", shuffle_);
+    st.setValue("player/repeat", repeat_);
     timer_.stop();
     if (engine_) {
         engine_->on_playback_ended = nullptr;
@@ -89,10 +96,127 @@ void PlayerController::playAlbum(int albumIndex, int startRow) {
     auto snap = lib_->snapshot();
     if (albumIndex < 0 || albumIndex >= static_cast<int>(snap->albums.size())) return;
     snap_ = snap;
-    queue_.clear();
-    for (const TrackItem* t : snap_->albums[albumIndex].tracks) queue_.push_back(t->id);
+    std::vector<uint64_t> ids;
+    for (const TrackItem* t : snap_->albums[albumIndex].tracks) ids.push_back(t->id);
+    setQueue(std::move(ids), startRow);
+}
+
+void PlayerController::setQueue(std::vector<uint64_t> ids, int start) {
+    if (ids.empty()) return;
+    start = std::clamp(start, 0, static_cast<int>(ids.size()) - 1);
+    unshuffled_ = ids;
+    if (shuffle_) {
+        // 点选的曲目先播,其余随机
+        uint64_t first = ids[start];
+        ids.erase(ids.begin() + start);
+        std::shuffle(ids.begin(), ids.end(), std::mt19937(std::random_device{}()));
+        ids.insert(ids.begin(), first);
+        start = 0;
+    }
+    queue_ = std::move(ids);
+    queueContentChanged();
+    openIndex(start, true);
+}
+
+void PlayerController::queueContentChanged() {
+    queueModel_.reset(snap_, queue_, lib_->generation());
     emit queueChanged();
-    openIndex(std::clamp(startRow, 0, static_cast<int>(queue_.size()) - 1), true);
+}
+
+void PlayerController::playTracks(const QVariantList& trackIds, int start) {
+    snap_ = lib_->snapshot();
+    std::vector<uint64_t> ids;
+    ids.reserve(trackIds.size());
+    for (const QVariant& v : trackIds) ids.push_back(static_cast<uint64_t>(v.toDouble()));
+    setQueue(std::move(ids), start);
+}
+
+void PlayerController::playNext(double trackId) {
+    if (queue_.empty() || !current_) {
+        playTracks({trackId}, 0);
+        return;
+    }
+    uint64_t id = static_cast<uint64_t>(trackId);
+    queue_.insert(queue_.begin() + queueIndex_ + 1, id);
+    unshuffled_.push_back(id);
+    queueContentChanged();
+}
+
+void PlayerController::enqueue(const QVariantList& trackIds) {
+    if (queue_.empty() || !current_) {
+        playTracks(trackIds, 0);
+        return;
+    }
+    for (const QVariant& v : trackIds) {
+        queue_.push_back(static_cast<uint64_t>(v.toDouble()));
+        unshuffled_.push_back(queue_.back());
+    }
+    queueContentChanged();
+}
+
+void PlayerController::removeFromQueue(int index) {
+    if (index < 0 || index >= static_cast<int>(queue_.size()) || index == queueIndex_) return;
+    uint64_t id = queue_[index];
+    queue_.erase(queue_.begin() + index);
+    auto it = std::find(unshuffled_.begin(), unshuffled_.end(), id);
+    if (it != unshuffled_.end()) unshuffled_.erase(it);
+    if (index < queueIndex_) --queueIndex_;
+    queueContentChanged();
+    emit queueIndexChanged();
+}
+
+void PlayerController::setShuffle(bool on) {
+    if (on == shuffle_) return;
+    shuffle_ = on;
+    if (!queue_.empty() && current_) {
+        uint64_t cur = queue_[queueIndex_];
+        if (on) {
+            // 当前曲目之后的部分打乱,已播放的保持不动
+            unshuffled_ = queue_;
+            std::shuffle(queue_.begin() + queueIndex_ + 1, queue_.end(), std::mt19937(std::random_device{}()));
+        } else if (!unshuffled_.empty()) {
+            queue_ = unshuffled_;
+            auto it = std::find(queue_.begin(), queue_.end(), cur);
+            queueIndex_ = it == queue_.end() ? 0 : static_cast<int>(it - queue_.begin());
+        }
+        queueContentChanged();
+        emit queueIndexChanged();
+    }
+    emit modeChanged();
+}
+
+void PlayerController::setExclusive(bool on) {
+    if (on == exclusive_) return;
+    exclusive_ = on;
+    QSettings().setValue("audio/exclusive", on);
+    emit modeChanged();
+    if (!engine_) return;
+    // 重建输出:记下位置与播放状态,关闭旧设备后在同一位置继续
+    const double pos = position_;
+    const bool wasPlaying = playing_;
+    const int idx = queueIndex_;
+    engine_->on_playback_ended = nullptr;
+    engine_->Shutdown();
+    engine_.reset();
+    if (idx >= 0 && openIndex(idx, false)) {
+        if (pos > 0.5) seek(pos);
+        if (wasPlaying) toggle();
+    }
+}
+
+void PlayerController::setRepeatMode(int m) {
+    m = std::clamp(m, 0, 2);
+    if (m == repeat_) return;
+    repeat_ = m;
+    emit modeChanged();
+}
+
+void PlayerController::onEnded() {
+    if (repeat_ == 2 && current_) {
+        openIndex(queueIndex_, true);
+        return;
+    }
+    next();
 }
 
 void PlayerController::playTrack(double trackId) {
@@ -110,11 +234,11 @@ bool PlayerController::openIndex(int index, bool autoPlay) {
     if (!snap_ || index < 0 || index >= static_cast<int>(queue_.size())) return false;
     if (!engine_) {
         engine_ = std::make_unique<AudioPlaybackEngine>();
-        engine_->Init(QSettings().value("audio/exclusive", false).toBool());
+        engine_->Init(exclusive_);
         // 结束回调来自引擎通知线程,排队回到界面线程再切歌
         QPointer<PlayerController> self(this);
         engine_->on_playback_ended = [self]() {
-            if (self) QMetaObject::invokeMethod(self, [self]() { if (self) self->next(); }, Qt::QueuedConnection);
+            if (self) QMetaObject::invokeMethod(self, [self]() { if (self) self->onEnded(); }, Qt::QueuedConnection);
         };
     }
     // 跳过无法解码的曲目 (例如 DSD:当前解码器不支持),最多尝试整个队列一遍
@@ -142,7 +266,7 @@ bool PlayerController::openIndex(int index, bool autoPlay) {
         setPlaying(autoPlay);
         timer_.start();
         emit trackChanged();
-        emit queueChanged();
+        emit queueIndexChanged();
         emit positionChanged();
         rebuildSignalChain();
         extractAccent();
@@ -171,6 +295,8 @@ void PlayerController::next() {
     if (queue_.empty()) return;
     if (queueIndex_ + 1 < static_cast<int>(queue_.size())) {
         openIndex(queueIndex_ + 1, true);
+    } else if (repeat_ == 1) {
+        openIndex(0, true);
     } else {
         // 队列结束:停在最后一首的起点
         if (engine_) engine_->Stop();
@@ -183,8 +309,12 @@ void PlayerController::next() {
 void PlayerController::previous() {
     if (queue_.empty()) return;
     // 播放超过 3 秒时「上一首」回到本曲开头,符合主流播放器习惯
-    if (position_ > 3.0 || queueIndex_ == 0) {
+    if (position_ > 3.0 || (queueIndex_ == 0 && repeat_ != 1)) {
         seek(0);
+        return;
+    }
+    if (queueIndex_ == 0) {
+        openIndex(static_cast<int>(queue_.size()) - 1, playing_);
         return;
     }
     openIndex(queueIndex_ - 1, playing_);
@@ -217,6 +347,15 @@ void PlayerController::tick() {
     }
     // 低频能量 (约 30~250 Hz) 快升慢降,驱动界面的「呼吸光」
     low /= 8.0;
+    // 三段律动值:低频取峰、中高频取平均,略微放大让小图标更有生气
+    auto band = [&](size_t a, size_t b) {
+        double m = 0;
+        for (size_t i = a; i < b && i < bars.size(); ++i) m = std::max(m, double(bars[i]));
+        return std::min(1.0, m * 1.15);
+    };
+    pulse_[0] = band(2, 8);
+    pulse_[1] = band(10, 18);
+    pulse_[2] = band(18, 28);
     bass_ = low > bass_ ? bass_ * 0.4 + low * 0.6 : bass_ * 0.9 + low * 0.1;
     emit spectrumChanged();
     updateLyricIndex();
@@ -292,22 +431,40 @@ void PlayerController::extractAccent() {
     });
 }
 
-QVariantList PlayerController::queueTracks() const {
-    QVariantList list;
-    if (!snap_) return list;
-    for (size_t i = 0; i < queue_.size(); ++i) {
-        const TrackItem* t = snap_->catalog.FindById(queue_[i]);
-        if (!t) continue;
-        QVariantMap m;
-        m["index"] = static_cast<int>(i);
-        m["trackId"] = static_cast<double>(t->id);
-        m["number"] = t->track_no > 0 ? t->track_no : static_cast<int>(i) + 1;
-        m["title"] = Q(t->title);
-        m["artist"] = Q(t->artist);
-        m["duration"] = LibraryService::formatDuration(t->duration_ms);
-        list.append(m);
+// ============================================================================
+int QueueModel::rowCount(const QModelIndex& parent) const { return parent.isValid() ? 0 : static_cast<int>(rows_.size()); }
+
+void QueueModel::reset(std::shared_ptr<const LibrarySnapshot> snap, const std::vector<uint64_t>& ids, int gen) {
+    beginResetModel();
+    snap_ = std::move(snap);
+    gen_ = gen;
+    rows_.clear();
+    if (snap_)
+        for (uint64_t id : ids)
+            if (const TrackItem* t = snap_->catalog.FindById(id)) rows_.push_back(t);
+    endResetModel();
+}
+
+QVariant QueueModel::data(const QModelIndex& index, int role) const {
+    if (index.row() < 0 || index.row() >= rowCount()) return {};
+    const TrackItem& t = *rows_[index.row()];
+    switch (role) {
+        case TrackIdRole: return static_cast<double>(t.id);
+        case TitleRole: return Q(t.title);
+        case ArtistRole: return Q(t.artist);
+        case DurationRole: return LibraryService::formatDuration(t.duration_ms);
+        case QueueIndexRole: return index.row();
+        case CoverRole: {
+            auto it = snap_->trackAlbum.find(t.id);
+            return it == snap_->trackAlbum.end() ? QString() : QString("image://cover/a/%1/%2").arg(gen_).arg(it->second);
+        }
     }
-    return list;
+    return {};
+}
+
+QHash<int, QByteArray> QueueModel::roleNames() const {
+    return {{TrackIdRole, "trackId"}, {TitleRole, "title"}, {ArtistRole, "artist"},
+            {DurationRole, "duration"}, {CoverRole, "cover"}, {QueueIndexRole, "queueIndex"}};
 }
 
 void PlayerController::playQueueIndex(int index) { openIndex(index, true); }

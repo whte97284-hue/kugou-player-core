@@ -9,8 +9,11 @@ Item {
     property real restOpacity: 0.78
     property color hoverColor: Theme.hover
     property bool filled: false
+    property bool outlined: false   // 次要按钮:细描边 + 极淡底色
     property color fillColor: Theme.accent
     property string tip
+    property color iconTint: "transparent"
+    readonly property alias hovered: mouse.containsMouse
     signal clicked()
 
     width: 40
@@ -20,7 +23,9 @@ Item {
         id: bg
         anchors.fill: parent
         radius: width / 2
-        color: btn.filled ? btn.fillColor : (mouse.containsMouse ? btn.hoverColor : "transparent")
+        color: btn.filled ? btn.fillColor : (mouse.containsMouse ? (btn.outlined ? Theme.pressed : btn.hoverColor) : (btn.outlined ? Theme.hover : "transparent"))
+        border.width: btn.outlined ? 1 : 0
+        border.color: Theme.hairline
         Behavior on color { ColorAnimation { duration: Theme.fast } }
     }
     Icon {
@@ -28,6 +33,7 @@ Item {
         // 填充按钮在浅色强调色上自动切换为深色图标,保证对比度
         name: btn.filled && Theme.accentIsLight ? btn.icon + "-dark" : btn.icon
         size: btn.iconSize
+        tint: btn.iconTint
         opacity: btn.filled ? 1 : (mouse.containsMouse ? 1 : btn.restOpacity)
         Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
     }

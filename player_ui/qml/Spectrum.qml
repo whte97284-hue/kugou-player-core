@@ -7,6 +7,8 @@ Item {
     property int bars: 32
     property real gap: 3
     readonly property real barW: (width - gap * (bars - 1)) / bars
+    // 每帧只把频谱数组转换一次,而不是每根柱子各转换一次
+    readonly property var values: visible ? player.spectrum : []
 
     Row {
         anchors.bottom: parent.bottom
@@ -16,7 +18,7 @@ Item {
             Item {
                 width: spec.barW
                 height: spec.height
-                readonly property real v: player.spectrum[index] || 0
+                readonly property real v: spec.values[index] || 0
                 Rectangle {
                     anchors.bottom: parent.bottom
                     width: parent.width

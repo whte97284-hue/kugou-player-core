@@ -8,9 +8,10 @@ qt_add_executable(KugouPlayer
     src/cover_provider.h src/cover_provider.cpp
     src/player_controller.h src/player_controller.cpp
     src/window_helper.h src/window_helper.cpp
+    src/playlist_service.h src/playlist_service.cpp
 )
 
-set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+set_source_files_properties(qml/Theme.qml qml/Nav.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 
 qt_add_qml_module(KugouPlayer
     URI PlayerUi
@@ -31,7 +32,6 @@ qt_add_qml_module(KugouPlayer
         qml/SeekBar.qml
         qml/IconButton.qml
         qml/Icon.qml
-        qml/CommandPalette.qml
         qml/QualityBadge.qml
         qml/RoundedImage.qml
         qml/Aurora.qml
@@ -44,6 +44,19 @@ qt_add_qml_module(KugouPlayer
         qml/ScanToast.qml
         qml/Onboarding.qml
         qml/LibraryPanel.qml
+        qml/Nav.qml
+        qml/PlayingBars.qml
+        qml/SmoothScroll.qml
+        qml/TrackMenu.qml
+        qml/Toast.qml
+        qml/LetterRail.qml
+        qml/SongsPage.qml
+        qml/ArtistsPage.qml
+        qml/ArtistDetail.qml
+        qml/Mosaic.qml
+        qml/PlaylistsPage.qml
+        qml/PlaylistDetail.qml
+        qml/SearchPage.qml
 )
 
 qt_add_shaders(KugouPlayer "shaders"
@@ -57,6 +70,7 @@ qt_add_shaders(KugouPlayer "shaders"
         shaders/sheen.frag
         shaders/glow.frag
         shaders/ring.frag
+        shaders/tint.frag
 )
 
 target_link_libraries(KugouPlayer PRIVATE player_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::QuickControls2 Qt6::Svg)

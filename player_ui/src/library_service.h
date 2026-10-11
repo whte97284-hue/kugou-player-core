@@ -31,12 +31,31 @@ struct AlbumInfo {
     QString sortKey; // 拼音排序键
 };
 
+// 歌手:由曲目歌手字段拆分 (A / B、A、B、feat.) 聚合
+struct ArtistInfo {
+    QString name;
+    std::vector<int> albums;              // 参与的专辑下标 (年份新→旧)
+    std::vector<const TrackItem*> tracks; // 按专辑、曲序排列
+    int coverAlbum = -1;                  // 头像所用专辑
+    QString sortKey;
+    QString letter;                       // 索引字母 A-Z / #
+};
+
 // 不可变的曲库快照:扫描完成后整体替换,界面线程与后台线程互不干扰
 struct LibrarySnapshot {
     MusicCatalog catalog;
     std::vector<AlbumInfo> albums;
     std::unordered_map<uint64_t, int> trackAlbum; // 曲目 ID -> 专辑下标
+    std::vector<ArtistInfo> artists;              // 按拼音排序
+    std::vector<const TrackItem*> songs;          // 全部歌曲,按标题拼音排序
+    std::vector<QString> songLetters;             // 与 songs 一一对应
 };
+
+// 排序键 (拼音 + 小写原文) 与索引字母
+QString SortKeyOf(const std::wstring& text);
+QString LetterOf(const QString& sortKey);
+// 曲目的持久化标识:路径 + CUE 起点 (曲目 ID 每次扫描重新分配,不能用于持久化)
+QString TrackKeyOf(const TrackItem& t);
 
 class LibraryService : public QObject {
     Q_OBJECT
@@ -87,6 +106,14 @@ public:
     Q_INVOKABLE int featuredAlbum() const;
     // 专辑摘要:title / artist / year / cover / badge / summary / trackCount
     Q_INVOKABLE QVariantMap albumInfo(int albumIndex) const;
+    // 歌手摘要:name / cover / summary / albumCount / trackCount
+    Q_INVOKABLE QVariantMap artistInfo(int artistIndex) const;
+    // 歌手参与的专辑 (albumInfo 列表)
+    Q_INVOKABLE QVariantList artistAlbums(int artistIndex) const;
+    // 按名字找歌手 (找不到返回 -1);曲目所属专辑 / 首位歌手
+    Q_INVOKABLE int artistIndexOf(const QString& name) const;
+    Q_INVOKABLE int albumOfTrack(double trackId) const;
+    Q_INVOKABLE int artistOfTrack(double trackId) const;
 
     static QString formatDuration(uint64_t ms);
     static QString trackQuality(const TrackItem& t);

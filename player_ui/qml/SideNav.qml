@@ -1,123 +1,141 @@
 import QtQuick
 import PlayerUi
 
-// 极窄导航条:平时只有图标,悬停展开显示文字 (覆盖在内容之上,不推动布局)
+// 侧边导航条:固定宽度、纯图标,不再悬停展开 (不遮挡内容、不抖动)
+//  · 选中项背后一块圆角底板随切换平滑滑动,左缘一道强调色短线同步移动
+//  · 悬停图标提亮并轻微放大,按下回弹;停留片刻在右侧浮出名称提示
 Item {
     id: nav
     property string current: "albums"
     signal navigate(string target)
     width: Theme.navWidth
 
-    readonly property bool expanded: hoverArea.containsMouse
+    readonly property var items: [
+        { key: "albums", icon: "albums", tip: qsTr("专辑") },
+        { key: "artists", icon: "artist", tip: qsTr("歌手") },
+        { key: "songs", icon: "note", tip: qsTr("歌曲") },
+        { key: "playlists", icon: "playlist", tip: qsTr("歌单") },
+        { key: "search", icon: "search", tip: qsTr("搜索  Ctrl K") }
+    ]
+    readonly property int itemSize: 48
+    readonly property int itemGap: 8
+    readonly property int listTop: 56
+    readonly property int currentIndex: {
+        for (let i = 0; i < items.length; ++i) if (items[i].key === current) return i
+        return -1
+    }
 
     Rectangle {
-        id: panel
-        width: nav.expanded ? 196 : Theme.navWidth
-        height: parent.height
-        color: nav.expanded ? Theme.panel : Qt.rgba(0, 0, 0, 0.12)
-        Behavior on width { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
-        Behavior on color { ColorAnimation { duration: Theme.normal } }
+        anchors.fill: parent
+        color: Qt.rgba(0, 0, 0, 0.16)
         Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: Theme.hairline }
-        clip: true
+    }
 
-        MouseArea {
-            id: hoverArea
-            anchors.fill: parent
-            hoverEnabled: true
-            acceptedButtons: Qt.NoButton
+    // 滑动的选中底板
+    Rectangle {
+        id: pill
+        visible: nav.currentIndex >= 0
+        x: (nav.width - nav.itemSize) / 2
+        y: nav.listTop + Math.max(0, nav.currentIndex) * (nav.itemSize + nav.itemGap)
+        width: nav.itemSize
+        height: nav.itemSize
+        radius: 14
+        color: Theme.accentAlpha(0.15)
+        Behavior on y { NumberAnimation { duration: 340; easing.type: Easing.OutQuint } }
+    }
+    Rectangle {
+        visible: pill.visible
+        x: 0
+        y: pill.y + (nav.itemSize - 20) / 2
+        width: 3
+        height: 20
+        radius: 1.5
+        color: Theme.accent
+    }
+
+    Column {
+        y: nav.listTop
+        x: (nav.width - nav.itemSize) / 2
+        spacing: nav.itemGap
+        Repeater {
+            model: nav.items
+            delegate: navButton
         }
+    }
 
-        // 品牌标识:强调色唱片
+    // 底部:音乐文件夹
+    Loader {
+        x: (nav.width - nav.itemSize) / 2
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 22
+        sourceComponent: navButton
+        property var modelData: ({ key: "folder", icon: "folder", tip: qsTr("音乐文件夹") })
+    }
+
+    Component {
+        id: navButton
         Item {
-            x: 18
-            y: 20
-            width: 36
-            height: 36
+            id: btn
+            width: nav.itemSize
+            height: nav.itemSize
+            readonly property bool active: nav.current === modelData.key
+            Icon {
+                anchors.centerIn: parent
+                name: modelData.icon
+                size: 22
+                tint: btn.active ? Theme.accent : "transparent"
+                opacity: btn.active || m.containsMouse ? 1 : 0.5
+                scale: m.pressed ? 0.88 : (m.containsMouse ? 1.08 : 1)
+                Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+                Behavior on scale { ScaleAnimator { duration: 180; easing.type: Easing.OutBack } }
+            }
             Rectangle {
                 anchors.fill: parent
-                radius: width / 2
-                color: Theme.accentAlpha(0.18)
-                border.width: 1.5
-                border.color: Theme.accent
+                radius: 14
+                color: Theme.hover
+                opacity: m.containsMouse && !btn.active ? 1 : 0
+                Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
             }
-            Rectangle {
-                anchors.centerIn: parent
-                width: 8; height: 8; radius: 4
-                color: Theme.accent
-            }
-            RotationAnimator on rotation {
-                from: 0; to: 360; duration: 6000
-                loops: Animation.Infinite
-                running: player.playing
-            }
-        }
-        Text {
-            x: 68
-            y: 26
-            text: "Hi-Fi Player"
-            color: Theme.text
-            font.family: Theme.fontFamily
-            font.pixelSize: 15
-            font.weight: Font.DemiBold
-            opacity: nav.expanded ? 1 : 0
-            Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
-        }
-
-        Column {
-            y: 92
-            width: parent.width
-            spacing: 6
-            Repeater {
-                model: [
-                    { key: "albums", icon: "albums", label: qsTr("专辑") },
-                    { key: "search", icon: "search", label: qsTr("搜索  Ctrl K") },
-                    { key: "folder", icon: "folder", label: qsTr("音乐文件夹") },
-                    { key: "rescan", icon: "refresh", label: qsTr("重新扫描") }
-                ]
-                delegate: Item {
-                    width: panel.width
-                    height: 46
-                    readonly property bool active: nav.current === modelData.key
-                    Rectangle {
-                        x: 12
-                        width: parent.width - 24
-                        height: parent.height
-                        radius: Theme.radiusM
-                        color: active ? Theme.accentAlpha(0.16) : (itemMouse.containsMouse ? Theme.hover : "transparent")
-                        Behavior on color { ColorAnimation { duration: Theme.fast } }
-                    }
-                    Rectangle {
-                        visible: active
-                        x: 0; anchors.verticalCenter: parent.verticalCenter
-                        width: 3; height: 18; radius: 1.5
-                        color: Theme.accent
-                    }
-                    Icon {
-                        x: 25
-                        anchors.verticalCenter: parent.verticalCenter
-                        name: modelData.icon
-                        size: 22
-                        opacity: active || itemMouse.containsMouse ? 1 : 0.6
-                    }
-                    Text {
-                        x: 64
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: modelData.label
-                        color: active ? Theme.text : Theme.textSecondary
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 14
-                        opacity: nav.expanded ? 1 : 0
-                        Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
-                    }
-                    MouseArea {
-                        id: itemMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: nav.navigate(modelData.key)
-                    }
+            MouseArea {
+                id: m
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: nav.navigate(modelData.key)
+                onContainsMouseChanged: {
+                    if (containsMouse) { tip.target = btn; tip.text = modelData.tip; tipDelay.restart() }
+                    else if (tip.target === btn) { tipDelay.stop(); tip.target = null }
                 }
             }
+        }
+    }
+
+    // 名称提示:悬停 450ms 后在图标右侧浮出
+    Timer { id: tipDelay; interval: 450 }
+    Rectangle {
+        id: tip
+        property Item target: null
+        property string text
+        parent: nav.parent
+        z: 200
+        x: nav.width + 6
+        y: target ? target.mapToItem(nav.parent, 0, 0).y + (target.height - height) / 2 : 0
+        width: tipText.implicitWidth + 22
+        height: 30
+        radius: 8
+        color: Theme.tooltip
+        border.width: 1
+        border.color: Qt.rgba(1, 0.96, 0.9, 0.08)
+        opacity: target && !tipDelay.running ? 1 : 0
+        visible: opacity > 0
+        Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+        Text {
+            id: tipText
+            anchors.centerIn: parent
+            text: tip.text
+            color: Theme.text
+            font.family: Theme.fontFamily
+            font.pixelSize: 12
         }
     }
 }

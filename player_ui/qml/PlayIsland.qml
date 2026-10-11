@@ -2,10 +2,9 @@ import QtQuick
 import PlayerUi
 
 // 悬浮播放岛 (胶囊):旋转迷你黑胶 · 歌名 · 控制 · 时间 · 信号链 · 音量
-// 底边发光进度线 (悬停变粗可拖动);下方强调色光晕随低音呼吸;真·毛玻璃
+// 底边发光进度线 (悬停变粗可拖动);下方强调色光晕随低音呼吸
 Item {
     id: island
-    property Item glassSource
     signal chainClicked()
     signal expandRequested()
     height: 72
@@ -31,26 +30,21 @@ Item {
         strength: 0.9
     }
 
-    // ---- 玻璃 ----
-    ShaderEffectSource {
-        id: behind
-        sourceItem: island.glassSource
-        sourceRect: island.glassSource ? Qt.rect(island.x, island.y, island.width, island.height) : Qt.rect(0, 0, 0, 0)
-        textureSize: Qt.size(Math.max(1, Math.round(island.width / 8)), Math.max(1, Math.round(island.height / 8)))
-        live: true
-        hideSource: false
-        visible: false
-        smooth: true
-    }
-    ShaderEffect {
+    // ---- 面板 ----
+    // 不再实时模糊背后的场景 (那需要每帧把整个界面再渲染一遍);改为与背景同色系的深色半透明面板
+    Rectangle {
         id: glass
         anchors.fill: parent
-        property variant source: behind
-        property size size: Qt.size(width, height)
-        property real radius: island.r
-        property size texel: Qt.size(1.2 / behind.textureSize.width, 1.2 / behind.textureSize.height)
-        property color tint: Qt.rgba(0.06 * 0.55, 0.055 * 0.55, 0.05 * 0.55, 0.55)
-        fragmentShader: "qrc:/shaders/frosted.frag.qsb"
+        radius: island.r
+        color: Qt.rgba(0.075, 0.068, 0.062, 0.94)
+    }
+    Rectangle {
+        anchors.fill: parent
+        radius: island.r
+        gradient: Gradient {
+            GradientStop { position: 0; color: Theme.accentAlpha(0.07) }
+            GradientStop { position: 1; color: "transparent" }
+        }
     }
     // 上沿高光 + 细描边
     Rectangle {
@@ -110,7 +104,7 @@ Item {
         spacing: 2
         Text {
             width: parent.width
-            text: player.hasTrack ? player.title : qsTr("未在播放")
+            text: player.hasTrack ? player.title : ""
             elide: Text.ElideRight
             color: Theme.text
             font.family: Theme.fontFamily
@@ -119,7 +113,7 @@ Item {
         }
         Text {
             width: parent.width
-            text: player.hasTrack ? player.artist : qsTr("选一张专辑,让它转起来")
+            text: player.hasTrack ? player.artist : ""
             elide: Text.ElideRight
             color: Theme.textSecondary
             font.family: Theme.fontFamily

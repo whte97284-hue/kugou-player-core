@@ -10,6 +10,7 @@
 #include "library_service.h"
 #include "models.h"
 #include "player_controller.h"
+#include "playlist_service.h"
 #include "window_helper.h"
 
 // 离屏截图驱动 (开发验证用):--screenshot <输出目录>
@@ -50,29 +51,45 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
     steps->push_back({"02_album_detail", [call] { call("automationOpenAlbum", 0); }, 1500});
     steps->push_back({"03_playing", [&player, call] {
         player.playAlbum(0, 0);
-        call("automationOpenAlbum", 0);
-    }, 2500});
-    steps->push_back({"04_albums_playing", [call] { call("automationBack"); }, 1500});
-    steps->push_back({"05_palette", [call] { call("automationSearch", QStringLiteral("chen")); }, 1200});
-    steps->push_back({"06_chain", [call] { call("automationCloseSearch"); call("automationShowChain"); }, 1200});
-    steps->push_back({"09_now_playing", [call] { call("automationHideChain"); call("automationNowPlaying", true); }, 2200});
-    steps->push_back({"10_back_to_wall", [call] { call("automationNowPlaying", false); }, 1200});
-    steps->push_back({"11_np_ultraviolet", [call] {
-        call("automationPlayTitle", QStringLiteral("Ultraviolet"));
-        call("automationNowPlaying", true);
-    }, 2600});
-    steps->push_back({"11b_np_lyrics_gbk", [call] { call("automationPlayTitle", QStringLiteral("晚风与诗")); }, 2200});
-    steps->push_back({"12_wall_neon", [call] {
-        call("automationNowPlaying", false);
-        call("automationPlayTitle", QStringLiteral("Neon Tide"));
-    }, 2600});
-    steps->push_back({"13_np_forest", [call] {
+    }, 2000});
+    steps->push_back({"04_menu", [window] {
+        QMetaObject::invokeMethod(window, "automationTrackMenu", Q_ARG(QVariant, 760), Q_ARG(QVariant, 420));
+    }, 900});
+    steps->push_back({"05_artists", [window, call] {
+        QMetaObject::invokeMethod(window, "automationBack");
+        call("automationGo", QStringLiteral("artists"));
+    }, 1600});
+    steps->push_back({"06_artist_detail", [call] { call("automationOpenArtist", QStringLiteral("久石让")); }, 1600});
+    steps->push_back({"07_songs", [call] { call("automationGo", QStringLiteral("songs")); }, 1600});
+    steps->push_back({"08_playlists", [&engine, &lib, call] {
+        // 演示数据:两个歌单 + 几首收藏
+        auto* pl = qobject_cast<PlaylistService*>(engine.rootContext()->contextProperty("playlists").value<QObject*>());
+        auto snap = lib.snapshot();
+        if (pl && pl->playlists().size() <= 1 && snap->songs.size() > 40) {
+            QVariantList a, b;
+            for (size_t i = 0; i < snap->songs.size(); i += 3) a.append(double(snap->songs[i]->id));
+            for (size_t i = 1; i < 14; ++i) b.append(double(snap->songs[i * 2]->id));
+            pl->addTracks(pl->create(QStringLiteral("深夜循环")), a);
+            pl->addTracks(pl->create(QStringLiteral("通勤路上")), b);
+            pl->create(QStringLiteral("空歌单"));
+            for (int i = 5; i < 11; ++i) pl->toggleFavorite(double(snap->songs[i]->id));
+        }
+        call("automationGo", QStringLiteral("playlists"));
+    }, 1400});
+    steps->push_back({"08b_playlist_detail", [&engine, call] {
+        auto* pl = qobject_cast<PlaylistService*>(engine.rootContext()->contextProperty("playlists").value<QObject*>());
+        if (pl && pl->playlists().size() > 1) call("automationOpenPlaylist", pl->playlists()[1].toMap()["id"]);
+    }, 1400});
+    steps->push_back({"09_search", [call] { call("automationSearch", QStringLiteral("sen")); }, 1400});
+    steps->push_back({"10_search_cn", [call] { call("automationSearch", QStringLiteral("陈奕迅")); }, 1400});
+    steps->push_back({"11_now_playing", [call] {
+        call("automationGo", QStringLiteral("albums"));
         call("automationPlayTitle", QStringLiteral("森林物语"));
         call("automationNowPlaying", true);
-    }, 2600});
-    steps->push_back({"14_wall_forest", [call] { call("automationNowPlaying", false); }, 1400});
-    steps->push_back({"08_wall_end", [call] { call("automationHideChain"); call("automationScrollEnd"); }, 1500});
-    steps->push_back({"07_small_window", [window, call] {
+    }, 2400});
+    steps->push_back({"12_wall", [call] { call("automationNowPlaying", false); }, 1400});
+    steps->push_back({"13_wall_end", [call] { call("automationScrollEnd"); }, 1500});
+    steps->push_back({"14_small_window", [window, call] {
         call("automationHideChain");
         window->resize(980, 640);
     }, 1500});
@@ -119,6 +136,13 @@ int main(int argc, char* argv[]) {
     AlbumModel albums(&library);
     TrackListModel albumTracks(&library);
     SearchModel search(&library);
+    PlaylistService playlists(&library);
+    ArtistModel artists(&library);
+    TrackCollectionModel songs(&library, &playlists);
+    TrackCollectionModel artistTracks(&library, &playlists);
+    TrackCollectionModel playlistTracks(&library, &playlists);
+    artistTracks.setSource("artist");
+    playlistTracks.setSource("playlist");
     WindowHelper windowHelper;
 
     QQmlApplicationEngine engine;
@@ -129,6 +153,11 @@ int main(int argc, char* argv[]) {
     ctx->setContextProperty("albumModel", &albums);
     ctx->setContextProperty("albumTracks", &albumTracks);
     ctx->setContextProperty("searchModel", &search);
+    ctx->setContextProperty("playlists", &playlists);
+    ctx->setContextProperty("artistModel", &artists);
+    ctx->setContextProperty("songsModel", &songs);
+    ctx->setContextProperty("artistTracks", &artistTracks);
+    ctx->setContextProperty("playlistTracks", &playlistTracks);
     ctx->setContextProperty("windowHelper", &windowHelper);
 
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, []() { QCoreApplication::exit(1); },

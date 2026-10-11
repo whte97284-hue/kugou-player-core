@@ -59,13 +59,90 @@ private:
     int album_ = -1;
 };
 
-// 命令面板搜索结果:专辑在前,曲目在后
+class PlaylistService;
+
+// 歌手墙
+class ArtistModel : public QAbstractListModel {
+    Q_OBJECT
+    Q_PROPERTY(QStringList letters READ letters NOTIFY lettersChanged)
+public:
+    enum Roles { NameRole = Qt::UserRole + 1, SummaryRole, CoverRole, IndexRole, LetterRole };
+    explicit ArtistModel(LibraryService* lib, QObject* parent = nullptr);
+    int rowCount(const QModelIndex& parent = {}) const override;
+    QVariant data(const QModelIndex& index, int role) const override;
+    QHash<int, QByteArray> roleNames() const override;
+    QStringList letters() const { return letters_; }
+    Q_INVOKABLE int indexOfLetter(const QString& letter) const;
+
+signals:
+    void lettersChanged();
+
+private:
+    void reload();
+    LibraryService* lib_;
+    std::shared_ptr<const LibrarySnapshot> snap_;
+    QStringList letters_;
+};
+
+// 通用曲目列表:source = "all" (全部歌曲,按标题拼音) / "artist" (某位歌手) / "playlist" (某个歌单)
+class TrackCollectionModel : public QAbstractListModel {
+    Q_OBJECT
+    Q_PROPERTY(QString source READ source WRITE setSource NOTIFY sourceChanged)
+    Q_PROPERTY(int artistIndex READ artistIndex WRITE setArtistIndex NOTIFY sourceChanged)
+    Q_PROPERTY(QString playlistId READ playlistId WRITE setPlaylistId NOTIFY sourceChanged)
+    Q_PROPERTY(int count READ count NOTIFY contentChanged)
+    Q_PROPERTY(QStringList letters READ letters NOTIFY contentChanged)
+public:
+    enum Roles {
+        TrackIdRole = Qt::UserRole + 1, TitleRole, ArtistRole, AlbumRole, AlbumIndexRole,
+        DurationRole, QualityRole, CoverRole, LetterRole, NumberRole
+    };
+    TrackCollectionModel(LibraryService* lib, PlaylistService* playlists, QObject* parent = nullptr);
+    int rowCount(const QModelIndex& parent = {}) const override;
+    QVariant data(const QModelIndex& index, int role) const override;
+    QHash<int, QByteArray> roleNames() const override;
+
+    QString source() const { return source_; }
+    void setSource(const QString& s);
+    int artistIndex() const { return artist_; }
+    void setArtistIndex(int i);
+    QString playlistId() const { return playlist_; }
+    void setPlaylistId(const QString& id);
+    int count() const { return static_cast<int>(rows_.size()); }
+    QStringList letters() const { return letters_; }
+
+    Q_INVOKABLE QVariantList trackIds() const;
+    Q_INVOKABLE int indexOfLetter(const QString& letter) const;
+    Q_INVOKABLE int rowOfTrack(double trackId) const;
+
+signals:
+    void sourceChanged();
+    void contentChanged();
+
+private:
+    void reload();
+    LibraryService* lib_;
+    PlaylistService* playlists_;
+    std::shared_ptr<const LibrarySnapshot> snap_;
+    QString source_ = QStringLiteral("all");
+    int artist_ = -1;
+    QString playlist_;
+    std::vector<const TrackItem*> rows_;
+    std::vector<QString> rowLetters_;
+    QStringList letters_;
+};
+
+// 搜索:曲目为列表行;专辑、歌手、最佳匹配作为属性提供
 class SearchModel : public QAbstractListModel {
     Q_OBJECT
     Q_PROPERTY(QString query READ query WRITE setQuery NOTIFY queryChanged)
-    Q_PROPERTY(int count READ count NOTIFY countChanged)
+    Q_PROPERTY(int count READ count NOTIFY resultsChanged)
+    Q_PROPERTY(QVariantList albums READ albums NOTIFY resultsChanged)
+    Q_PROPERTY(QVariantList artists READ artists NOTIFY resultsChanged)
+    // 最佳匹配:kind (track / album / artist) + 对应字段
+    Q_PROPERTY(QVariantMap top READ top NOTIFY resultsChanged)
 public:
-    enum Roles { KindRole = Qt::UserRole + 1, TitleRole, SubtitleRole, CoverRole, RefRole, QualityRole };
+    enum Roles { TrackIdRole = Qt::UserRole + 1, TitleRole, ArtistRole, AlbumRole, AlbumIndexRole, DurationRole, QualityRole, CoverRole };
     explicit SearchModel(LibraryService* lib, QObject* parent = nullptr);
     int rowCount(const QModelIndex& parent = {}) const override;
     QVariant data(const QModelIndex& index, int role) const override;
@@ -74,19 +151,22 @@ public:
     QString query() const { return query_; }
     void setQuery(const QString& q);
     int count() const { return static_cast<int>(rows_.size()); }
+    QVariantList albums() const { return albums_; }
+    QVariantList artists() const { return artists_; }
+    QVariantMap top() const { return top_; }
+    Q_INVOKABLE QVariantList trackIds() const;
 
 signals:
     void queryChanged();
-    void countChanged();
+    void resultsChanged();
 
 private:
-    struct Row {
-        bool album;
-        int albumIndex;
-        const TrackItem* track;
-    };
+    void run();
     LibraryService* lib_;
     std::shared_ptr<const LibrarySnapshot> snap_;
     QString query_;
-    std::vector<Row> rows_;
+    std::vector<const TrackItem*> rows_;
+    QVariantList albums_;
+    QVariantList artists_;
+    QVariantMap top_;
 };

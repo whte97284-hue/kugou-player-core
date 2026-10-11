@@ -24,7 +24,6 @@ Item {
         fillMode: Image.PreserveAspectCrop
         sourceSize: Qt.size(root.decodeSize, root.decodeSize)
         smooth: true
-        mipmap: true
     }
     ShaderEffect {
         id: fx

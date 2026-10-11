@@ -47,6 +47,61 @@ std::wstring AlbumDirKey(const std::wstring& path) {
 }
 } // namespace
 
+QString SortKeyOf(const std::wstring& text) {
+    return QString::fromStdString(PinyinHelper::GetFullPinyin(text)) + QString::fromStdWString(text).toLower();
+}
+
+QString LetterOf(const QString& key) {
+    for (QChar c : key) {
+        if (c.isSpace()) continue;
+        char l = c.toLatin1();
+        if (l >= 'a' && l <= 'z') return QString(QChar(l - 32));
+        if (l >= 'A' && l <= 'Z') return QString(QChar(l));
+        return QStringLiteral("#");
+    }
+    return QStringLiteral("#");
+}
+
+QString TrackKeyOf(const TrackItem& t) {
+    return QString::fromStdWString(t.file_path) + QLatin1Char('#') + QString::number(t.is_cue_track ? t.cue_start_ms : 0);
+}
+
+namespace {
+// 「A / B」「A、B」「A feat. B」拆为多位歌手;「&」「,」常见于组合名,不拆
+std::vector<std::wstring> SplitArtists(const std::wstring& s) {
+    std::vector<std::wstring> out;
+    std::wstring cur;
+    auto push = [&]() {
+        size_t a = cur.find_first_not_of(L" \t");
+        size_t b = cur.find_last_not_of(L" \t");
+        if (a != std::wstring::npos) out.push_back(cur.substr(a, b - a + 1));
+        cur.clear();
+    };
+    std::wstring lower;
+    for (wchar_t c : s) lower += static_cast<wchar_t>(towlower(c));
+    for (size_t i = 0; i < s.size(); ++i) {
+        wchar_t c = s[i];
+        if (c == L'/' || c == L'\u3001' || c == L';' || c == L'\uff1b' || c == L'\uff0f') {
+            push();
+            continue;
+        }
+        bool feat = false;
+        for (const wchar_t* f : {L" feat. ", L" ft. ", L" feat ", L" featuring "}) {
+            size_t n = wcslen(f);
+            if (lower.compare(i, n, f) == 0) {
+                push();
+                i += n - 1;
+                feat = true;
+                break;
+            }
+        }
+        if (!feat) cur += c;
+    }
+    push();
+    return out;
+}
+} // namespace
+
 // 后台扫描作业:持有流水线与新曲库,完成后交给主线程
 class ScanJob {
 public:
@@ -300,12 +355,72 @@ std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<Mus
             a.artist = best->second * 2 >= static_cast<int>(a.tracks.size()) ? Q(best->first) : QObject::tr("群星");
         }
         if (!a.coverTrack && !a.tracks.empty()) a.coverTrack = a.tracks.front();
-        a.sortKey = QString::fromStdString(PinyinHelper::GetFullPinyin(a.title.toStdWString())) + a.title.toLower();
+        a.sortKey = SortKeyOf(a.title.toStdWString());
     }
     std::sort(snap->albums.begin(), snap->albums.end(),
               [](const AlbumInfo& x, const AlbumInfo& y) { return x.sortKey < y.sortKey; });
     for (int i = 0; i < static_cast<int>(snap->albums.size()); ++i)
         for (const TrackItem* t : snap->albums[i].tracks) snap->trackAlbum[t->id] = i;
+
+    // ---- 歌手 ----
+    std::unordered_map<std::wstring, int> artistIdx;
+    for (int ai = 0; ai < static_cast<int>(snap->albums.size()); ++ai) {
+        for (const TrackItem* t : snap->albums[ai].tracks) {
+            const std::wstring& raw = !t->artist.empty() ? t->artist : t->album_artist;
+            std::vector<std::wstring> names = SplitArtists(raw);
+            if (names.empty()) names.push_back(L"\u672a\u77e5\u6b4c\u624b"); // 未知歌手
+            for (const std::wstring& n : names) {
+                std::wstring key;
+                for (wchar_t c : n) key += static_cast<wchar_t>(towlower(c));
+                auto it = artistIdx.find(key);
+                int idx;
+                if (it == artistIdx.end()) {
+                    idx = static_cast<int>(snap->artists.size());
+                    artistIdx.emplace(key, idx);
+                    snap->artists.emplace_back();
+                    snap->artists.back().name = Q(n);
+                } else {
+                    idx = it->second;
+                }
+                ArtistInfo& ar = snap->artists[idx];
+                ar.tracks.push_back(t);
+                if (ar.albums.empty() || ar.albums.back() != ai) ar.albums.push_back(ai);
+            }
+        }
+    }
+    for (ArtistInfo& ar : snap->artists) {
+        ar.sortKey = SortKeyOf(ar.name.toStdWString());
+        ar.letter = LetterOf(ar.sortKey);
+        // 头像:该歌手曲目最多且有封面的专辑
+        int best = -1;
+        size_t bestN = 0;
+        for (int ai : ar.albums) {
+            const AlbumInfo& a = snap->albums[ai];
+            size_t n = 0;
+            for (const TrackItem* t : ar.tracks) n += snap->trackAlbum[t->id] == ai;
+            bool cover = a.coverTrack && (a.coverTrack->has_cover || !a.coverTrack->external_cover_path.empty());
+            n = n * 2 + (cover ? 1000 : 0);
+            if (best < 0 || n > bestN) best = ai, bestN = n;
+        }
+        ar.coverAlbum = best;
+        std::stable_sort(ar.albums.begin(), ar.albums.end(), [&](int x, int y) {
+            return snap->albums[x].year > snap->albums[y].year;
+        });
+    }
+    std::sort(snap->artists.begin(), snap->artists.end(),
+              [](const ArtistInfo& x, const ArtistInfo& y) { return x.sortKey < y.sortKey; });
+
+    // ---- 全部歌曲 (按标题拼音) ----
+    std::vector<std::pair<QString, const TrackItem*>> keyed;
+    keyed.reserve(tracks.size());
+    for (const auto& t : tracks) keyed.emplace_back(SortKeyOf(t.title), &t);
+    std::sort(keyed.begin(), keyed.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+    snap->songs.reserve(keyed.size());
+    snap->songLetters.reserve(keyed.size());
+    for (const auto& k : keyed) {
+        snap->songs.push_back(k.second);
+        snap->songLetters.push_back(LetterOf(k.first));
+    }
     return snap;
 }
 
@@ -368,4 +483,50 @@ QVariantMap LibraryService::albumInfo(int i) const {
     parts << tr("%1 首").arg(a.tracks.size()) << formatDuration(a.totalMs);
     m["summary"] = parts.join(QStringLiteral("  ·  "));
     return m;
+}
+
+QVariantMap LibraryService::artistInfo(int i) const {
+    QVariantMap m;
+    auto s = snapshot();
+    if (i < 0 || i >= static_cast<int>(s->artists.size())) return m;
+    const ArtistInfo& a = s->artists[i];
+    uint64_t ms = 0;
+    for (const TrackItem* t : a.tracks) ms += t->duration_ms;
+    m["index"] = i;
+    m["name"] = a.name;
+    m["cover"] = a.coverAlbum >= 0 ? QString("image://cover/a/%1/%2").arg(generation_).arg(a.coverAlbum) : QString();
+    m["albumCount"] = static_cast<int>(a.albums.size());
+    m["trackCount"] = static_cast<int>(a.tracks.size());
+    m["summary"] = tr("%1 张专辑  ·  %2 首  ·  %3").arg(a.albums.size()).arg(a.tracks.size()).arg(formatDuration(ms));
+    return m;
+}
+
+QVariantList LibraryService::artistAlbums(int i) const {
+    QVariantList out;
+    auto s = snapshot();
+    if (i < 0 || i >= static_cast<int>(s->artists.size())) return out;
+    for (int ai : s->artists[i].albums) out.append(albumInfo(ai));
+    return out;
+}
+
+int LibraryService::artistIndexOf(const QString& name) const {
+    auto s = snapshot();
+    for (int i = 0; i < static_cast<int>(s->artists.size()); ++i)
+        if (s->artists[i].name.compare(name, Qt::CaseInsensitive) == 0) return i;
+    // 合作曲目:取第一位歌手
+    std::vector<std::wstring> parts = SplitArtists(name.toStdWString());
+    if (parts.size() > 1) return artistIndexOf(QString::fromStdWString(parts.front()));
+    return -1;
+}
+
+int LibraryService::albumOfTrack(double trackId) const {
+    auto s = snapshot();
+    auto it = s->trackAlbum.find(static_cast<uint64_t>(trackId));
+    return it == s->trackAlbum.end() ? -1 : it->second;
+}
+
+int LibraryService::artistOfTrack(double trackId) const {
+    auto s = snapshot();
+    const TrackItem* t = s->catalog.FindById(static_cast<uint64_t>(trackId));
+    return t ? artistIndexOf(Q(t->artist.empty() ? t->album_artist : t->artist)) : -1;
 }

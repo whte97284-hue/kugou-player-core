@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls.Basic
 import PlayerUi
 
 // 专辑详情:大封面 + 信息区 (随列表一起滚动) + 曲目列表;多碟专辑按碟分组
@@ -30,20 +29,27 @@ Item {
         cacheBuffer: 800
         reuseItems: true
         spacing: 2
+        SmoothScroll { flickable: list }
 
         section.property: albumTracks.multiDisc ? "disc" : ""
-        section.delegate: Text {
+        section.delegate: Item {
             width: list.width
-            height: 44
-            verticalAlignment: Text.AlignBottom
-            bottomPadding: 8
-            leftPadding: 14
-            text: qsTr("碟 %1").arg(section)
-            color: Theme.textTertiary
-            font.family: Theme.fontFamily
-            font.pixelSize: 12
-            font.weight: Font.DemiBold
-            font.letterSpacing: 1.5
+            height: 46
+            Row {
+                x: 14
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 10
+                spacing: 8
+                Icon { anchors.verticalCenter: parent.verticalCenter; name: "disc"; size: 15; tint: Theme.accent }
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: section
+                    color: Theme.accent
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 14
+                    font.weight: Font.Bold
+                }
+            }
         }
 
         header: Item {
@@ -91,14 +97,6 @@ Item {
                 spacing: 10
 
                 Text {
-                    text: qsTr("专辑")
-                    color: Theme.textTertiary
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 12
-                    font.weight: Font.DemiBold
-                    font.letterSpacing: 2
-                }
-                Text {
                     width: parent.width
                     text: albumTracks.title
                     wrapMode: Text.WordWrap
@@ -117,6 +115,14 @@ Item {
                     font.family: Theme.fontFamily
                     font.pixelSize: 18
                     font.weight: Font.Medium
+                    font.underline: artistMouse.containsMouse
+                    MouseArea {
+                        id: artistMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: Nav.openArtist(library.artistIndexOf(albumTracks.artist))
+                    }
                 }
                 Row {
                     spacing: 12
@@ -135,53 +141,22 @@ Item {
                 Item { width: 1; height: 8 }
                 Row {
                     spacing: 12
-                    // 主按钮:强调色胶囊
-                    Rectangle {
-                        width: playLabel.implicitWidth + 64
-                        height: 44
-                        radius: 22
-                        color: Theme.accent
-                        scale: playMouse.pressed ? 0.96 : 1
-                        Behavior on scale { ScaleAnimator { duration: Theme.fast } }
-                        Row {
-                            anchors.centerIn: parent
-                            spacing: 8
-                            Icon {
-                                anchors.verticalCenter: parent.verticalCenter
-                                name: Theme.accentIsLight ? (page.isCurrentAlbum && player.playing ? "pause-dark" : "play-dark")
-                                                                                : (page.isCurrentAlbum && player.playing ? "pause" : "play")
-                                size: 18
-                            }
-                            Text {
-                                id: playLabel
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: page.isCurrentAlbum && player.playing ? qsTr("暂停") : qsTr("播放")
-                                color: Theme.onAccent
-                                font.family: Theme.fontFamily
-                                font.pixelSize: 15
-                                font.weight: Font.DemiBold
-                            }
-                        }
-                        MouseArea {
-                            id: playMouse
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: page.isCurrentAlbum ? player.toggle() : player.playAlbum(albumTracks.albumIndex, 0)
-                        }
+                    IconButton {
+                        width: 52; height: 52
+                        filled: true
+                        icon: page.isCurrentAlbum && player.playing ? "pause" : "play"
+                        iconSize: 20
+                        onClicked: page.isCurrentAlbum ? player.toggle() : player.playAlbum(albumTracks.albumIndex, 0)
                     }
-                    Rectangle {
-                        width: 44; height: 44; radius: 22
-                        color: shuffleMouse.containsMouse ? Theme.pressed : Theme.hover
-                        border.width: 1
-                        border.color: Theme.hairline
-                        Icon { anchors.centerIn: parent; name: "shuffle"; size: 18; opacity: 0.85 }
-                        MouseArea {
-                            id: shuffleMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: player.playAlbum(albumTracks.albumIndex,
-                                                        Math.floor(Math.random() * Math.max(1, list.count)))
+                    IconButton {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 42; height: 42
+                        outlined: true
+                        icon: "shuffle"
+                        iconSize: 17
+                        onClicked: {
+                            player.shuffle = true
+                            player.playAlbum(albumTracks.albumIndex, Math.floor(Math.random() * Math.max(1, list.count)))
                         }
                     }
                 }
@@ -211,13 +186,13 @@ Item {
 
         delegate: TrackRow {
             width: list.width
+            trackId: model.trackId
             number: model.number
             title: model.title
             artist: model.artist
             albumArtist: albumTracks.artist
             quality: model.quality
             duration: model.duration
-            current: player.trackId === model.trackId
             onActivated: player.playAlbum(albumTracks.albumIndex, index)
         }
     }

@@ -69,28 +69,16 @@ Item {
             }
         }
 
-        // 正在播放角标
-        Rectangle {
-            visible: card.isPlaying
+        // 正在播放角标:只有正在播放的那张卡片才创建
+        Loader {
+            active: card.isPlaying
             anchors.left: parent.left
             anchors.top: parent.top
             anchors.margins: 10
-            width: 30; height: 24; radius: 6
-            color: Qt.rgba(0, 0, 0, 0.55)
-            Row {
-                anchors.centerIn: parent
-                spacing: 2
-                Repeater {
-                    model: 4
-                    Rectangle {
-                        width: 3
-                        radius: 1.5
-                        anchors.bottom: parent.bottom
-                        height: 4 + 10 * (player.playing ? player.spectrum[4 + index * 5] : 0.15)
-                        color: Theme.accent
-                    }
-                }
-                height: 14
+            sourceComponent: Rectangle {
+                width: 30; height: 24; radius: 6
+                color: Qt.rgba(0, 0, 0, 0.55)
+                PlayingBars { anchors.centerIn: parent; maxHeight: 12 }
             }
         }
     }

@@ -123,6 +123,10 @@ private:
         }
         if (img.isNull()) img = CoverProvider::Placeholder(seed.isEmpty() ? id_ : seed, bucket);
         if (kind == "b") return CoverProvider::BlurSmall(img);
+        // 在工作线程里精确缩放到显示尺寸:渲染时无需 mipmap,纹理上传更小,滚动更顺
+        if (req_.isValid() && req_.width() > 0 && req_.height() > 0 &&
+            (img.width() > req_.width() * 1.15 || img.height() > req_.height() * 1.15))
+            img = img.scaled(req_, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
         return img;
     }
 

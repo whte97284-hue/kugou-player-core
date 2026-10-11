@@ -33,9 +33,10 @@ Item {
         model: albumModel
         cellWidth: wall.cellW
         cellHeight: wall.cellW - 28 + 84
-        cacheBuffer: 1200
+        cacheBuffer: 600
         property bool userScrolled: false
         onMovementStarted: userScrolled = true
+        SmoothScroll { flickable: grid; onScrolled: grid.userScrolled = true }
         reuseItems: true
         boundsBehavior: Flickable.StopAtBounds
         maximumFlickVelocity: 5200

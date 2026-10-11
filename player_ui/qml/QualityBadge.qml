@@ -1,7 +1,7 @@
 import QtQuick
 import PlayerUi
 
-// 品质标签:Hi-Res / DSD 用金色描边,其余为低调灰
+// 品质标签:Hi-Res / DSD 跟随当前强调色描边,其余为低调灰 (不使用固定的金色,避免与封面主色冲突)
 Rectangle {
     id: badge
     property string text
@@ -11,14 +11,14 @@ Rectangle {
     implicitWidth: label.implicitWidth + 12
     implicitHeight: label.implicitHeight + 4
     radius: 4
-    color: premium ? Theme.perfectAlpha(0.10) : Qt.rgba(1, 1, 1, 0.06)
+    color: premium ? Theme.accentAlpha(0.10) : Qt.rgba(1, 1, 1, 0.06)
     border.width: 1
-    border.color: premium ? Theme.perfectAlpha(0.42) : Qt.rgba(1, 1, 1, 0.12)
+    border.color: premium ? Theme.accentAlpha(0.42) : Qt.rgba(1, 1, 1, 0.12)
     Text {
         id: label
         anchors.centerIn: parent
         text: badge.text
-        color: badge.premium ? Theme.perfect : Theme.textSecondary
+        color: badge.premium ? Theme.accent : Theme.textSecondary
         font.family: Theme.fontFamily
         font.pixelSize: badge.fontSize
         font.weight: Font.DemiBold

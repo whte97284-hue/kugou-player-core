@@ -19,8 +19,121 @@ Window {
     // 强调色跟随当前专辑
     Binding { target: Theme; property: "accent"; value: player.accent }
 
-    property bool detailShown: false
-    property int pendingAlbum: -1
+    // 页面加载器:后台异步预创建 (不卡当前帧),之后常驻;进场稍慢带轻微放大,退场更快,两页交叠时间短
+    component PageLoader: Loader {
+        property string key
+        property bool allowEmpty: false
+        readonly property bool current: root.view === key && (allowEmpty || !pages.libraryEmpty)
+        property bool used: false
+        onCurrentChanged: if (current) used = true
+        active: used
+        asynchronous: !current
+        anchors.fill: parent
+        opacity: current && status === Loader.Ready ? 1 : 0
+        visible: opacity > 0
+        scale: current ? 1 : 0.985
+        Behavior on opacity { OpacityAnimator { duration: current ? 300 : 150; easing.type: Easing.OutCubic } }
+        Behavior on scale { ScaleAnimator { duration: current ? 460 : 150; easing.type: Easing.OutQuint } }
+    }
+
+    // 导航状态:section = 侧栏分区;detail = 分区内打开的详情 (album / artist / playlist)
+    property string section: "albums"
+    property string detailKind: ""
+    property var detailRef: -1
+    readonly property string view: detailKind.length ? detailKind : section
+    readonly property bool detailShown: detailKind === "album"
+    property var history: []
+    // 详情页各自记住最后打开的对象,切到别的详情时不跟着重载
+    property int lastArtist: -1
+    property string lastPlaylist: ""
+    onViewChanged: trackMenu.close()
+    onDetailRefChanged: syncDetail()
+    onDetailKindChanged: syncDetail()
+    function syncDetail() {
+        if (detailKind === "artist") lastArtist = detailRef
+        else if (detailKind === "playlist") lastPlaylist = detailRef
+    }
+
+    function snapshotState() { return { section: section, kind: detailKind, ref: detailRef } }
+    function pushHistory() {
+        const h = history.slice()
+        h.push(snapshotState())
+        if (h.length > 40) h.shift()
+        history = h
+    }
+    function applyState(st) {
+        section = st.section
+        detailKind = st.kind
+        detailRef = st.ref
+        if (st.kind === "album") albumTracks.albumIndex = st.ref
+    }
+    function go(sec) {
+        if (section === sec && !detailKind.length) return
+        pushHistory()
+        section = sec
+        detailKind = ""
+    }
+    function openDetail(kind, ref) {
+        if (detailKind === kind && detailRef === ref) return
+        pushHistory()
+        detailKind = kind
+        detailRef = ref
+    }
+    function back() {
+        if (!history.length) {
+            if (detailKind.length) { closeAlbumFlight(); detailKind = "" }
+            return
+        }
+        const h = history.slice()
+        const st = h.pop()
+        history = h
+        if (detailKind === "album" && st.kind === "") closeAlbumFlight()
+        if (detailKind === "artist" && st.kind === "" && st.section === "artists") closeArtistFlight()
+        applyState(st)
+    }
+    function openSearch(text) {
+        if (section !== "search" || detailKind.length) { pushHistory(); section = "search"; detailKind = "" }
+        Qt.callLater(function() { if (searchLoader.item) searchLoader.item.focusWith(text) })
+    }
+    function openArtist(i, fromItem) {
+        if (i < 0) return
+        openDetail("artist", i)
+        if (fromItem) flyBetween(fromItem, function() { return artistLoader.item ? artistLoader.item.heroAvatar : null }, "")
+    }
+    // 共享元素飞行:from 是来源图块,targetFn 在目标页布局完成后返回落点
+    function flyBetween(fromItem, targetFn, src) {
+        Qt.callLater(function() {
+            const hero = targetFn()
+            if (!hero || !fromItem) return
+            const from = fromItem.mapToItem(root.contentItem, 0, 0)
+            const to = hero.mapToItem(root.contentItem, 0, 0)
+            flying.source = src.length ? src : hero.source
+            flying.radius = hero.radius
+            flying.width = hero.width
+            flying.height = hero.height
+            flying.x = from.x
+            flying.y = from.y
+            flying.scale = fromItem.width / hero.width
+            flight.landing = hero
+            hero.opacity = 0
+            flying.visible = true
+            flight.toX = to.x
+            flight.toY = to.y
+            flight.toScale = 1
+            flight.restart()
+        })
+    }
+    function openPlaylist(id) { if (id && id.length) openDetail("playlist", id) }
+
+    Connections {
+        target: Nav
+        function onOpenAlbum(i) { if (i >= 0) root.openAlbum(i, null) }
+        function onOpenArtist(i) { root.openArtist(i, null) }
+        function onOpenArtistFrom(i, item) { root.openArtist(i, item) }
+        function onOpenPlaylist(id) { root.openPlaylist(id) }
+        function onTrackMenu(id, x, y, ctx) { trackMenu.open(id, x, y, ctx) }
+        function onToast(icon, text) { toast.show(icon, text) }
+    }
 
     // ======================= 场景层 (同时作为毛玻璃的采样源) =======================
     Item {
@@ -35,36 +148,76 @@ Window {
             id: pages
             anchors.fill: parent
             anchors.leftMargin: Theme.navWidth
+            readonly property int inset: Theme.islandHeight + 60
+            readonly property bool libraryEmpty: library.albumCount === 0
 
             AlbumWall {
                 id: wall
                 anchors.fill: parent
-                bottomInset: Theme.islandHeight + 60
-                opacity: root.detailShown || library.albumCount === 0 ? 0 : 1
+                bottomInset: pages.inset
+                readonly property bool active: root.view === "albums" && !pages.libraryEmpty
+                opacity: active ? 1 : 0
                 visible: opacity > 0
-                scale: root.detailShown ? 0.985 : 1
-                Behavior on opacity { OpacityAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
-                Behavior on scale { ScaleAnimator { duration: Theme.slow; easing.type: Easing.OutQuint } }
+                scale: active ? 1 : 0.985
+                Behavior on opacity { OpacityAnimator { duration: wall.active ? 300 : 150; easing.type: Easing.OutCubic } }
+                Behavior on scale { ScaleAnimator { duration: wall.active ? 460 : 150; easing.type: Easing.OutQuint } }
                 onOpenAlbum: (index, coverItem) => root.openAlbum(index, coverItem)
             }
 
             AlbumDetail {
                 id: detail
                 anchors.fill: parent
-                bottomInset: Theme.islandHeight + 60
-                opacity: root.detailShown ? 1 : 0
+                bottomInset: pages.inset
+                readonly property bool active: root.view === "album"
+                opacity: active ? 1 : 0
                 visible: opacity > 0
-                scale: root.detailShown ? 1 : 1.015
-                Behavior on opacity { OpacityAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
-                Behavior on scale { ScaleAnimator { duration: Theme.slow; easing.type: Easing.OutQuint } }
-                onBack: root.closeAlbum()
+                scale: active ? 1 : 1.015
+                Behavior on opacity { OpacityAnimator { duration: detail.active ? 300 : 150; easing.type: Easing.OutCubic } }
+                Behavior on scale { ScaleAnimator { duration: detail.active ? 460 : 150; easing.type: Easing.OutQuint } }
+                onBack: root.back()
             }
 
-            // 曲库为空:引导选择文件夹;首次导入时显示识别进度
+            // 其余页面首次进入时才创建,之后常驻 (切换不重建,滚动位置保留)
+            PageLoader { id: artistsLoader; key: "artists"; sourceComponent: ArtistsPage { bottomInset: pages.inset } }
+            PageLoader { id: songsLoader; key: "songs"; sourceComponent: SongsPage { bottomInset: pages.inset } }
+            PageLoader { id: playlistsLoader; key: "playlists"; sourceComponent: PlaylistsPage { bottomInset: pages.inset } }
+            PageLoader {
+                id: searchLoader
+                key: "search"
+                allowEmpty: true
+                sourceComponent: SearchPage { bottomInset: pages.inset; onBack: root.back() }
+            }
+            PageLoader {
+                id: artistLoader
+                key: "artist"
+                sourceComponent: ArtistDetail { bottomInset: pages.inset; artistIndex: root.lastArtist; onBack: root.back() }
+            }
+            PageLoader {
+                id: playlistLoader
+                key: "playlist"
+                allowEmpty: true
+                sourceComponent: PlaylistDetail { bottomInset: pages.inset; playlistId: root.lastPlaylist; onBack: root.back() }
+            }
+
+            // 曲库就绪后在空闲时依次预创建其余页面,第一次切换也不会卡顿
+            Timer {
+                id: preload
+                interval: 350
+                repeat: true
+                running: !pages.libraryEmpty && !library.scanning
+                property int step: 0
+                onTriggered: {
+                    const list = [artistsLoader, songsLoader, playlistsLoader, searchLoader, artistLoader, playlistLoader]
+                    if (step >= list.length) { stop(); return }
+                    list[step++].used = true
+                }
+            }
+
+            // 曲库为空:引导选择文件夹;首次导入时显示识别进度 (歌单与搜索页除外)
             Onboarding {
                 anchors.fill: parent
                 visible: opacity > 0
-                opacity: library.albumCount === 0 && !root.detailShown ? 1 : 0
+                opacity: pages.libraryEmpty && root.view !== "playlist" && root.view !== "playlists" && root.view !== "search" ? 1 : 0
                 Behavior on opacity { OpacityAnimator { duration: Theme.slow; easing.type: Easing.OutCubic } }
                 onPickFolder: folderDialog.open()
             }
@@ -82,12 +235,11 @@ Window {
             id: nav
             anchors.top: parent.top
             anchors.bottom: parent.bottom
-            current: root.detailShown ? "" : "albums"
+            current: root.section
             onNavigate: (target) => {
-                if (target === "albums") root.closeAlbum()
-                else if (target === "search") palette.open("")
-                else if (target === "folder") library.folders.length ? libraryPanel.open() : folderDialog.open()
-                else if (target === "rescan") library.rescan()
+                if (target === "folder") library.folders.length ? libraryPanel.open() : folderDialog.open()
+                else if (target === "search") root.openSearch("")
+                else root.go(target)
             }
         }
     }
@@ -107,29 +259,33 @@ Window {
             property real toY
             property real toScale: 1
             property bool reverse: false
+            property Item landing: null
             XAnimator { target: flying; to: flight.toX; duration: 460; easing.type: Easing.OutQuint }
             YAnimator { target: flying; to: flight.toY; duration: 460; easing.type: Easing.OutQuint }
             ScaleAnimator { target: flying; to: flight.toScale; duration: 460; easing.type: Easing.OutQuint }
             onFinished: {
                 flying.visible = false
                 if (detail.heroCover) detail.heroCover.opacity = 1
+                if (flight.landing) { flight.landing.opacity = 1; flight.landing = null }
             }
         }
     }
 
     function openAlbum(index, coverItem) {
+        if (index < 0) return
         albumTracks.albumIndex = index
         detail.resetScroll()
-        root.pendingAlbum = index
         const fromItem = coverItem
-        detailShown = true
-        // 等详情页完成布局后再计算目标位置
+        openDetail("album", index)
+        // 从专辑墙打开时封面飞入详情页;其他入口直接淡入
+        if (!fromItem) return
         Qt.callLater(function() {
             const hero = detail.heroCover
-            if (!fromItem || !hero) return
+            if (!hero) return
             const from = fromItem.mapToItem(root.contentItem, 0, 0)
             const to = hero.mapToItem(root.contentItem, 0, 0)
             flying.source = albumTracks.cover
+            flying.radius = hero.radius
             flying.width = hero.width
             flying.height = hero.height
             flying.x = from.x
@@ -144,28 +300,52 @@ Window {
         })
     }
 
-    function closeAlbum() {
-        if (!detailShown) return
+    // 返回专辑墙时封面飞回对应卡片
+    function closeAlbumFlight() {
+        if (detailKind !== "album" || section !== "albums") return
         const hero = detail.heroCover
         const card = wall.coverOf(albumTracks.albumIndex)
-        if (hero && card) {
-            const from = hero.mapToItem(root.contentItem, 0, 0)
-            const to = card.mapToItem(root.contentItem, 0, 0)
-            flying.source = albumTracks.cover
-            flying.width = hero.width
-            flying.height = hero.height
-            flying.x = from.x
-            flying.y = from.y
-            flying.scale = 1
-            flying.visible = true
-            hero.opacity = 0
-            flight.toX = to.x
-            flight.toY = to.y
-            flight.toScale = card.width / hero.width
-            flight.restart()
-        }
-        detailShown = false
+        if (!hero || !card) return
+        const from = hero.mapToItem(root.contentItem, 0, 0)
+        const to = card.mapToItem(root.contentItem, 0, 0)
+        flying.source = albumTracks.cover
+        flying.radius = hero.radius
+        flying.width = hero.width
+        flying.height = hero.height
+        flying.x = from.x
+        flying.y = from.y
+        flying.scale = 1
+        flying.visible = true
+        hero.opacity = 0
+        flight.toX = to.x
+        flight.toY = to.y
+        flight.toScale = card.width / hero.width
+        flight.restart()
     }
+    function closeArtistFlight() {
+        const page = artistLoader.item, grid = artistsLoader.item
+        if (!page || !grid) return
+        const hero = page.heroAvatar
+        const cell = grid.avatarOf(root.lastArtist)
+        if (!hero || !cell) return
+        const from = hero.mapToItem(root.contentItem, 0, 0)
+        const to = cell.mapToItem(root.contentItem, 0, 0)
+        flying.source = hero.source
+        flying.radius = hero.radius
+        flying.width = hero.width
+        flying.height = hero.height
+        flying.x = from.x
+        flying.y = from.y
+        flying.scale = 1
+        flight.landing = cell
+        cell.opacity = 0
+        flying.visible = true
+        flight.toX = to.x
+        flight.toY = to.y
+        flight.toScale = cell.width / hero.width
+        flight.restart()
+    }
+    function closeAlbum() { if (detailKind === "album") back() }
 
     // 顶部渐暗:内容滚到窗口顶端时,保证窗口按钮在浅色封面上依然可见
     Rectangle {
@@ -193,7 +373,6 @@ Window {
     // ======================= 悬浮播放岛 =======================
     PlayIsland {
         id: island
-        glassSource: scene
         width: Math.min(920, root.width - Theme.navWidth - 96)
         x: Theme.navWidth + (root.width - Theme.navWidth - width) / 2
         y: root.height - height - 24
@@ -252,10 +431,16 @@ Window {
         Connections { target: player; function onErrorChanged() { if (player.errorText.length) errTimer.restart() } }
     }
 
-    CommandPalette {
-        id: palette
-        z: 40
-        onOpenAlbum: (index) => root.openAlbum(index, null)
+    TrackMenu {
+        id: trackMenu
+        z: 45
+    }
+
+    Toast {
+        id: toast
+        z: 46
+        anchors.horizontalCenter: island.horizontalCenter
+        y: island.y - height - 16
     }
 
     LibraryPanel {
@@ -269,7 +454,7 @@ Window {
         title: qsTr("选择音乐文件夹")
         onAccepted: {
             library.addFolderUrls([selectedFolder])
-            if (root.detailShown) root.closeAlbum()
+            root.go("albums")
         }
     }
 
@@ -300,27 +485,40 @@ Window {
         }
     }
 
-    // ======================= 键盘 =======================
-    Shortcut { sequence: "Ctrl+K"; onActivated: palette.shown ? palette.close() : palette.open("") }
-    Shortcut { sequence: "Ctrl+F"; onActivated: palette.open("") }
-    Shortcut { sequence: "Space"; enabled: !palette.shown; onActivated: player.toggle() }
+    // ======================= 键盘 / 鼠标侧键 =======================
+    readonly property bool typing: activeFocusItem && activeFocusItem.hasOwnProperty("cursorPosition")
+    Shortcut { sequence: "Ctrl+K"; onActivated: root.openSearch("") }
+    Shortcut { sequence: "Ctrl+F"; onActivated: root.openSearch("") }
+    Shortcut { sequence: "Space"; enabled: !root.typing; onActivated: player.toggle() }
     Shortcut { sequence: "Ctrl+Right"; onActivated: player.next() }
     Shortcut { sequence: "Ctrl+Left"; onActivated: player.previous() }
+    Shortcut { sequence: "Alt+Left"; onActivated: root.back() }
     Shortcut {
         sequence: "Escape"
-        enabled: !palette.shown
-        onActivated: libraryPanel.shown ? libraryPanel.close()
-                     : chain.shown ? (chain.shown = false) : (nowPlaying.shown ? (nowPlaying.shown = false) : root.closeAlbum())
+        enabled: !root.typing
+        onActivated: {
+            if (trackMenu.shown) trackMenu.close()
+            else if (libraryPanel.shown) libraryPanel.close()
+            else if (chain.shown) chain.shown = false
+            else if (nowPlaying.shown) nowPlaying.shown = false
+            else root.back()
+        }
+    }
+    MouseArea {
+        anchors.fill: parent
+        z: -1
+        acceptedButtons: Qt.BackButton
+        onClicked: root.back()
     }
 
-    // 在任意位置直接打字即唤出搜索
+    // 在任意位置直接打字即进入搜索
     Item {
         id: typeCatcher
-        focus: !palette.shown
+        focus: !root.typing
         Keys.onPressed: (e) => {
-            if (palette.shown || e.modifiers & (Qt.ControlModifier | Qt.AltModifier)) return
+            if (e.modifiers & (Qt.ControlModifier | Qt.AltModifier)) return
             if (e.text.length === 1 && /\S/.test(e.text)) {
-                palette.open(e.text)
+                root.openSearch(e.text)
                 e.accepted = true
             }
         }
@@ -352,10 +550,10 @@ Window {
 
     // ======================= 自动化 (离屏截图验证用) =======================
     function automationOpenAlbum(i) { root.openAlbum(Number(i), wall.coverOf(Number(i))) }
-    function automationBack() { root.closeAlbum() }
+    function automationBack() { root.back() }
     function automationScrollEnd() { wall.scrollToEnd() }
-    function automationSearch(q) { palette.open(String(q)) }
-    function automationCloseSearch() { palette.close() }
+    function automationSearch(q) { root.openSearch(String(q)) }
+    function automationCloseSearch() { root.back() }
     function automationShowChain() { chain.shown = true }
     function automationNowPlaying(on) { nowPlaying.shown = !!on }
     function automationPlayTitle(t) {
@@ -364,4 +562,8 @@ Window {
     }
     function automationHideChain() { chain.shown = false }
     function automationLibraryPanel(on) { on ? libraryPanel.open() : libraryPanel.close() }
+    function automationGo(sec) { root.go(String(sec)) }
+    function automationOpenArtist(name) { root.openArtist(library.artistIndexOf(String(name))) }
+    function automationOpenPlaylist(id) { root.openPlaylist(String(id)) }
+    function automationTrackMenu(x, y) { trackMenu.open(player.trackId, Number(x), Number(y), {}) }
 }

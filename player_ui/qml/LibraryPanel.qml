@@ -11,6 +11,7 @@ Item {
 
     function open() { shown = true }
     function close() { shown = false }
+    function artistCount() { return library.generation >= 0 ? artistModel.rowCount() : 0 }
 
     MouseArea {
         anchors.fill: parent
@@ -22,7 +23,8 @@ Item {
     Rectangle {
         id: card
         x: Theme.navWidth + 12
-        y: 84
+        // 从侧栏底部的文件夹按钮旁弹出
+        y: lp.height - height - 18
         width: 420
         height: body.implicitHeight + 36
         radius: Theme.radiusL
@@ -31,7 +33,7 @@ Item {
         border.color: Qt.rgba(1, 0.96, 0.9, 0.1)
         opacity: lp.shown ? 1 : 0
         scale: lp.shown ? 1 : 0.97
-        transformOrigin: Item.TopLeft
+        transformOrigin: Item.BottomLeft
         Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
         Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
         // 吞掉卡片内的点击,避免穿透到背后的关闭区域
@@ -44,22 +46,27 @@ Item {
             width: parent.width - 40
             spacing: 0
 
-            Text {
-                text: qsTr("音乐文件夹")
-                color: Theme.text
-                font.family: Theme.fontFamily
-                font.pixelSize: 17
-                font.weight: Font.DemiBold
+            // 概览:曲目 / 专辑数量 (图标 + 数字)
+            Row {
+                spacing: 18
+                height: 28
+                Repeater {
+                    model: [{ icon: "note", n: library.trackCount }, { icon: "albums", n: library.albumCount }, { icon: "artist", n: artistModel.letters.length >= 0 ? artistCount() : 0 }]
+                    Row {
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 7
+                        Icon { anchors.verticalCenter: parent.verticalCenter; name: modelData.icon; size: 15; opacity: 0.5 }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: modelData.n.toLocaleString(Qt.locale(), "f", 0)
+                            color: Theme.textSecondary
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 13
+                        }
+                    }
+                }
             }
-            Item { width: 1; height: 4 }
-            Text {
-                text: library.scanning ? library.statusText
-                                       : qsTr("%1 首歌曲 · %2 张专辑").arg(library.trackCount).arg(library.albumCount)
-                color: Theme.textTertiary
-                font.family: Theme.fontFamily
-                font.pixelSize: 12
-            }
-            Item { width: 1; height: 14 }
+            Item { width: 1; height: 10 }
 
             Repeater {
                 model: library.folders
@@ -107,56 +114,30 @@ Item {
                     }
                 }
             }
-            Text {
-                visible: library.folders.length === 0
-                height: 44
-                verticalAlignment: Text.AlignVCenter
-                text: qsTr("还没有添加文件夹")
-                color: Theme.textTertiary
-                font.family: Theme.fontFamily
-                font.pixelSize: 13
-            }
+
 
             Item { width: 1; height: 12 }
             Rectangle { width: body.width; height: 1; color: Theme.hairline }
             Item { width: 1; height: 12 }
 
             Row {
-                spacing: 8
-                Repeater {
-                    model: [
-                        { key: "add", label: qsTr("添加文件夹"), primary: true },
-                        { key: "rescan", label: library.scanning ? qsTr("取消扫描") : qsTr("重新扫描"), primary: false }
-                    ]
-                    delegate: Rectangle {
-                        width: lbl.implicitWidth + 32
-                        height: 36
-                        radius: 18
-                        color: modelData.primary ? Theme.accent : (m.containsMouse ? Theme.pressed : Theme.hover)
-                        visible: modelData.key !== "rescan" || library.folders.length > 0
-                        scale: m.pressed ? 0.97 : 1
-                        Behavior on scale { ScaleAnimator { duration: Theme.fast } }
-                        Text {
-                            id: lbl
-                            anchors.centerIn: parent
-                            text: modelData.label
-                            color: modelData.primary ? Theme.onAccent : Theme.text
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 13
-                            font.weight: modelData.primary ? Font.DemiBold : Font.Normal
-                        }
-                        MouseArea {
-                            id: m
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                if (modelData.key === "add") { lp.close(); lp.pickFolder() }
-                                else if (library.scanning) library.cancelScan()
-                                else library.rescan()
-                            }
-                        }
-                    }
+                spacing: 12
+                IconButton {
+                    width: 44; height: 44
+                    filled: true
+                    icon: "plus"
+                    iconSize: 18
+                    onClicked: { lp.close(); lp.pickFolder() }
+                }
+                // 重新扫描;扫描进行中变为取消
+                IconButton {
+                    visible: library.folders.length > 0
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 40; height: 40
+                    outlined: true
+                    icon: library.scanning ? "close" : "refresh"
+                    iconSize: 16
+                    onClicked: library.scanning ? library.cancelScan() : library.rescan()
                 }
             }
         }

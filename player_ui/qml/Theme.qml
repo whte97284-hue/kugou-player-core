@@ -6,8 +6,9 @@ QtObject {
     id: theme
 
     // ---- 强调色 (随专辑封面,已在 C++ 侧驯化:限饱和、定亮度、蓝紫品红降饱和) ----
+    // 不对 accent 做颜色动画:上百处绑定会在动画期间每帧重算,切歌瞬间掉帧;
+    // 背景极光自带 1.6 秒色彩过渡,整体观感依然是平滑变色
     property color accent: "#c8a46e"
-    Behavior on accent { ColorAnimation { duration: 900; easing.type: Easing.OutCubic } }
 
     // ---- 暖中性色:暖炭黑底、暖白文字,像胶片与高端音响面板,而非冷蓝科技感 ----
     readonly property color base: "#100f0e"
