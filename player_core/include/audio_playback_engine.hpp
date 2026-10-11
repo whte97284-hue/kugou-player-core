@@ -16,8 +16,9 @@ enum class PlaybackState {
 // ============================================================================
 //  AudioPlaybackEngine —— 发烧级播放引擎
 //   · 真·WASAPI 独占模式 (shareMode = exclusive),失败自动回退共享模式
-//   · 独占模式下按母带原生采样率/声道重建设备:96k / 192k 母带不经任何重采样直达 DAC
-//   · 共享模式跟随系统混音格式,由解码器使用 8 阶低通的高质量重采样一次完成转换
+//   · 输出格式跟随设备默认格式 (独占/共享均如此,miniaudio 0.11 限制),
+//     需要时由解码器以最高阶低通重采样一次完成;GetOutput* 如实报告实际输出格式
+//   · 设备为 16 位时自动加 TPDF 抖动,24bit 母带降位深不产生截断失真
 //   · 播放位置取自解码器真实帧游标,无浮点累加漂移
 //   · 支持 CUE 分轨片段播放 (起止时间精确到帧)
 //   · 音量平滑斜坡,调音量无「拉链噪声」
@@ -62,6 +63,7 @@ public:
     // 输出链路信息
     uint32_t GetSourceSampleRate() const { return source_rate_.load(); } // 母带原生采样率
     uint32_t GetOutputSampleRate() const { return output_rate_.load(); } // 实际送往设备的采样率
+    uint32_t GetOutputBitDepth() const { return output_bits_.load(); }    // 设备实际位深 (16/24/32)
     bool IsExclusiveMode() const { return exclusive_active_.load(); }
     bool IsResampling() const { return GetSourceSampleRate() != GetOutputSampleRate(); }
 
@@ -90,6 +92,7 @@ private:
     std::atomic<double> duration_{0.0};
     std::atomic<uint32_t> source_rate_{0};
     std::atomic<uint32_t> output_rate_{0};
+    std::atomic<uint32_t> output_bits_{0};
     std::atomic<bool> exclusive_active_{false};
 
     FftVisualizer visualizer_;

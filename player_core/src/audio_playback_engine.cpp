@@ -1,3 +1,7 @@
+// miniaudio.h 会间接包含 <windows.h>;不定义 NOMINMAX 时 MSVC 的 min/max 宏会破坏 std::min/std::max
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #define MINIAUDIO_IMPLEMENTATION
 #include "../include/miniaudio.h"
 #include "../include/audio_playback_engine.hpp"
@@ -26,6 +30,9 @@ struct AudioPlaybackEngine::Impl {
 
     // 音频线程私有:当前实际增益 (用于平滑斜坡)
     float gain = 1.0f;
+    // 设备实际格式为 16 位时,在 f32 -> s16 截断前加 TPDF 抖动
+    bool dither16 = false;
+    uint32_t rng = 0x12345678u;
 
     // 播放结束通知线程
     std::thread notifier;
@@ -105,6 +112,11 @@ bool AudioPlaybackEngine::InitDevice(uint32_t sampleRate, uint32_t channels, boo
     impl_->out_channels = impl_->device.playback.channels;
     exclusive_active_.store(exclusiveOk);
     output_rate_.store(impl_->device.playback.internalSampleRate);
+    ma_format internal = impl_->device.playback.internalFormat;
+    uint32_t bits = internal == ma_format_s16 ? 16 : internal == ma_format_s24 ? 24 :
+                    internal == ma_format_u8 ? 8 : 32; // s32 / f32
+    output_bits_.store(bits);
+    impl_->dither16 = (internal == ma_format_s16 || internal == ma_format_u8);
 
     if (ma_device_start(&impl_->device) != MA_SUCCESS) {
         ma_device_uninit(&impl_->device);
@@ -166,12 +178,9 @@ bool AudioPlaybackEngine::OpenFile(const std::wstring& filePath, double startSec
         }
     }
 
-    // 独占模式:设备按母带原生采样率重建,实现无重采样直通
-    if (impl_->exclusive_requested && srcRate > 0 && srcRate != impl_->device.playback.internalSampleRate) {
-        if (!InitDevice(srcRate, impl_->out_channels, true)) {
-            if (!InitDevice(0, 2, false)) return false;
-        }
-    }
+    // 注意:miniaudio 0.11.25 在 Windows 桌面独占模式下总是使用设备默认格式 (PKEY_AudioEngine_DeviceFormat),
+    // 忽略请求的采样率,因此这里不再按母带采样率重建设备 (实测无效且白白拆建设备)。
+    // 解码器直接按设备采样率输出,由解码器的最高阶低通重采样器一次完成转换。
 
     ma_decoder_config dc = ma_decoder_config_init(ma_format_f32, impl_->out_channels, impl_->out_rate);
     dc.resampling.algorithm = ma_resample_algorithm_linear;
@@ -319,6 +328,21 @@ void AudioPlaybackEngine::OnAudioFrames(void* pOutput, uint32_t frameCount) {
             out[i] *= g;
         }
         impl_->gain = target;
+    }
+
+    // 16 位输出:TPDF 抖动 (±1 LSB 三角分布),避免 24bit 母带截断到 16bit 时的谐波失真
+    if (impl_->dither16) {
+        const size_t n = static_cast<size_t>(got) * ch;
+        const float lsb = 1.0f / 32768.0f;
+        uint32_t r = impl_->rng;
+        for (size_t i = 0; i < n; ++i) {
+            r = r * 1664525u + 1013904223u;
+            float a = static_cast<float>(r >> 8) * (1.0f / 16777216.0f);
+            r = r * 1664525u + 1013904223u;
+            float b = static_cast<float>(r >> 8) * (1.0f / 16777216.0f);
+            out[i] += (a - b) * lsb;
+        }
+        impl_->rng = r;
     }
 
     const double rate = static_cast<double>(impl_->out_rate);

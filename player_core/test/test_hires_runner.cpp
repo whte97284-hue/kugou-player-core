@@ -162,7 +162,8 @@ int main() {
         logger.Log(L"  [独占模式实测] 初始化: " + std::wstring(exInit ? L"成功" : L"失败") +
                    L", 实际模式: " + std::wstring(ex.IsExclusiveMode() ? L"WASAPI 独占" : L"共享 (已回退)") +
                    L", 母带采样率: " + std::to_wstring(ex.GetSourceSampleRate()) +
-                   L" Hz, 设备输出: " + std::to_wstring(ex.GetOutputSampleRate()) + L" Hz" +
+                   L" Hz, 设备输出: " + std::to_wstring(ex.GetOutputSampleRate()) + L" Hz / " +
+                   std::to_wstring(ex.GetOutputBitDepth()) + L" bit" +
                    (exOpen && !ex.IsResampling() ? L" (无重采样直通)" : L" (存在重采样)"));
         if (exOpen) {
             ex.Play();

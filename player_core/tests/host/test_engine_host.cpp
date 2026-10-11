@@ -35,8 +35,10 @@ int main(int argc, char** argv) {
     Check("Init(独占) 成功 (不支持独占时自动回退共享)", eng.Init(true));
     Check("打开 24bit/96k FLAC", eng.OpenFile(hires));
     Check("源采样率识别为 96000", eng.GetSourceSampleRate() == 96000, std::to_string(eng.GetSourceSampleRate()));
-    Check("独占模式下设备按原生 96k 重建,无重采样", !eng.IsExclusiveMode() || !eng.IsResampling(),
-          std::string(eng.IsExclusiveMode() ? "独占" : "共享(回退)") + " 输出 " + std::to_string(eng.GetOutputSampleRate()));
+    Check("输出链路如实报告 (重采样标志与采样率一致)",
+          eng.IsResampling() == (eng.GetSourceSampleRate() != eng.GetOutputSampleRate()) && eng.GetOutputBitDepth() > 0,
+          std::string(eng.IsExclusiveMode() ? "独占" : "共享") + " 输出 " + std::to_string(eng.GetOutputSampleRate()) + "Hz/" +
+              std::to_string(eng.GetOutputBitDepth()) + "bit");
     Check("时长 = 4.000s (来自解析内核,无需整文件扫描)", std::fabs(eng.GetDurationSeconds() - 4.0) < 0.01, F(eng.GetDurationSeconds()));
 
     std::printf("\n[2] 播放 / 位置 / 频谱 / Seek\n");
