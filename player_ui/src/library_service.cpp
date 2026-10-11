@@ -111,8 +111,15 @@ public:
     QElapsedTimer clock;
 };
 
+QString LibraryService::dataDir() {
+    QString d = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir().mkpath(d);
+    return d;
+}
+
 LibraryService::LibraryService(QObject* parent) : QObject(parent) {
     g_instance = this;
+    pending_ = std::make_shared<std::vector<EncryptedFileInfo>>();
     snap_ = std::make_shared<LibrarySnapshot>();
     QSettings s;
     folders_ = s.value("library/folders").toStringList();
@@ -211,8 +218,9 @@ void LibraryService::startScan() {
     job->pipeline.SetLazyCoverExtract(true);
     job->pipeline.SetScanCacheFile((dataDir + "/scan.cache").toStdWString());
     job->pipeline.SetTargetLibraryDir((dataDir + "/decoded").toStdWString());
-    QString mask = QCoreApplication::applicationDirPath() + "/tools/kgm/kgm.mask";
-    if (QFileInfo::exists(mask)) job->pipeline.SetKgmMaskPath(mask.toStdWString());
+    // 加密源:默认只收集,由界面询问后再解密;产物索引让已解密的文件下次直接入库
+    job->pipeline.SetDecryptPolicy(autoDecrypt_ ? DecryptPolicy::Auto : DecryptPolicy::Ask);
+    job->pipeline.SetDecryptIndexFile((dataDir + "/decrypt.index").toStdWString());
     for (const QString& f : folders_) job->pipeline.AddInputPath(f.toStdWString());
     job->clock.start();
 
@@ -265,6 +273,10 @@ void LibraryService::finishScan(std::shared_ptr<LibrarySnapshot> snap, const Ing
     scanning_ = false;
     progress_ = 1.0;
     scanFile_.clear();
+    if (!sum.cancelled) {
+        pending_ = std::make_shared<std::vector<EncryptedFileInfo>>(sum.encrypted_pending);
+        emit pendingEncryptedChanged();
+    }
 
     const int tracks = static_cast<int>(snap->catalog.GetAllTracks().size());
     const int albums = static_cast<int>(snap->albums.size());

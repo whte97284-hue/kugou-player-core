@@ -162,4 +162,51 @@ for ai, (album, artist, style, pal, rate, bits, n) in enumerate(ALBUMS):
 
     if art and ai % 3 == 1:  # 部分专辑只有目录封面 cover.jpg
         open(os.path.join(d, "cover.jpg"), "wb").write(art)
+# ---------------- 加密样本:真实可解密的 NCM (带元数据与封面) + 一个 KGG (非 Windows 下工具不可用) ----------------
+try:
+    import base64, json, struct
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+    def aes_ecb(key_hex, data):
+        e = Cipher(algorithms.AES(bytes.fromhex(key_hex)), modes.ECB()).encryptor()
+        return e.update(data) + e.finalize()
+
+    def pkcs7(b):
+        n = 16 - len(b) % 16
+        return b + bytes([n]) * n
+
+    def make_ncm(path, flac_bytes, title, artist, album, cover_bytes):
+        rc4 = b"DemoKey" + os.urandom(24).hex().encode()
+        key_blob = bytes(x ^ 0x64 for x in aes_ecb("687A4852416D736F356B496E62617857", pkcs7(b"neteasecloudmusic" + rc4)))
+        meta = json.dumps({"musicName": title, "artist": [[a, 0] for a in artist.split("/")], "album": album,
+                           "bitrate": 900000, "duration": 4000, "format": "flac"}, ensure_ascii=False).encode()
+        ct = aes_ecb("2331346C6A6B5F215C5D2630553C2728", pkcs7(b"music:" + meta))
+        meta_blob = bytes(x ^ 0x63 for x in b"163 key(Don't modify):" + base64.b64encode(ct))
+        box, last, ko = list(range(256)), 0, 0
+        for i in range(256):
+            sw = box[i]
+            c = (sw + last + rc4[ko]) & 0xFF
+            ko = (ko + 1) % len(rc4)
+            box[i], box[c] = box[c], sw
+            last = c
+        ks = bytes(box[(box[(i + 1) & 0xFF] + box[(box[(i + 1) & 0xFF] + ((i + 1) & 0xFF)) & 0xFF]) & 0xFF] for i in range(256))
+        audio = bytes(b ^ ks[i & 0xFF] for i, b in enumerate(flac_bytes))
+        data = (b"CTENFDAM\x01\x70" + struct.pack("<I", len(key_blob)) + key_blob + struct.pack("<I", len(meta_blob)) +
+                meta_blob + bytes(9) + struct.pack("<I", len(cover_bytes)) + struct.pack("<I", len(cover_bytes)) +
+                cover_bytes + audio)
+        open(path, "wb").write(data)
+
+    enc_dir = os.path.join(OUT, "网易云下载")
+    os.makedirs(enc_dir, exist_ok=True)
+    for i, (title, artist) in enumerate([("起风了", "买辣椒也用券"), ("晴天", "周杰伦"), ("后来", "刘若英")]):
+        tmp = os.path.join(enc_dir, f"_tmp{i}.flac")
+        sine(tmp, 4, 44100, 16)
+        art = cover(["gradient", "sun", "bokeh"][i], [["#1b2a3a", "#8fb3c9", "#e9d8b4"], ["#2a1d14", "#d9a066", "#3a2a1c"],
+                                                       ["#2a1630", "#c98aa8", "#f2d8c9"]][i])
+        make_ncm(os.path.join(enc_dir, f"{artist} - {title}.ncm"), open(tmp, "rb").read(), title, artist, title, art)
+        os.remove(tmp)
+    open(os.path.join(enc_dir, "缓存 - 未知.kgg"), "wb").write(os.urandom(4096))
+except ImportError:
+    print("cryptography 未安装,跳过加密样本")
+
 print("demo library:", OUT)

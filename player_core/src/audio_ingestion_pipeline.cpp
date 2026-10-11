@@ -1,6 +1,7 @@
 #include "../include/audio_ingestion_pipeline.hpp"
 #include "../include/audio_tag_parser.hpp"
 #include "../include/cue_sheet.hpp"
+#include "../include/decryptor.hpp"
 #include "../include/platform_io.hpp"
 #include "../include/scan_cache.hpp"
 #include <algorithm>
@@ -13,15 +14,6 @@
 
 namespace {
 
-#pragma pack(push, 1)
-struct KgmHeaderRaw {
-    uint8_t magic[16];
-    uint32_t header_len;
-    uint32_t crypto_ver;
-    uint32_t key_derive;
-    uint8_t file_key[16];
-};
-#pragma pack(pop)
 
 std::wstring Lower(std::wstring s) {
     for (auto& ch : s) ch = static_cast<wchar_t>(std::towlower(static_cast<wint_t>(ch)));
@@ -64,16 +56,6 @@ std::wstring JoinPath(const std::wstring& dir, const std::wstring& name) {
     return dir + sep + name;
 }
 
-std::wstring SniffExt(const uint8_t* buf, size_t len) {
-    if (len >= 4 && !std::memcmp(buf, "fLaC", 4)) return L".flac";
-    if (len >= 3 && !std::memcmp(buf, "ID3", 3)) return L".mp3";
-    if (len >= 2 && buf[0] == 0xFF && (buf[1] & 0xE0) == 0xE0) return L".mp3";
-    if (len >= 4 && !std::memcmp(buf, "OggS", 4)) return L".ogg";
-    if (len >= 12 && !std::memcmp(buf, "RIFF", 4) && !std::memcmp(buf + 8, "WAVE", 4)) return L".wav";
-    if (len >= 8 && !std::memcmp(buf + 4, "ftyp", 4)) return L".m4a";
-    return L"";
-}
-
 bool IsImageExt(const std::wstring& e) { return e == L".jpg" || e == L".jpeg" || e == L".png" || e == L".webp"; }
 
 // 同目录伴生封面择优:cover > folder > front > albumart > 封面 > 目录内唯一图片
@@ -114,13 +96,12 @@ struct WorkItem {
     CueBinding cue;
 };
 
-bool IsEncryptedExt(const std::wstring& e) { return e == L".kgm" || e == L".kgma" || e == L".vpr"; }
+bool IsEncryptedExt(const std::wstring& e) { return IsEncryptedAudioExtension(e); }
 
 } // namespace
 
 // ===========================================================================
 AudioIngestionPipeline::AudioIngestionPipeline() {
-    if (platform::PathExists(L"tools/kgm/kgm.mask")) kgm_mask_path_ = L"tools/kgm/kgm.mask";
     target_lib_dir_ = L"output";
 }
 
@@ -137,6 +118,17 @@ void AudioIngestionPipeline::SetTargetLibraryDir(const std::wstring& dir) {
 void AudioIngestionPipeline::SetKgmMaskPath(const std::wstring& maskPath) {
     std::lock_guard<std::mutex> lock(pipeline_mutex_);
     kgm_mask_path_ = maskPath;
+    DecryptorRegistry::Instance().SetKgmMaskPath(maskPath);
+}
+
+void AudioIngestionPipeline::SetDecryptPolicy(DecryptPolicy policy) {
+    std::lock_guard<std::mutex> lock(pipeline_mutex_);
+    decrypt_policy_ = policy;
+}
+
+void AudioIngestionPipeline::SetDecryptIndexFile(const std::wstring& path) {
+    std::lock_guard<std::mutex> lock(pipeline_mutex_);
+    decrypt_index_path_ = path;
 }
 
 void AudioIngestionPipeline::SetThreadCount(size_t threads) {
@@ -181,86 +173,7 @@ IngestionSummary AudioIngestionPipeline::GetLastSummary() const {
 // ===========================================================================
 void AudioIngestionPipeline::KgmDecryptBlock(uint8_t* data, size_t len, uint64_t fileOffset, const uint8_t key17[17],
                                              const uint8_t* mask, uint64_t maskLen) {
-    // 原始逐半字节算法:t = c ^ k; low = (m ^ t) & 0xF; high = ((t >> 4) ^ (m >> 4) ^ low) & 0xF
-    // 代数化简后等价于:x = c ^ k ^ m; out = x ^ (x << 4)  (取低 8 位)
-    size_t ki = static_cast<size_t>(fileOffset % 17);
-    uint64_t mi = fileOffset % maskLen;
-    for (size_t i = 0; i < len; ++i) {
-        uint8_t x = static_cast<uint8_t>(data[i] ^ key17[ki] ^ mask[mi]);
-        data[i] = static_cast<uint8_t>(x ^ (x << 4));
-        if (++ki == 17) ki = 0;
-        if (++mi == maskLen) mi = 0;
-    }
-}
-
-bool AudioIngestionPipeline::DecryptKgm(const std::wstring& src, const std::wstring& targetDir,
-                                        std::wstring& outDecryptedPath, std::wstring& outMessage) {
-    auto mask = std::static_pointer_cast<platform::MappedFile>(mask_);
-    if (!mask || !mask->Data()) {
-        outMessage = L"KGM 掩码表缺失,无法解密";
-        return false;
-    }
-    platform::ReadOnlyFile in;
-    if (!in.Open(src, false)) {
-        outMessage = L"无法打开源文件";
-        return false;
-    }
-    KgmHeaderRaw header;
-    if (in.ReadAt(0, &header, sizeof(header)) != sizeof(header) || header.header_len < sizeof(header) ||
-        header.header_len >= in.Size()) {
-        outMessage = L"KGM 文件头损坏";
-        return false;
-    }
-    uint8_t key[17];
-    std::memcpy(key, header.file_key, 16);
-    key[16] = 0;
-
-    constexpr size_t kChunk = 1u << 20;
-    std::vector<uint8_t> buf(kChunk);
-    uint64_t payload = in.Size() - header.header_len;
-    size_t first = in.ReadAt(header.header_len, buf.data(), static_cast<size_t>(std::min<uint64_t>(kChunk, payload)));
-    if (first == 0) {
-        outMessage = L"KGM 负载为空";
-        return false;
-    }
-    KgmDecryptBlock(buf.data(), first, 0, key, mask->Data(), mask->Size());
-    std::wstring ext = SniffExt(buf.data(), first);
-    if (ext.empty()) {
-        outMessage = L"解密结果无法识别为音频 (掩码表不匹配?)";
-        return false;
-    }
-    outDecryptedPath = JoinPath(targetDir, StemOf(src) + ext);
-
-    // 增量入库:目标已存在且大小一致时跳过重复解密
-    platform::ReadOnlyFile existing;
-    if (existing.Open(outDecryptedPath, true) && existing.Size() == payload) {
-        outMessage = L"已解密 (复用现有产物)";
-        return true;
-    }
-    existing.Close();
-
-    platform::WritableFile out;
-    if (!out.Create(outDecryptedPath)) {
-        outMessage = L"无法创建输出文件";
-        return false;
-    }
-    bool ok = out.Write(buf.data(), first);
-    uint64_t off = first;
-    while (ok && off < payload && !cancel_requested_.load()) {
-        size_t n = in.ReadAt(header.header_len + off, buf.data(), static_cast<size_t>(std::min<uint64_t>(kChunk, payload - off)));
-        if (n == 0) break;
-        KgmDecryptBlock(buf.data(), n, off, key, mask->Data(), mask->Size());
-        ok = out.Write(buf.data(), n);
-        off += n;
-    }
-    out.Close();
-    if (!ok || off != payload) {
-        platform::RemoveFile(outDecryptedPath); // 不留半截产物
-        outMessage = cancel_requested_.load() ? L"已取消" : L"写入失败";
-        return false;
-    }
-    outMessage = L"解密成功并持久化落盘";
-    return true;
+    ::KgmDecryptBlock(data, len, fileOffset, key17, mask, maskLen);
 }
 
 // ===========================================================================
@@ -273,20 +186,43 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
     auto t0 = Clock::now();
 
     std::vector<std::wstring> inputs;
-    std::wstring targetDir, maskPath;
+    std::wstring targetDir;
     size_t requestedThreads;
     bool lazy, splitCue;
-    std::wstring cachePath;
+    std::wstring cachePath, indexPath;
+    DecryptPolicy policy;
     {
         std::lock_guard<std::mutex> lock(pipeline_mutex_);
         inputs = input_paths_;
         targetDir = target_lib_dir_;
-        maskPath = kgm_mask_path_;
         requestedThreads = thread_count_;
         lazy = lazy_cover_extract_;
         splitCue = split_cue_;
         cachePath = scan_cache_path_;
+        policy = decrypt_policy_;
+        indexPath = decrypt_index_path_;
     }
+    // 产物本身位于扫描目录内时会被当作普通文件扫描到,加密源这边就不再重复入库
+    std::vector<std::wstring> normInputs;
+    for (const auto& in : inputs) {
+        std::wstring n = Lower(in);
+        for (auto& ch : n) if (ch == L'\\') ch = L'/';
+        if (!n.empty() && n.back() != L'/') n += L'/';
+        normInputs.push_back(n);
+    }
+    auto insideInputs = [&](const std::wstring& path) {
+        std::wstring n = Lower(path);
+        for (auto& ch : n) if (ch == L'\\') ch = L'/';
+        for (const auto& in : normInputs)
+            if (n.compare(0, in.size(), in) == 0) return true;
+        return false;
+    };
+    DecryptIndex decIndex;
+    const bool useIndex = !indexPath.empty();
+    if (useIndex) decIndex.Load(indexPath);
+    std::atomic<size_t> decryptedCount{0};
+    std::mutex pendingMutex;
+    std::vector<EncryptedFileInfo> pending;
     // 增量缓存只保存封面偏移,因此仅在惰性封面模式下启用
     const bool useCache = !cachePath.empty() && lazy;
     ScanCache cache;
@@ -372,13 +308,8 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
         return {};
     }
 
-    // 需要解密时,掩码表整个运行期只映射一次
-    bool needMask = std::any_of(items.begin(), items.end(), [](const WorkItem& w) { return IsEncryptedExt(w.ext); });
-    if (needMask && !mask_) {
-        auto m = std::make_shared<platform::MappedFile>();
-        if (!maskPath.empty() && m->Open(maskPath)) mask_ = m;
-    }
-    if (needMask && !targetDir.empty()) platform::CreateDirectories(targetDir);
+    const bool anyEncrypted = std::any_of(items.begin(), items.end(), [](const WorkItem& w) { return IsEncryptedExt(w.ext); });
+    if (anyEncrypted && policy == DecryptPolicy::Auto && !targetDir.empty()) platform::CreateDirectories(targetDir);
 
     // ---------------- 2. 存储感知并发度 ----------------
     unsigned hw = std::max(2u, std::thread::hardware_concurrency());
@@ -470,9 +401,11 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
                 if (!kgmByMagic) remember(idx, w, probed, probe, L"");
             }
 
-            if (IsEncryptedExt(w.ext) || kgmByMagic) {
+            const Decryptor* dec = DecryptorRegistry::Instance().ByExtension(w.ext);
+            if (!dec && kgmByMagic) dec = DecryptorRegistry::Instance().ById("kgm");
+            if (dec) {
                 item.was_encrypted = true;
-                std::wstring decPath, msg;
+                std::wstring msg;
                 const ScanCacheEntry* hit = lookup(w);
                 if (hit && hit->parse_ok && !hit->target_path.empty() && platform::PathExists(hit->target_path)) {
                     // 源文件未变且解密产物仍在:跳过解密与解析
@@ -482,50 +415,54 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
                     msg = L"已解密 (增量缓存命中)";
                     addTrack(hit->target_path, hit->meta, w);
                     remember(idx, w, true, hit->meta, hit->target_path);
-                } else if (DecryptKgm(w.path, targetDir, decPath, msg)) {
-                    if (!countedMiss) cacheMisses.fetch_add(1);
-                    item.target_path = decPath;
-                    item.success = true;
-                    AudioMetadata meta;
-                    bool ok = AudioTagParser::ParseFile(decPath, meta, parseOpt);
-                    bytesRead.fetch_add(meta.io_bytes_read);
-                    if (ok) addTrack(decPath, meta, w);
-                    remember(idx, w, ok, meta, decPath);
                 } else {
-                    item.success = false;
+                    // 1) 产物索引  2) 旧版本按文件名放在产物目录的结果  3) Auto 模式现场解密
+                    std::wstring product = useIndex ? decIndex.Find(w.path, w.size, w.mtime) : L"";
+                    if (product.empty() && !targetDir.empty()) {
+                        for (const wchar_t* e : {L".flac", L".mp3", L".ogg", L".m4a", L".wav"}) {
+                            std::wstring c = JoinPath(targetDir, StemOf(w.path) + e);
+                            if (platform::PathExists(c)) { product = c; break; }
+                        }
+                    }
+                    if (product.empty() && policy == DecryptPolicy::Auto) {
+                        DecryptOptions o;
+                        o.output_dir = targetDir;
+                        o.cancel = &cancel_requested_;
+                        DecryptResult dr = dec->Decrypt(w.path, o);
+                        if (dr.ok) {
+                            product = dr.output;
+                            decryptedCount.fetch_add(1);
+                            if (useIndex) decIndex.Put(w.path, w.size, w.mtime, product);
+                            msg = L"解密成功并持久化落盘";
+                        } else {
+                            msg = dr.message;
+                        }
+                    }
+                    if (!product.empty() && insideInputs(product)) {
+                        item.target_path = product;
+                        item.success = true;
+                        if (msg.empty()) msg = L"产物位于曲库目录内,按普通文件入库";
+                    } else if (!product.empty()) {
+                        if (!countedMiss) cacheMisses.fetch_add(1);
+                        AudioMetadata meta;
+                        bool ok = AudioTagParser::ParseFile(product, meta, parseOpt);
+                        bytesRead.fetch_add(meta.io_bytes_read);
+                        item.target_path = product;
+                        item.success = ok;
+                        if (ok) addTrack(product, meta, w);
+                        remember(idx, w, ok, meta, product);
+                        if (msg.empty()) msg = L"关联到已解密产物";
+                    } else if (policy == DecryptPolicy::Ask) {
+                        // 不入库 (播放器无法直接播放加密源),交给界面询问是否解密
+                        std::lock_guard<std::mutex> lock(pendingMutex);
+                        pending.push_back({w.path, dec->Id(), w.size, w.mtime});
+                        item.success = true;
+                        msg = L"待解密";
+                    } else {
+                        item.success = false;
+                    }
                 }
                 item.message = msg;
-            } else if (w.ext == L".ncm" || w.ext == L".kgg") {
-                item.was_encrypted = true;
-                // 已有解码产物时优先关联真实音频
-                std::wstring candidate;
-                for (const wchar_t* e : {L".flac", L".mp3", L".ogg", L".m4a"}) {
-                    std::wstring c = JoinPath(targetDir, StemOf(w.path) + e);
-                    if (platform::PathExists(c)) { candidate = c; break; }
-                }
-                AudioMetadata meta;
-                if (!candidate.empty() && AudioTagParser::ParseFile(candidate, meta, parseOpt)) {
-                    item.target_path = candidate;
-                    item.message = L"关联到已有解码音频并入库";
-                    bytesRead.fetch_add(meta.io_bytes_read);
-                    addTrack(candidate, meta, w);
-                } else {
-                    AudioMetadata raw;
-                    if (const ScanCacheEntry* hit = lookup(w)) {
-                        raw = hit->meta;
-                        cacheHits.fetch_add(1);
-                    } else {
-                        AudioTagParser::ParseFile(w.path, raw, parseOpt); // NCM 头部元数据可直接解出歌名/歌手/时长
-                        bytesRead.fetch_add(raw.io_bytes_read);
-                        cacheMisses.fetch_add(1);
-                    }
-                    remember(idx, w, true, raw, L"");
-                    if (raw.format.empty()) raw.format = (w.ext == L".ncm") ? L"NCM" : L"KGG";
-                    item.target_path = w.path;
-                    item.message = raw.title.empty() ? L"入库登记待转换源" : L"入库登记待转换源 (已解出加密元数据)";
-                    addTrack(w.path, raw, w);
-                }
-                item.success = true;
             } else {
                 item.target_path = w.path;
                 AudioMetadata& meta = probe;
@@ -626,12 +563,15 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
     summary.bytes_read = bytesRead.load();
     summary.tracks_added = catalog.GetAllTracks().size();
     summary.cancelled = cancel_requested_.load();
+    summary.decrypted_count = decryptedCount.load();
+    std::sort(pending.begin(), pending.end(), [](const EncryptedFileInfo& a, const EncryptedFileInfo& b) { return a.path < b.path; });
+    summary.encrypted_pending = std::move(pending);
+    if (useIndex && summary.decrypted_count > 0) decIndex.Save(indexPath);
     summary.elapsed_seconds = std::chrono::duration<double>(Clock::now() - t0).count();
     {
         std::lock_guard<std::mutex> lock(pipeline_mutex_);
         last_summary_ = summary;
     }
-    mask_.reset();
     is_running_.store(false);
     return out;
 }

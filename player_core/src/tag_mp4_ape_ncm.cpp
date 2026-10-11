@@ -669,6 +669,11 @@ std::wstring JStr(const JVal* v) {
 
 } // namespace
 
+void Aes128EcbDecrypt(const uint8_t key[16], uint8_t* data, size_t n) {
+    Aes128Decryptor aes(key);
+    for (size_t i = 0; i + 16 <= n; i += 16) aes.DecryptBlock(data + i);
+}
+
 bool ParseNcm(Ctx& c) {
     Reader& r = c.r;
     AudioMetadata& m = c.m;

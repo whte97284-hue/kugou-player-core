@@ -7,7 +7,7 @@ OUT=${1:-build/host}
 mkdir -p "$OUT"
 CORE="src/platform_io.cpp src/tag_common.cpp src/tag_id3_mpeg.cpp src/tag_flac_ogg.cpp src/tag_riff_dsd.cpp
       src/tag_mp4_ape_ncm.cpp src/audio_tag_parser.cpp src/cue_sheet.cpp src/music_catalog.cpp src/song_cleaner.cpp
-      src/pinyin_table.cpp src/audio_ingestion_pipeline.cpp src/scan_cache.cpp"
+      src/pinyin_table.cpp src/audio_ingestion_pipeline.cpp src/scan_cache.cpp src/decryptor.cpp"
 SAN="-O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all"
 
 echo "== 生成真实样本 (ffmpeg + mutagen)"

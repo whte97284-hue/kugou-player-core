@@ -34,6 +34,20 @@ struct IngestionProgress {
     bool is_transcoding = false;
 };
 
+// 扫描遇到加密音频时的处理方式
+enum class DecryptPolicy {
+    Ask,  // 不解密:收集到 IngestionSummary::encrypted_pending,由调用方 (界面) 询问用户后再解密
+    Auto  // 扫描时直接解密 (命令行 / 测试默认)
+};
+
+// 待解密的加密源
+struct EncryptedFileInfo {
+    std::wstring path;
+    std::string kind; // 解密工具 id:"kgm" / "ncm" / "kgg"
+    uint64_t size = 0;
+    uint64_t mtime = 0;
+};
+
 struct IngestionSummary {
     size_t total_scanned = 0;
     size_t success_count = 0;
@@ -55,6 +69,8 @@ struct IngestionSummary {
     size_t cache_hits = 0;          // 增量缓存命中 (未读盘) 的文件数
     size_t cache_misses = 0;        // 实际解析的文件数
     bool cache_saved = false;
+    size_t decrypted_count = 0;                     // 本次扫描新解密的文件数
+    std::vector<EncryptedFileInfo> encrypted_pending; // Ask 模式下发现、尚无解密产物的加密源
 };
 
 class AudioIngestionPipeline {
@@ -70,6 +86,9 @@ public:
     void SetSplitCueSheets(bool split);                // 默认开启:整轨 + CUE 自动拆分为独立曲目
     // 增量扫描缓存文件 (仅惰性封面模式生效)。设置后,大小与修改时间未变的文件直接复用上次解析结果,零磁盘读取
     void SetScanCacheFile(const std::wstring& path);
+    // 加密源处理策略 (默认 Auto) 与解密产物索引文件 (源文件 → 产物,扫描时直接复用产物)
+    void SetDecryptPolicy(DecryptPolicy policy);
+    void SetDecryptIndexFile(const std::wstring& path);
 
     // 输入源管理
     void AddInputPath(const std::wstring& path);
@@ -97,8 +116,6 @@ public:
 
 private:
     struct Impl;
-    bool DecryptKgm(const std::wstring& src, const std::wstring& targetDir, std::wstring& outDecryptedPath,
-                    std::wstring& outMessage);
 
     std::wstring target_lib_dir_;
     std::wstring kgm_mask_path_;
@@ -107,11 +124,12 @@ private:
     bool lazy_cover_extract_ = false;
     bool split_cue_ = true;
     std::wstring scan_cache_path_;
+    DecryptPolicy decrypt_policy_ = DecryptPolicy::Auto;
+    std::wstring decrypt_index_path_;
 
     std::atomic<bool> is_running_{false};
     std::atomic<bool> cancel_requested_{false};
     std::thread async_worker_thread_;
     mutable std::mutex pipeline_mutex_;
     IngestionSummary last_summary_;
-    std::shared_ptr<void> mask_; // 运行期间共享的 KGM 掩码映射
 };

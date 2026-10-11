@@ -1,6 +1,7 @@
 // 跨平台集成测试:入库流水线 + 曲库 + 拼音检索 + CUE + 封面 + KGM 解密内核
 // 用法: test_core_host <fixture_dir> <work_dir> [bench_copies]
 #include "../../include/audio_ingestion_pipeline.hpp"
+#include "../../include/decryptor.hpp"
 #include "../../include/audio_tag_parser.hpp"
 #include "../../include/cue_sheet.hpp"
 #include "../../include/music_catalog.hpp"
@@ -172,6 +173,85 @@ int main(int argc, char** argv) {
             const TrackItem* t = catalog.FindByPath(kg->target_path);
             return t && t->sample_rate == 96000 && t->bits_per_sample == 24 && t->is_hires;
         }());
+    }
+
+    // NCM:原生解密 + 标签回写
+    {
+        const IngestionItemResult* n = resultOf(L"netease.ncm");
+        Check("NCM 原生解密成功", n && n->success && n->was_encrypted, n ? U8(n->message) : "未找到");
+        if (n && n->success) {
+            std::vector<uint8_t> prod = ReadAll(fs::path(U8(n->target_path)));
+            std::vector<uint8_t> src = ReadAll(fx / "ncm_source" / "plain.flac");
+            // 跳过原始 FLAC 的元数据块,比较音频帧
+            size_t pos = 4;
+            for (;;) {
+                size_t len = (size_t(src[pos + 1]) << 16) | (size_t(src[pos + 2]) << 8) | src[pos + 3];
+                bool lastBlock = src[pos] & 0x80;
+                pos += 4 + len;
+                if (lastBlock) break;
+            }
+            size_t frames = src.size() - pos;
+            Check("NCM 产物音频帧与原始 FLAC 逐字节一致",
+                  prod.size() > frames && std::equal(src.begin() + pos, src.end(), prod.end() - frames));
+            AudioMetadata pm;
+            ParseOptions po;
+            po.load_cover = true;
+            bool ok = AudioTagParser::ParseFile(W(U8(n->target_path)), pm, po);
+            Check("NCM 产物写回标题 / 歌手 / 专辑 / 封面",
+                  ok && pm.title == L"起风了" && pm.artist.find(L"林俊杰") != std::wstring::npos && pm.album == L"起风了" &&
+                      pm.has_cover,
+                  U8(pm.title + L" / " + pm.artist));
+        }
+        const Decryptor* d = DecryptorRegistry::Instance().Detect(W((lib / "kugou" / "伪装成flac的酷狗文件.flac").string()));
+        Check("解密工具注册表:按文件头识别改名的 KGM", d && std::string(d->Id()) == "kgm");
+        Check("解密工具注册表:三个内置工具 (kgm / ncm / kgg)",
+              DecryptorRegistry::Instance().ById("kgm") && DecryptorRegistry::Instance().ById("ncm") &&
+                  DecryptorRegistry::Instance().ById("kgg") && DecryptorRegistry::Instance().All().size() == 3);
+    }
+
+    // 询问模式:扫描只收集加密源,不解密、不入库;解密并写入索引后,再次扫描直接复用产物
+    {
+        fs::path idx = work / "decrypt.index";
+        auto runAsk = [&](MusicCatalog& cat) {
+            AudioIngestionPipeline p;
+            p.SetTargetLibraryDir(W((work / "decoded_ask").string()));
+            p.SetKgmMaskPath(W(maskPath.string()));
+            p.SetLazyCoverExtract(true);
+            p.SetDecryptPolicy(DecryptPolicy::Ask);
+            p.SetDecryptIndexFile(W(idx.string()));
+            p.AddInputPath(W(lib.string()));
+            p.RunSync(cat);
+            return p.GetLastSummary();
+        };
+        MusicCatalog c1;
+        IngestionSummary s1 = runAsk(c1);
+        size_t kinds[3] = {0, 0, 0};
+        for (const auto& e : s1.encrypted_pending) kinds[e.kind == "kgm" ? 0 : e.kind == "ncm" ? 1 : 2]++;
+        Check("询问模式收集到 2 个 KGM (含改名) + 1 个 NCM,且未解密", s1.encrypted_pending.size() == 3 && kinds[0] == 2 &&
+                                                                              kinds[1] == 1 && s1.decrypted_count == 0 &&
+                                                                              !fs::exists(work / "decoded_ask"),
+              std::to_string(s1.encrypted_pending.size()));
+        Check("询问模式下加密源不入库、不计为失败", c1.GetAllTracks().size() + 3 == catalog.GetAllTracks().size() &&
+                                                    s1.failed_count == sum.failed_count,
+              std::to_string(c1.GetAllTracks().size()) + " vs " + std::to_string(catalog.GetAllTracks().size()));
+        DecryptIndex index;
+        index.Load(W(idx.string()));
+        size_t ok = 0;
+        for (const auto& e : s1.encrypted_pending) {
+            DecryptOptions o;
+            o.output_dir = W((work / "decoded_ask").string());
+            DecryptResult r = DecryptorRegistry::Instance().ById(e.kind)->Decrypt(e.path, o);
+            if (r.ok) {
+                ++ok;
+                index.Put(e.path, e.size, e.mtime, r.output);
+            }
+        }
+        index.Save(W(idx.string()));
+        Check("通过注册表逐个解密待处理文件", ok == 3);
+        MusicCatalog c2;
+        IngestionSummary s2 = runAsk(c2);
+        Check("再次扫描:按索引直接入库产物,不再提示", s2.encrypted_pending.empty() && c2.GetAllTracks().size() == catalog.GetAllTracks().size(),
+              std::to_string(s2.encrypted_pending.size()));
     }
 
     // CUE

@@ -53,4 +53,13 @@ QtObject {
 
     readonly property int navWidth: 72
     readonly property int islandHeight: 84
+
+    // 字节数 → 人类可读
+    function formatBytes(b) {
+        const u = ["B", "KB", "MB", "GB", "TB"]
+        let i = 0
+        let v = Number(b)
+        while (v >= 1024 && i < u.length - 1) { v /= 1024; ++i }
+        return (i === 0 ? v : v.toFixed(v >= 100 ? 0 : 1)) + " " + u[i]
+    }
 }

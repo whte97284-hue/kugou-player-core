@@ -12,6 +12,7 @@
 #include "music_catalog.hpp"
 
 struct IngestionSummary;
+struct EncryptedFileInfo;
 
 // 一张专辑 (同一目录 + 同一专辑名 聚合),曲目指针指向所属快照中的 MusicCatalog,快照存活期间稳定
 struct AlbumInfo {
@@ -90,6 +91,11 @@ public:
     int scanTotal() const { return scanTotal_; }
     QString scanFile() const { return scanFile_; }
     QVariantMap lastScan() const { return lastScan_; }
+    // 上次扫描发现、尚未解密的加密源 (扫描结束时更新)
+    const std::vector<EncryptedFileInfo>& pendingEncrypted() const { return *pending_; }
+    // 0 = 询问 / 1 = 自动解密 / 2 = 不解密;由 DecryptService 设置,扫描时传给流水线
+    void setAutoDecrypt(bool on) { autoDecrypt_ = on; }
+    static QString dataDir();
 
     // 线程安全:获取当前快照 (持有 shared_ptr 期间快照不会被释放)
     std::shared_ptr<const LibrarySnapshot> snapshot() const;
@@ -123,6 +129,7 @@ signals:
     void progressChanged();
     void libraryChanged();
     void foldersChanged();
+    void pendingEncryptedChanged();
 
 private:
     void startScan();
@@ -142,5 +149,7 @@ private:
     QString scanFile_;
     QVariantMap lastScan_;
     bool rescanPending_ = false;
+    bool autoDecrypt_ = false;
+    std::shared_ptr<std::vector<EncryptedFileInfo>> pending_;
     std::unique_ptr<class ScanJob> job_;
 };

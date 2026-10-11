@@ -434,10 +434,30 @@ plain += bytes([padn]) * padn
 enc = Cipher(algorithms.AES(bytes.fromhex("2331346C6A6B5F215C5D2630553C2728")), modes.ECB()).encryptor()
 ct = enc.update(plain) + enc.finalize()
 meta_blob = bytes(b ^ 0x63 for b in (b"163 key(Don't modify):" + base64.b64encode(ct)))
-key_blob = bytes(128)
+# 真实可解密的 NCM:密钥块 = AES(core key, "neteasecloudmusic" + RC4 密钥) ^ 0x64,音频为 RC4 变体密钥流加密的 FLAC
+rc4_key = b"E7fT49x7dof9OKCgg9cdvhEuezy3iZCL1nFvBFd1T4uSktAJKmwZXsijPbijliionVUXXg9plTbXEclAE9Lb"
+kp = b"neteasecloudmusic" + rc4_key
+kp += bytes([16 - len(kp) % 16]) * (16 - len(kp) % 16)
+kenc = Cipher(algorithms.AES(bytes.fromhex("687A4852416D736F356B496E62617857")), modes.ECB()).encryptor()
+key_blob = bytes(b ^ 0x64 for b in kenc.update(kp) + kenc.finalize())
+box = list(range(256))
+last, ko = 0, 0
+for i in range(256):
+    sw = box[i]
+    c = (sw + last + rc4_key[ko]) & 0xFF
+    ko = (ko + 1) % len(rc4_key)
+    box[i], box[c] = box[c], sw
+    last = c
+stream = bytes(box[(box[(i + 1) & 0xFF] + box[(box[(i + 1) & 0xFF] + ((i + 1) & 0xFF)) & 0xFF]) & 0xFF] for i in range(256))
+NCM_SRC = os.path.join(OUT, "ncm_source")
+os.makedirs(NCM_SRC, exist_ok=True)
+ncm_plain_path = os.path.join(NCM_SRC, "plain.flac")
+sine(ncm_plain_path, 2, 44100, 2, ["-c:a", "flac"])
+ncm_plain = open(ncm_plain_path, "rb").read()
+ncm_audio = bytes(b ^ stream[i & 0xFF] for i, b in enumerate(ncm_plain))
 ncm = b"CTENFDAM" + b"\x01\x70" + struct.pack("<I", len(key_blob)) + key_blob + \
       struct.pack("<I", len(meta_blob)) + meta_blob + b"\0\0\0\0" + bytes(5) + \
-      struct.pack("<I", len(BACK_JPG)) + BACK_JPG + bytes(4096)
+      struct.pack("<I", len(BACK_JPG)) + BACK_JPG + ncm_audio
 open(p(name), "wb").write(ncm)
 add(name, dict(format="NCM", codec="FLAC", lossless=True, title="起风了", artist="买辣椒也用券/林俊杰",
                album="起风了", duration_ms=325000, has_cover=True, cover_len=len(BACK_JPG)), dur_tol=0)

@@ -63,13 +63,33 @@ Item {
         }
     }
 
-    // 底部:音乐文件夹
-    Loader {
+    // 底部:解密工具 · 音乐文件夹
+    Column {
         x: (nav.width - nav.itemSize) / 2
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 22
-        sourceComponent: navButton
-        property var modelData: ({ key: "folder", icon: "folder", tip: qsTr("音乐文件夹") })
+        spacing: nav.itemGap
+        Loader {
+            sourceComponent: navButton
+            property var modelData: ({ key: "tools", icon: "tools", tip: qsTr("解密工具") })
+            // 曲库里有待解密文件时,图标右上角一个强调色小点
+            Rectangle {
+                x: 31; y: 11
+                width: 7; height: 7; radius: 3.5
+                color: Theme.accent
+                visible: (decrypt.pending.total || 0) > 0 && nav.current !== "tools"
+                SequentialAnimation on scale {
+                    running: parent.visible
+                    loops: Animation.Infinite
+                    ScaleAnimator { from: 1; to: 1.35; duration: 900; easing.type: Easing.InOutSine }
+                    ScaleAnimator { from: 1.35; to: 1; duration: 900; easing.type: Easing.InOutSine }
+                }
+            }
+        }
+        Loader {
+            sourceComponent: navButton
+            property var modelData: ({ key: "folder", icon: "folder", tip: qsTr("音乐文件夹") })
+        }
     }
 
     Component {
@@ -88,6 +108,12 @@ Item {
                 scale: m.pressed ? 0.88 : (m.containsMouse ? 1.08 : 1)
                 Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
                 Behavior on scale { ScaleAnimator { duration: 180; easing.type: Easing.OutBack } }
+            }
+            Rectangle {
+                anchors.fill: parent
+                radius: 14
+                color: Theme.accentAlpha(0.15)
+                visible: btn.active && nav.currentIndex < 0
             }
             Rectangle {
                 anchors.fill: parent

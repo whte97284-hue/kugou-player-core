@@ -187,6 +187,7 @@ Window {
                 allowEmpty: true
                 sourceComponent: SearchPage { bottomInset: pages.inset; onBack: root.back() }
             }
+            PageLoader { id: toolsLoader; key: "tools"; allowEmpty: true; sourceComponent: ToolsPage { bottomInset: pages.inset } }
             PageLoader {
                 id: artistLoader
                 key: "artist"
@@ -217,7 +218,7 @@ Window {
             Onboarding {
                 anchors.fill: parent
                 visible: opacity > 0
-                opacity: pages.libraryEmpty && root.view !== "playlist" && root.view !== "playlists" && root.view !== "search" ? 1 : 0
+                opacity: pages.libraryEmpty && ["playlist", "playlists", "search", "tools"].indexOf(root.view) < 0 ? 1 : 0
                 Behavior on opacity { OpacityAnimator { duration: Theme.slow; easing.type: Easing.OutCubic } }
                 onPickFolder: folderDialog.open()
             }
@@ -431,6 +432,22 @@ Window {
         Connections { target: player; function onErrorChanged() { if (player.errorText.length) errTimer.restart() } }
     }
 
+    DecryptToast {
+        z: 25
+        anchors.horizontalCenter: island.horizontalCenter
+        y: library.scanning ? 64 : 18
+        Behavior on y { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
+    }
+
+    DecryptPrompt {
+        id: decryptPrompt
+        z: 44
+    }
+    Connections {
+        target: decrypt
+        function onPromptRequested() { decryptPrompt.open() }
+    }
+
     TrackMenu {
         id: trackMenu
         z: 45
@@ -464,11 +481,18 @@ Window {
         anchors.fill: parent
         z: 60
         keys: ["text/uri-list"]
+        enabled: root.view !== "tools"
         onDropped: (d) => {
             if (!d.hasUrls) return
-            const urls = []
-            for (let i = 0; i < d.urls.length; ++i) urls.push(d.urls[i])
-            library.addFolderUrls(urls)
+            // 加密音频交给解密工具,其余 (文件夹 / 普通音频) 加入曲库
+            const enc = [], other = []
+            for (let i = 0; i < d.urls.length; ++i) {
+                const u = String(d.urls[i])
+                if (/\.(kgm|kgma|vpr|ncm|kgg)$/i.test(u)) enc.push(d.urls[i])
+                else other.push(d.urls[i])
+            }
+            if (enc.length) decrypt.decryptUrls(enc)
+            if (other.length) library.addFolderUrls(other)
             d.acceptProposedAction()
         }
         Rectangle {
@@ -561,6 +585,7 @@ Window {
             if (library.albumInfo(i).title === String(t)) { player.playAlbum(i, 0); return }
     }
     function automationHideChain() { chain.shown = false }
+    function automationDecryptPrompt(on) { on ? decryptPrompt.open() : decryptPrompt.close() }
     function automationLibraryPanel(on) { on ? libraryPanel.open() : libraryPanel.close() }
     function automationGo(sec) { root.go(String(sec)) }
     function automationOpenArtist(name) { root.openArtist(library.artistIndexOf(String(name))) }

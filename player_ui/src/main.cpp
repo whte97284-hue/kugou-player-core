@@ -11,6 +11,8 @@
 #include "models.h"
 #include "player_controller.h"
 #include "playlist_service.h"
+#include "decrypt_service.h"
+#include "decryptor.hpp"
 #include "window_helper.h"
 
 // 离屏截图驱动 (开发验证用):--screenshot <输出目录>
@@ -47,7 +49,8 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
             if (!lib.folders().isEmpty()) lib.removeFolder(lib.folders().first());
         }, 2500});
     } else {
-    steps->push_back({"01_albums", [] {}, 1500});
+    steps->push_back({"00_decrypt_prompt", [] {}, 900});
+    steps->push_back({"01_albums", [call] { call("automationDecryptPrompt", false); }, 1500});
     steps->push_back({"02_album_detail", [call] { call("automationOpenAlbum", 0); }, 1500});
     steps->push_back({"03_playing", [&player, call] {
         player.playAlbum(0, 0);
@@ -89,6 +92,13 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
     }, 2400});
     steps->push_back({"12_wall", [call] { call("automationNowPlaying", false); }, 1400});
     steps->push_back({"13_wall_end", [call] { call("automationScrollEnd"); }, 1500});
+    steps->push_back({"15_tools", [call] { call("automationGo", QStringLiteral("tools")); }, 1400});
+    steps->push_back({"16_tools_decrypting", [&engine] {
+        auto* d = qobject_cast<DecryptService*>(engine.rootContext()->contextProperty("decrypt").value<QObject*>());
+        if (d) d->decryptPending();
+    }, 60});
+    steps->push_back({"17_tools_done", [] {}, 3000});
+    steps->push_back({"18_songs_after_decrypt", [call] { call("automationGo", QStringLiteral("songs")); }, 1400});
     steps->push_back({"14_small_window", [window, call] {
         call("automationHideChain");
         window->resize(980, 640);
@@ -109,11 +119,18 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         });
     };
     auto start = [run]() { (*run)(0); };
-    if (!flowDir.isEmpty()) QTimer::singleShot(800, start);
-    else if (lib.scanning()) QObject::connect(&lib, &LibraryService::scanningChanged, window, [&lib, start]() {
-        if (!lib.scanning()) QTimer::singleShot(800, start);
+    // 只在首次扫描完成后启动一次 (之后的重扫,例如解密完成触发的,不能再次启动截图序列)
+    auto started = std::make_shared<bool>(false);
+    auto once = [start, started]() {
+        if (*started) return;
+        *started = true;
+        start();
+    };
+    if (!flowDir.isEmpty()) QTimer::singleShot(800, once);
+    else if (lib.scanning()) QObject::connect(&lib, &LibraryService::scanningChanged, window, [&lib, once]() {
+        if (!lib.scanning()) QTimer::singleShot(800, once);
     });
-    else QTimer::singleShot(800, start);
+    else QTimer::singleShot(800, once);
 }
 
 int main(int argc, char* argv[]) {
@@ -131,12 +148,15 @@ int main(int argc, char* argv[]) {
         if (args[i] == "--flow") flowArg = args[i + 1];
     }
 
+    // 解密工具的外部资源 (kgm.mask / kgg-dec.exe) 与程序放在一起
+    DecryptorRegistry::Instance().SetToolsDir((QCoreApplication::applicationDirPath() + "/tools").toStdWString());
     LibraryService library;
     PlayerController player(&library);
     AlbumModel albums(&library);
     TrackListModel albumTracks(&library);
     SearchModel search(&library);
     PlaylistService playlists(&library);
+    DecryptService decrypt(&library);
     ArtistModel artists(&library);
     TrackCollectionModel songs(&library, &playlists);
     TrackCollectionModel artistTracks(&library, &playlists);
@@ -154,6 +174,7 @@ int main(int argc, char* argv[]) {
     ctx->setContextProperty("albumTracks", &albumTracks);
     ctx->setContextProperty("searchModel", &search);
     ctx->setContextProperty("playlists", &playlists);
+    ctx->setContextProperty("decrypt", &decrypt);
     ctx->setContextProperty("artistModel", &artists);
     ctx->setContextProperty("songsModel", &songs);
     ctx->setContextProperty("artistTracks", &artistTracks);
