@@ -10,10 +10,14 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
+#include <string>
 #include <iostream>
 #include <thread>
 
 struct AudioPlaybackEngine::Impl {
+    ma_context context;
+    bool context_initialized = false;
     ma_device device;
     ma_decoder decoder;
     bool device_initialized = false;
@@ -41,6 +45,15 @@ struct AudioPlaybackEngine::Impl {
     std::atomic<bool> ended_pending{false};
     std::atomic<bool> quit{false};
 };
+
+// 打开解码器:Windows 走宽字符 (_wfopen);其他平台直接传 UTF-8,不依赖进程 locale
+static ma_result OpenDecoder(const std::wstring& path, const ma_decoder_config* cfg, ma_decoder* dec) {
+#ifdef _WIN32
+    return ma_decoder_init_file_w(path.c_str(), cfg, dec);
+#else
+    return ma_decoder_init_file(AudioTagParser::WideToUtf8(path).c_str(), cfg, dec);
+#endif
+}
 
 static void MaDataCallback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
     (void)pInput;
@@ -94,14 +107,24 @@ bool AudioPlaybackEngine::InitDevice(uint32_t sampleRate, uint32_t channels, boo
         cfg.performanceProfile = ma_performance_profile_low_latency;
     }
 
-    ma_result res = ma_device_init(NULL, &cfg, &impl_->device);
+    // 开发/无声卡环境:KP_AUDIO_BACKEND=null 强制使用虚拟输出设备 (按真实时间节奏回调,不发声)
+    ma_context* ctx = NULL;
+    const char* forced = std::getenv("KP_AUDIO_BACKEND");
+    if (forced && std::string(forced) == "null") {
+        if (!impl_->context_initialized) {
+            ma_backend nullBackend[] = {ma_backend_null};
+            impl_->context_initialized = ma_context_init(nullBackend, 1, NULL, &impl_->context) == MA_SUCCESS;
+        }
+        if (impl_->context_initialized) ctx = &impl_->context;
+    }
+    ma_result res = ma_device_init(ctx, &cfg, &impl_->device);
     bool exclusiveOk = exclusive && res == MA_SUCCESS;
     if (res != MA_SUCCESS && exclusive) {
         // 声卡被占用或不支持该格式:平滑降级为共享模式
         cfg.playback.shareMode = ma_share_mode_shared;
         cfg.wasapi.usage = ma_wasapi_usage_default;
         cfg.performanceProfile = ma_performance_profile_low_latency;
-        res = ma_device_init(NULL, &cfg, &impl_->device);
+        res = ma_device_init(ctx, &cfg, &impl_->device);
     }
     if (res != MA_SUCCESS) {
         std::wcerr << L"[ERROR] 无法初始化音频设备: " << res << std::endl;
@@ -144,6 +167,10 @@ void AudioPlaybackEngine::Shutdown() {
         ma_decoder_uninit(&impl_->decoder);
         impl_->decoder_initialized = false;
     }
+    if (impl_->context_initialized) {
+        ma_context_uninit(&impl_->context);
+        impl_->context_initialized = false;
+    }
 }
 
 bool AudioPlaybackEngine::OpenFile(const std::wstring& filePath) { return OpenFile(filePath, 0.0, 0.0); }
@@ -170,7 +197,7 @@ bool AudioPlaybackEngine::OpenFile(const std::wstring& filePath, double startSec
     if (srcRate == 0) {
         ma_decoder probe;
         ma_decoder_config pc = ma_decoder_config_init(ma_format_f32, 0, 0);
-        if (ma_decoder_init_file_w(path.c_str(), &pc, &probe) == MA_SUCCESS) {
+        if (OpenDecoder(path, &pc, &probe) == MA_SUCCESS) {
             ma_format f;
             ma_uint32 ch;
             ma_decoder_get_data_format(&probe, &f, &ch, &srcRate, NULL, 0);
@@ -185,7 +212,7 @@ bool AudioPlaybackEngine::OpenFile(const std::wstring& filePath, double startSec
     ma_decoder_config dc = ma_decoder_config_init(ma_format_f32, impl_->out_channels, impl_->out_rate);
     dc.resampling.algorithm = ma_resample_algorithm_linear;
     dc.resampling.linear.lpfOrder = MA_MAX_FILTER_ORDER; // 需要重采样时使用最高阶抗混叠低通
-    ma_result res = ma_decoder_init_file_w(path.c_str(), &dc, &impl_->decoder);
+    ma_result res = OpenDecoder(path, &dc, &impl_->decoder);
     if (res != MA_SUCCESS) {
         std::wcerr << L"[ERROR] 无法解码音频文件: " << filePath << L" (错误码: " << res << L")" << std::endl;
         return false;

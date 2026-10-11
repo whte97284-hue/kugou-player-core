@@ -88,3 +88,6 @@ KugouDecoder.spec
 player_core/test/*.cache
 player_core/test/*.cache.tmp
 player_core/test/ingestion_output/
+
+# QML 前端构建目录
+build-ui/
