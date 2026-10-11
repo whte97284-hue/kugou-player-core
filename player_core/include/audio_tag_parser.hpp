@@ -56,6 +56,16 @@ struct AudioMetadata {
     // I/O 审计 (ParseFile 填写):本次解析真实发生的磁盘读取次数与字节数
     uint32_t io_read_calls = 0;
     uint64_t io_bytes_read = 0;
+
+    // 解析失败 / 特殊文件的诊断信息
+    //  open_failed      无法打开 (权限 / 路径)
+    //  unknown_format   非已知音频格式
+    //  encrypted_kgm    酷狗 KGM/KGMA 加密 (按魔数识别,扩展名写错也能认出,format = "KGMA")
+    //  encrypted_vpr    酷狗 VPR 加密 (format = "KGMA")
+    //  encrypted_qq     QQ 音乐加密 (mflac/mgg/qmc,文件尾含 QTag/STag/musicex 标记)
+    //  encrypted_unknown 文件内容为高熵随机数据,疑似未知加密
+    //  video_file       含视频轨的 MP4 等视频文件,不作为音乐入库
+    std::string error_code;
 };
 
 struct ParseOptions {

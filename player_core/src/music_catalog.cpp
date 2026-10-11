@@ -29,13 +29,65 @@ int ParseLeadingInt(const std::wstring& s) {
     return v;
 }
 
+// 是否为 CD1 / Disc 2 / FLAC / WAV / 24bit 这类不代表专辑名的目录
+bool IsGenericFolder(const std::wstring& name) {
+    std::wstring l = Lower(name);
+    static const wchar_t* const kGeneric[] = {L"flac", L"wav", L"mp3", L"ape", L"dsd", L"dsf", L"dff", L"m4a",
+                                              L"hi-res", L"hires", L"lossless", L"audio", L"music", L"scans", L"bk"};
+    for (const wchar_t* g : kGeneric)
+        if (l == g) return true;
+    size_t i = 0;
+    for (const wchar_t* pre : {L"cd", L"disc", L"disk", L"dvd"}) {
+        size_t n = std::wcslen(pre);
+        if (l.compare(0, n, pre) == 0) { i = n; break; }
+    }
+    if (i == 0) return false;
+    while (i < l.size() && (l[i] == L' ' || l[i] == L'_' || l[i] == L'.' || l[i] == L'-')) ++i;
+    if (i >= l.size()) return false;
+    for (; i < l.size(); ++i)
+        if (l[i] < L'0' || l[i] > L'9') return false;
+    return true;
+}
+
+// 无专辑标签时,以所在目录名作为专辑 (跳过 CD1 / FLAC 等通用目录名)
+std::wstring AlbumFromPath(const std::wstring& path) {
+    std::wstring dir = path;
+    for (int depth = 0; depth < 3; ++depth) {
+        size_t p = dir.find_last_of(L"\\/");
+        if (p == std::wstring::npos) return L"";
+        dir = dir.substr(0, p);
+        size_t q = dir.find_last_of(L"\\/");
+        std::wstring name = (q == std::wstring::npos) ? dir : dir.substr(q + 1);
+        if (name.empty() || (name.size() == 2 && name[1] == L':')) return L"";
+        if (!IsGenericFolder(name)) return name;
+    }
+    return L"";
+}
+
+// 文件名前导曲号:"02. xxx" / "02 - xxx" / "(01) xxx" / "Track 05"
+int TrackFromFileName(const std::wstring& name) {
+    size_t i = 0;
+    if (i < name.size() && (name[i] == L'(' || name[i] == L'[')) ++i;
+    int v = 0, digits = 0;
+    while (i < name.size() && name[i] >= L'0' && name[i] <= L'9' && digits < 3) {
+        v = v * 10 + (name[i] - L'0');
+        ++i;
+        ++digits;
+    }
+    if (digits == 0 || digits > 3 || i >= name.size()) return 0;
+    wchar_t sep = name[i];
+    if (sep == L'.' || sep == L' ' || sep == L'-' || sep == L'_' || sep == L')' || sep == L']') return v;
+    return 0;
+}
+
 } // namespace
 
 TrackItem MusicCatalog::BuildTrack(const std::wstring& filePath, const AudioMetadata& meta) {
     std::wstring fileName = FileNameOf(filePath);
 
     // 1. 元数据启发式清洗与补全
-    CleanedSongInfo cleaned = SongCleaner::Clean(meta.title, meta.artist, meta.album, fileName);
+    std::wstring rawAlbum = meta.album.empty() ? AlbumFromPath(filePath) : meta.album;
+    CleanedSongInfo cleaned = SongCleaner::Clean(meta.title, meta.artist, rawAlbum, fileName);
 
     TrackItem track;
     track.file_path = filePath;
@@ -51,6 +103,7 @@ TrackItem MusicCatalog::BuildTrack(const std::wstring& filePath, const AudioMeta
     for (auto& ch : track.format) ch = static_cast<wchar_t>(std::towupper(static_cast<wint_t>(ch)));
     track.codec = meta.codec.empty() ? track.format : meta.codec;
     track.track_no = ParseLeadingInt(meta.track_number);
+    if (track.track_no == 0) track.track_no = TrackFromFileName(fileName);
     track.disc_no = ParseLeadingInt(meta.disc_number);
 
     track.duration_ms = meta.duration_ms;

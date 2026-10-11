@@ -3,6 +3,7 @@
 #include "../include/platform_io.hpp"
 #include "tag_internal.hpp"
 #include <algorithm>
+#include <cmath>
 #include <cwctype>
 
 using namespace tagcore;
@@ -56,6 +57,37 @@ void ReadMp3Tail(Ctx& c) {
     if (!c.opt.read_id3v1) return;
     if (!c.m.title.empty() && !c.m.artist.empty()) return; // 已有完整 ID3v2,跳过尾部寻道
     ParseId3v1AndApeTail(c, nullptr, nullptr);
+}
+
+// 无法识别的文件:区分 QQ 音乐加密、未知加密 (高熵) 与普通未知格式,便于上层给出准确提示
+void ClassifyUnknown(Ctx& c) {
+    Reader& r = c.r;
+    uint64_t size = r.Size();
+    uint8_t tail[16] = {0};
+    if (size >= 16 && r.Read(size - 16, tail, 16)) {
+        if (!std::memcmp(tail + 12, "QTag", 4) || !std::memcmp(tail + 12, "STag", 4) ||
+            !std::memcmp(tail + 8, "musicex\0", 8)) {
+            c.m.error_code = "encrypted_qq";
+            return;
+        }
+    }
+    uint8_t buf[4096];
+    size_t got = r.ReadSome(0, buf, sizeof(buf));
+    if (got >= 1024) {
+        uint32_t hist[256] = {0};
+        for (size_t i = 0; i < got; ++i) hist[buf[i]]++;
+        double entropy = 0;
+        for (uint32_t h : hist) {
+            if (!h) continue;
+            double p = static_cast<double>(h) / got;
+            entropy -= p * std::log2(p);
+        }
+        if (entropy > 7.8) {
+            c.m.error_code = "encrypted_unknown";
+            return;
+        }
+    }
+    c.m.error_code = "unknown_format";
 }
 
 bool Dispatch(Ctx& c, const std::wstring& ext) {
@@ -113,6 +145,19 @@ bool Dispatch(Ctx& c, const std::wstring& ext) {
         return ok;
     }
 
+    // 酷狗加密头:按魔数识别 (扩展名被改成 .flac/.mp3 也能认出,交由入库流水线解密)
+    static const uint8_t kKgmMagic[16] = {0x7C, 0xD5, 0x32, 0xEB, 0x86, 0x02, 0x7F, 0x4B,
+                                          0xA8, 0xAF, 0xA6, 0x8E, 0x0F, 0xFF, 0x99, 0x14};
+    static const uint8_t kVprMagic[16] = {0x05, 0x28, 0xBC, 0x96, 0xE9, 0xE4, 0x5A, 0x43,
+                                          0x91, 0xAA, 0xBD, 0xD0, 0x7A, 0xF5, 0x36, 0x31};
+    if (n >= 16 && (!std::memcmp(h, kKgmMagic, 16) || !std::memcmp(h, kVprMagic, 16))) {
+        m.format = L"KGMA";
+        m.codec = L"KGM";
+        m.bits_per_sample = 16;
+        m.error_code = !std::memcmp(h, kKgmMagic, 16) ? "encrypted_kgm" : "encrypted_vpr";
+        return true;
+    }
+
     // 2. 无法通过魔数识别:按扩展名兜底
     if (ext == L".kgm" || ext == L".kgma" || ext == L".vpr") {
         m.format = L"KGMA";
@@ -128,8 +173,9 @@ bool Dispatch(Ctx& c, const std::wstring& ext) {
         m.format = L"MP3";
         bool ok = ParseMpegAudio(c, 0); // 文件头存在垃圾数据时向后搜索帧同步
         ReadMp3Tail(c);
-        return ok;
+        if (ok) return true;
     }
+    ClassifyUnknown(c);
     return false;
 }
 
@@ -152,7 +198,10 @@ bool AudioTagParser::ParseFile(const std::wstring& filePath, AudioMetadata& outM
 
 bool AudioTagParser::ParseFile(const std::wstring& filePath, AudioMetadata& outMeta, const ParseOptions& options) {
     platform::ReadOnlyFile f;
-    if (!f.Open(filePath, true)) return false;
+    if (!f.Open(filePath, true)) {
+        outMeta.error_code = "open_failed";
+        return false;
+    }
     FileSource src(f);
     Reader r(src);
     Ctx c{outMeta, options, r};

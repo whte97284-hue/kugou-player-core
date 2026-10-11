@@ -498,5 +498,17 @@ f.save()
 open(os.path.join(LIB, "jp", "readme.txt"), "w").write("not audio")
 open(os.path.join(LIB, "jp", "broken.flac"), "wb").write(b"fLaC" + os.urandom(64))
 
+# 真实库中发现的边界情况
+os.makedirs(os.path.join(LIB, "__MACOSX", "jp"), exist_ok=True)
+open(os.path.join(LIB, "__MACOSX", "jp", "._アダマス.flac"), "wb").write(b"\x00\x05\x16\x07" + bytes(200))
+open(os.path.join(LIB, "jp", "._hidden.flac"), "wb").write(b"\x00\x05\x16\x07" + bytes(200))
+os.makedirs(os.path.join(LIB, "video"), exist_ok=True)
+ff(["-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration=2", "-f", "lavfi", "-i", "sine=duration=2",
+    "-c:v", "mpeg4", "-c:a", "aac", "-shortest", os.path.join(LIB, "video", "ep10 [1080P].mp4")])
+open(os.path.join(LIB, "jp", "qq_mflac.flac"), "wb").write(os.urandom(50000) + b"\x00\x00\x01\x2cQTag")
+open(os.path.join(LIB, "jp", "random_encrypted.flac"), "wb").write(os.urandom(50000))
+os.makedirs(os.path.join(LIB, "YANKEE (Deluxe)", "CD1"), exist_ok=True)
+sine(os.path.join(LIB, "YANKEE (Deluxe)", "CD1", "02. Lemon.wav"), 2, 44100, 2, ["-c:a", "pcm_s16le"])
+
 json.dump(manifest, open(p("manifest.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 print(f"generated {len(manifest)} fixtures in {OUT}")

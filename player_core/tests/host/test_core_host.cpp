@@ -93,6 +93,9 @@ int main(int argc, char** argv) {
             enc[i] = static_cast<uint8_t>((x ^ (x << 4)) ^ key17[i % 17] ^ mask[i % mask.size()]);
         }
         std::vector<uint8_t> hdr(1024, 0);
+        static const uint8_t kKgmMagic[16] = {0x7C, 0xD5, 0x32, 0xEB, 0x86, 0x02, 0x7F, 0x4B,
+                                              0xA8, 0xAF, 0xA6, 0x8E, 0x0F, 0xFF, 0x99, 0x14};
+        std::memcpy(hdr.data(), kKgmMagic, 16);
         uint32_t hlen = 1024;
         std::memcpy(&hdr[16], &hlen, 4);
         std::memcpy(&hdr[28], key17, 16);
@@ -100,6 +103,9 @@ int main(int argc, char** argv) {
         std::ofstream o(lib / "kugou" / "放課後ティータイム - Listen!!.kgma", std::ios::binary);
         o.write(reinterpret_cast<const char*>(hdr.data()), hdr.size());
         o.write(reinterpret_cast<const char*>(enc.data()), enc.size());
+        o.close();
+        // 同样的密文,但扩展名被改成 .flac (真实库中「卫兰」一类文件)
+        fs::copy_file(lib / "kugou" / "放課後ティータイム - Listen!!.kgma", lib / "kugou" / "伪装成flac的酷狗文件.flac");
     }
 
     MusicCatalog catalog;
@@ -125,7 +131,34 @@ int main(int argc, char** argv) {
     Check("非音频文件 (readme.txt) 不进入扫描", std::none_of(results.begin(), results.end(), [](const IngestionItemResult& r) {
               return r.source_path.find(L"readme.txt") != std::wstring::npos;
           }));
-    Check("坏文件 broken.flac 解析失败但不影响整体", sum.failed_count == 1);
+    auto resultOf = [&](const wchar_t* needle) -> const IngestionItemResult* {
+        for (const auto& r : results)
+            if (r.source_path.find(needle) != std::wstring::npos) return &r;
+        return nullptr;
+    };
+    Check("__MACOSX 目录与 ._ AppleDouble 文件被过滤", !resultOf(L"__MACOSX") && !resultOf(L"._hidden"));
+    {
+        const IngestionItemResult* v = resultOf(L"ep10 [1080P].mp4");
+        Check("MP4 视频识别为视频并跳过,不计入失败", v && !v->success && sum.skipped_count == 1,
+              v ? U8(v->message) : "未扫描");
+        const IngestionItemResult* q = resultOf(L"qq_mflac.flac");
+        Check("QQ 音乐加密 (尾部 QTag) 给出明确原因", q && !q->success && q->message.find(L"QQ") != std::wstring::npos,
+              q ? U8(q->message) : "");
+        const IngestionItemResult* e = resultOf(L"random_encrypted.flac");
+        Check("高熵未知加密给出明确原因", e && !e->success && e->message.find(L"加密") != std::wstring::npos,
+              e ? U8(e->message) : "");
+        const IngestionItemResult* d = resultOf(L"伪装成flac的酷狗文件.flac");
+        Check("改名为 .flac 的 KGM 文件按魔数识别并解密", d && d->success && d->was_encrypted, d ? U8(d->message) : "");
+    }
+    Check("失败数 = broken.flac + QQ 加密 + 未知加密", sum.failed_count == 3, std::to_string(sum.failed_count));
+    {
+        const TrackItem* lemon = nullptr;
+        for (const auto& t : catalog.GetAllTracks())
+            if (t.file_name == L"02. Lemon.wav") lemon = &t;
+        Check("无标签 WAV:专辑取上级目录 (跳过 CD1)、曲号取文件名、标题去掉序号",
+              lemon && lemon->album == L"YANKEE (Deluxe)" && lemon->track_no == 2 && lemon->title == L"Lemon",
+              lemon ? U8(lemon->album + L" / " + lemon->title) + " #" + std::to_string(lemon->track_no) : "");
+    }
 
     // KGMA
     const IngestionItemResult* kg = nullptr;

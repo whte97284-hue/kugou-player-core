@@ -119,7 +119,13 @@ CleanedSongInfo SongCleaner::Clean(const std::wstring& rawTitle,
         }
     }
 
-    if (t.empty()) t = CleanTitle(fileName);
+    if (t.empty()) {
+        // 回退到文件名时必须去掉扩展名,否则标题会变成 "Lemon.wav"
+        std::wstring stem = fileName;
+        size_t dot = stem.rfind(L'.');
+        if (dot != std::wstring::npos && dot > 0) stem = stem.substr(0, dot);
+        t = CleanTitle(stem);
+    }
     if (a.empty()) a = L"未知艺术家";
     if (al.empty()) al = L"未知专辑";
 

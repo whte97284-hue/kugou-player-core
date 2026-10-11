@@ -206,7 +206,19 @@ int main() {
     logger.Log(L"\n  [压测结果指标审计]:");
     logger.Log(L"  - 全局扫描物理文件总数: " + std::to_wstring(hiresSummary.total_scanned));
     logger.Log(L"  - 成功解析入库音频总数: " + std::to_wstring(hiresSummary.success_count));
-    logger.Log(L"  - 未收录/暂不支持格式数: " + std::to_wstring(hiresSummary.failed_count) + L" (含 51 首 DSD .dff/.dsf 格式优雅旁路)");
+    // 以下数字全部来自流水线与曲库的实际统计,不写任何手工叙述
+    size_t dsdParsed = hiresCatalog.FilterByFormat(L"DSF").size() + hiresCatalog.FilterByFormat(L"DFF").size();
+    logger.Log(L"  - 解析失败数: " + std::to_wstring(hiresSummary.failed_count) +
+               L" (逐文件原因见 library_audit 输出 CSV 的 error 列)");
+    logger.Log(L"  - 跳过的非音乐文件 (视频等): " + std::to_wstring(hiresSummary.skipped_count));
+    logger.Log(L"  - 其中 DSD (DSF/DFF) 成功入库: " + std::to_wstring(dsdParsed) + L" 首");
+    logger.Log(L"  - CUE 拆分曲目: " + std::to_wstring(hiresSummary.cue_tracks) +
+               L", 入库曲目总数: " + std::to_wstring(hiresSummary.tracks_added));
+    logger.Log(L"  - 解析阶段真实读盘: " + std::to_wstring(hiresSummary.bytes_read / 1048576) + L" MB / 库体积 " +
+               std::to_wstring(hiresSummary.library_bytes / 1073741824) + L" GB");
+    logger.Log(L"  - 存储类型: " + std::wstring(hiresSummary.storage_seek_penalty == 1 ? L"机械盘" :
+                                               hiresSummary.storage_seek_penalty == 0 ? L"固态盘" : L"未知") +
+               L" (注意:若刚运行过 library_audit,文件头已在系统缓存中,本次耗时不代表冷启动)");
     logger.Log(L"  - 总耗时 (Wall Time): " + std::to_wstring(totalWallSec) + L" 秒");
     double speed = hiresSummary.total_scanned > 0 ? (hiresSummary.total_scanned / totalWallSec) : 0.0;
     logger.Log(L"  - 平均解析吞吐量: " + std::to_wstring(speed) + L" 首/秒");

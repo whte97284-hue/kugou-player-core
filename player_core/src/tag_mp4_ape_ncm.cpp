@@ -53,6 +53,8 @@ static void ForEachBox(Reader& r, uint64_t begin, uint64_t end, F&& fn) {
 
 struct Mp4Track {
     bool sound = false;
+    bool video = false;
+    char entry[5] = {0, 0, 0, 0, 0};
     uint32_t timescale = 0;
     uint64_t duration = 0;
     std::wstring codec;
@@ -215,6 +217,7 @@ static void ParseTrak(Reader& r, const Box& trak, Mp4Track& t) {
         ForEachBox(r, mdia.Body(), mdia.End(), [&](const Box& b) {
             if (b.Is("hdlr")) {
                 t.sound = r.Match(b.Body() + 8, "soun", 4);
+                t.video = r.Match(b.Body() + 8, "vide", 4);
             } else if (b.Is("mdhd")) {
                 ReadFullBoxTimes(r, b, t.timescale, t.duration);
             } else if (b.Is("minf")) {
@@ -223,7 +226,10 @@ static void ParseTrak(Reader& r, const Box& trak, Mp4Track& t) {
                     ForEachBox(r, stbl.Body(), stbl.End(), [&](const Box& stsd) {
                         if (!stsd.Is("stsd")) return true;
                         Box entry;
-                        if (ReadBox(r, stsd.Body() + 8, stsd.End(), entry)) ParseSampleEntry(r, entry, t);
+                        if (ReadBox(r, stsd.Body() + 8, stsd.End(), entry)) {
+                            std::memcpy(t.entry, entry.type, 4);
+                            if (t.sound) ParseSampleEntry(r, entry, t);
+                        }
                         return false;
                     });
                     return false;
@@ -310,6 +316,7 @@ bool ParseMp4(Ctx& c) {
     uint64_t movieDur = 0;
     uint64_t mdatBytes = 0, mdatOff = 0;
     bool sawMoov = false;
+    bool sawVideo = false;
 
     ForEachBox(r, 0, fileSize, [&](const Box& top) {
         if (top.Is("mdat")) {
@@ -320,10 +327,14 @@ bool ParseMp4(Ctx& c) {
             ForEachBox(r, top.Body(), top.End(), [&](const Box& b) {
                 if (b.Is("mvhd")) {
                     ReadFullBoxTimes(r, b, movieScale, movieDur);
-                } else if (b.Is("trak") && !haveAudio) {
+                } else if (b.Is("trak")) {
                     Mp4Track t;
                     ParseTrak(r, b, t);
-                    if (t.sound) {
+                    // 真实视频编码轨 (排除部分 m4a 用 jpeg/png 帧做章节封面的情况)
+                    if (t.video && std::memcmp(t.entry, "jpeg", 4) != 0 && std::memcmp(t.entry, "png ", 4) != 0 &&
+                        std::memcmp(t.entry, "mjp2", 4) != 0 && t.entry[0] != 0)
+                        sawVideo = true;
+                    if (t.sound && !haveAudio) {
                         audio = t;
                         haveAudio = true;
                     }
@@ -341,6 +352,11 @@ bool ParseMp4(Ctx& c) {
         return true;
     });
     if (!sawMoov) return false;
+    if (sawVideo) {
+        m.error_code = "video_file";
+        m.format = L"MP4";
+        return false;
+    }
 
     m.format = L"M4A";
     m.codec = audio.codec.empty() ? L"AAC" : audio.codec;

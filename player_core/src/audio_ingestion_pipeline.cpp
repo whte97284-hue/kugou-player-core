@@ -384,7 +384,7 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
 
     std::atomic<size_t> nextIndex{0};
     std::atomic<uint64_t> bytesRead{0};
-    std::atomic<size_t> cueTracks{0}, externalCovers{0};
+    std::atomic<size_t> cueTracks{0}, externalCovers{0}, skippedVideos{0};
     std::mutex catalogMutex, progressMutex;
     size_t progressDone = 0;
     auto progressFn = on_progress;
@@ -414,7 +414,17 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
             IngestionItemResult& item = results[idx];
             item.source_path = w.path;
 
-            if (IsEncryptedExt(w.ext)) {
+            // 扩展名不是 .kgm 但内容是酷狗加密头 (例如被改名为 .flac),同样走解密
+            AudioMetadata probe;
+            bool probed = false;
+            bool kgmByMagic = false;
+            if (!IsEncryptedExt(w.ext) && w.ext != L".ncm" && w.ext != L".kgg") {
+                probed = AudioTagParser::ParseFile(w.path, probe, parseOpt);
+                bytesRead.fetch_add(probe.io_bytes_read);
+                kgmByMagic = probed && (probe.error_code == "encrypted_kgm" || probe.error_code == "encrypted_vpr");
+            }
+
+            if (IsEncryptedExt(w.ext) || kgmByMagic) {
                 item.was_encrypted = true;
                 std::wstring decPath, msg;
                 if (DecryptKgm(w.path, targetDir, decPath, msg)) {
@@ -455,9 +465,8 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
                 item.success = true;
             } else {
                 item.target_path = w.path;
-                AudioMetadata meta;
-                if (AudioTagParser::ParseFile(w.path, meta, parseOpt)) {
-                    bytesRead.fetch_add(meta.io_bytes_read);
+                AudioMetadata& meta = probe;
+                if (probed) {
                     item.success = true;
                     if (w.cue.sheet) {
                         // CUE 整轨拆分为独立曲目
@@ -490,7 +499,19 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
                     }
                 } else {
                     item.success = false;
-                    item.message = L"元数据解析失败";
+                    const std::string& ec = meta.error_code;
+                    if (ec == "video_file") {
+                        item.message = L"视频文件,已跳过";
+                        skippedVideos.fetch_add(1);
+                    } else if (ec == "encrypted_qq") {
+                        item.message = L"QQ 音乐加密文件 (mflac/mgg),需先解密";
+                    } else if (ec == "encrypted_unknown") {
+                        item.message = L"文件内容疑似加密,无法识别";
+                    } else if (ec == "open_failed") {
+                        item.message = L"无法打开文件";
+                    } else {
+                        item.message = L"元数据解析失败";
+                    }
                 }
             }
 
@@ -525,6 +546,8 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
         if (r.was_encrypted) summary.transcoded_count++;
         out.push_back(std::move(r));
     }
+    summary.skipped_count = skippedVideos.load();
+    summary.failed_count -= summary.skipped_count; // 视频文件属于正常跳过,不计入失败
     summary.total_scanned = out.size();
     summary.cue_tracks = cueTracks.load();
     summary.external_covers = externalCovers.load();

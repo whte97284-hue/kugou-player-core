@@ -25,14 +25,42 @@
 
 namespace platform {
 
+bool IsJunkDirectoryName(const std::wstring& n) {
+    return n == L"__MACOSX" || n == L"$RECYCLE.BIN" || n == L"System Volume Information" || n == L".Trashes" ||
+           n == L".Spotlight-V100" || n == L".fseventsd";
+}
+
+bool IsJunkFileName(const std::wstring& n) {
+    return (n.size() >= 2 && n[0] == L'.' && n[1] == L'_') || n == L".DS_Store" || n == L"Thumbs.db" ||
+           n == L"desktop.ini";
+}
+
 #ifdef _WIN32
+
+// 转换为 \\?\ 扩展长度路径,突破 MAX_PATH (260) 限制。
+// 动漫原盘目录名常带完整专辑标题,嵌套两层后很容易超过 260 字符。
+std::wstring LongPath(const std::wstring& path) {
+    if (path.empty() || path.compare(0, 4, L"\\\\?\\") == 0 || path.compare(0, 4, L"\\\\.\\") == 0) return path;
+    std::wstring full = path;
+    DWORD need = GetFullPathNameW(path.c_str(), 0, NULL, NULL);
+    if (need > 0) {
+        std::wstring buf(need, L'\0');
+        DWORD got = GetFullPathNameW(path.c_str(), need, &buf[0], NULL);
+        if (got > 0 && got < need) full.assign(buf.c_str(), got);
+    }
+    for (auto& ch : full)
+        if (ch == L'/') ch = L'\\';
+    if (full.size() >= 2 && full[0] == L'\\' && full[1] == L'\\') return L"\\\\?\\UNC\\" + full.substr(2);
+    if (full.size() >= 3 && full[1] == L':') return L"\\\\?\\" + full;
+    return path;
+}
 
 ReadOnlyFile::~ReadOnlyFile() { Close(); }
 
 bool ReadOnlyFile::Open(const std::wstring& path, bool randomAccess) {
     Close();
     DWORD flags = FILE_ATTRIBUTE_NORMAL | (randomAccess ? FILE_FLAG_RANDOM_ACCESS : FILE_FLAG_SEQUENTIAL_SCAN);
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    HANDLE h = CreateFileW(LongPath(path).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                            NULL, OPEN_EXISTING, flags, NULL);
     if (h == INVALID_HANDLE_VALUE) return false;
     LARGE_INTEGER sz;
@@ -76,7 +104,7 @@ WritableFile::~WritableFile() { Close(); }
 
 bool WritableFile::Create(const std::wstring& path) {
     Close();
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+    HANDLE h = CreateFileW(LongPath(path).c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
     if (h == INVALID_HANDLE_VALUE) return false;
     handle_ = h;
@@ -107,7 +135,7 @@ MappedFile::~MappedFile() { Close(); }
 
 bool MappedFile::Open(const std::wstring& path) {
     Close();
-    HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE f = CreateFileW(LongPath(path).c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (f == INVALID_HANDLE_VALUE) return false;
     LARGE_INTEGER sz;
     if (!GetFileSizeEx(f, &sz) || sz.QuadPart == 0) {
@@ -142,7 +170,7 @@ void MappedFile::Close() {
     size_ = 0;
 }
 
-bool RemoveFile(const std::wstring& path) { return DeleteFileW(path.c_str()) != 0; }
+bool RemoveFile(const std::wstring& path) { return DeleteFileW(LongPath(path).c_str()) != 0; }
 
 bool EnumerateFilesRecursive(const std::wstring& root,
                              const std::function<bool(const std::wstring&, const std::vector<DirEntry>&)>& onDirectory) {
@@ -163,7 +191,7 @@ bool EnumerateFilesRecursive(const std::wstring& root,
         pattern += L'*';
 
         WIN32_FIND_DATAW fd;
-        HANDLE h = FindFirstFileExW(pattern.c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, NULL,
+        HANDLE h = FindFirstFileExW(LongPath(pattern).c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, NULL,
                                     FIND_FIRST_EX_LARGE_FETCH);
         if (h == INVALID_HANDLE_VALUE) continue;
         do {
@@ -171,8 +199,8 @@ bool EnumerateFilesRecursive(const std::wstring& root,
             if (name[0] == L'.' && (name[1] == 0 || (name[1] == L'.' && name[2] == 0))) continue;
             if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue; // 不跟随联接点,防止环
             if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-                subdirs.push_back(prefix + name);
-            } else {
+                if (!IsJunkDirectoryName(name)) subdirs.push_back(prefix + name);
+            } else if (!IsJunkFileName(name)) {
                 DirEntry e;
                 e.name = name;
                 e.path = prefix + name;
@@ -194,11 +222,11 @@ bool EnumerateFilesRecursive(const std::wstring& root,
 }
 
 bool PathExists(const std::wstring& path) {
-    return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+    return GetFileAttributesW(LongPath(path).c_str()) != INVALID_FILE_ATTRIBUTES;
 }
 
 bool IsDirectory(const std::wstring& path) {
-    DWORD a = GetFileAttributesW(path.c_str());
+    DWORD a = GetFileAttributesW(LongPath(path).c_str());
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
@@ -210,7 +238,7 @@ bool CreateDirectories(const std::wstring& path) {
         std::wstring parent = path.substr(0, pos);
         if (!(parent.size() == 2 && parent[1] == L':')) CreateDirectories(parent);
     }
-    return CreateDirectoryW(path.c_str(), NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
+    return CreateDirectoryW(LongPath(path).c_str(), NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
 }
 
 int QuerySeekPenalty(const std::wstring& path) {
@@ -238,6 +266,8 @@ std::string NativePath(const std::wstring& path) { return AudioTagParser::WideTo
 #else // ======================= POSIX =======================
 
 std::string NativePath(const std::wstring& path) { return AudioTagParser::WideToUtf8(path); }
+
+std::wstring LongPath(const std::wstring& path) { return path; }
 
 ReadOnlyFile::~ReadOnlyFile() { Close(); }
 
@@ -365,8 +395,8 @@ bool EnumerateFilesRecursive(const std::wstring& root,
             if (S_ISLNK(st.st_mode)) continue;
             std::wstring wname = AudioTagParser::Utf8ToWide(n);
             if (S_ISDIR(st.st_mode)) {
-                subdirs.push_back(prefix + wname);
-            } else if (S_ISREG(st.st_mode)) {
+                if (!IsJunkDirectoryName(wname)) subdirs.push_back(prefix + wname);
+            } else if (S_ISREG(st.st_mode) && !IsJunkFileName(wname)) {
                 DirEntry e;
                 e.name = wname;
                 e.path = prefix + wname;

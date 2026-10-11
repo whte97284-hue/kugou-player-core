@@ -42,7 +42,7 @@ static int Run(const std::wstring& root, const std::wstring& outPath, bool full)
     }
     std::string head = "\xEF\xBB\xBFpath,ok,format,codec,lossless,sample_rate,bits,channels,duration_s,bitrate_kbps,"
                        "title,artist,album,album_artist,year,track,has_cover,cover_mime,cover_bytes,cover_offset,"
-                       "file_mb,io_calls,io_kb,parse_ms\r\n";
+                       "file_mb,io_calls,io_kb,parse_ms,error\r\n";
     out.Write(head.data(), head.size());
 
     ParseOptions opt;
@@ -67,9 +67,9 @@ static int Run(const std::wstring& root, const std::wstring& outPath, bool full)
         line += num;
         line += Csv(m.title) + "," + Csv(m.artist) + "," + Csv(m.album) + "," + Csv(m.album_artist) + "," + Csv(m.year) +
                 "," + Csv(m.track_number) + ",";
-        std::snprintf(num, sizeof num, "%d,%s,%u,%llu,%.2f,%u,%.1f,%.2f\r\n", m.has_cover ? 1 : 0,
+        std::snprintf(num, sizeof num, "%d,%s,%u,%llu,%.2f,%u,%.1f,%.2f,%s\r\n", m.has_cover ? 1 : 0,
                       m.cover_mime_type.c_str(), m.cover_size, static_cast<unsigned long long>(m.cover_offset),
-                      f.size / 1048576.0, m.io_read_calls, m.io_bytes_read / 1024.0, ms);
+                      f.size / 1048576.0, m.io_read_calls, m.io_bytes_read / 1024.0, ms, m.error_code.c_str());
         line += num;
         out.Write(line.data(), line.size());
         if ((i + 1) % 200 == 0) std::fprintf(stderr, "  %zu / %zu\n", i + 1, files.size());

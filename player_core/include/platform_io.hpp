@@ -87,7 +87,7 @@ struct DirEntry {
     bool is_directory = false;
 };
 
-// 高速递归目录遍历。Windows 下使用 FindFirstFileExW(FindExInfoBasic + LARGE_FETCH),
+// 高速递归目录遍历 (自动跳过 IsJunkDirectoryName / IsJunkFileName 条目)。Windows 下使用 FindFirstFileExW(FindExInfoBasic + LARGE_FETCH),
 // 一次系统调用即可拿到文件名与大小,避免 std::filesystem 对每个文件的额外 stat。
 // onDirectory(dirPath, entriesOfThatDir) 在每个目录枚举完毕后回调一次 (仅含文件)。
 // 回调返回 false 时中止遍历。
@@ -101,6 +101,13 @@ bool RemoveFile(const std::wstring& path);
 
 // 探测路径所在物理磁盘是否存在寻道惩罚 (机械硬盘)。无法判断时返回 -1,机械盘 1,固态盘 0。
 int QuerySeekPenalty(const std::wstring& path);
+
+// Windows:转换为 \\?\ 扩展长度路径以突破 MAX_PATH;其他平台原样返回
+std::wstring LongPath(const std::wstring& path);
+
+// 目录遍历时应忽略的系统/垃圾条目:__MACOSX、AppleDouble (._*)、回收站、卷信息目录
+bool IsJunkDirectoryName(const std::wstring& name);
+bool IsJunkFileName(const std::wstring& name);
 
 // 宽字符路径 <-> 本地路径
 std::string NativePath(const std::wstring& path);

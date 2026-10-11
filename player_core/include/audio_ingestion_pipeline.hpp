@@ -42,6 +42,7 @@ struct IngestionSummary {
     double elapsed_seconds = 0.0;
 
     // 扩展审计指标
+    size_t skipped_count = 0;       // 正常跳过的非音乐文件 (如 MP4 视频),不计入 failed_count
     size_t tracks_added = 0;        // 实际入库曲目数 (CUE 分轨后可能多于文件数)
     size_t cue_tracks = 0;          // 由 CUE 拆分出的虚拟曲目数
     size_t external_covers = 0;     // 关联到同目录伴生封面的曲目数
