@@ -154,6 +154,25 @@ int main() {
     engine.Stop();
     AssertCheck(L"播放引擎停止", engine.GetState() == PlaybackState::Stopped);
 
+    // 独占模式实测:结果取决于声卡驱动是否支持该采样率/位深,只记录不断言
+    {
+        AudioPlaybackEngine ex;
+        bool exInit = ex.Init(true);
+        bool exOpen = exInit && ex.OpenFile(flacSample);
+        logger.Log(L"  [独占模式实测] 初始化: " + std::wstring(exInit ? L"成功" : L"失败") +
+                   L", 实际模式: " + std::wstring(ex.IsExclusiveMode() ? L"WASAPI 独占" : L"共享 (已回退)") +
+                   L", 母带采样率: " + std::to_wstring(ex.GetSourceSampleRate()) +
+                   L" Hz, 设备输出: " + std::to_wstring(ex.GetOutputSampleRate()) + L" Hz" +
+                   (exOpen && !ex.IsResampling() ? L" (无重采样直通)" : L" (存在重采样)"));
+        if (exOpen) {
+            ex.Play();
+            std::this_thread::sleep_for(std::chrono::milliseconds(800));
+            logger.Log(L"  [独占模式实测] 播放 0.8s 后位置: " + std::to_wstring(ex.GetPositionSeconds()) + L" s");
+            ex.Stop();
+        }
+        ex.Shutdown();
+    }
+
     // ========================================================================
     // 梯度 2: 全库 240GB / 4,162 实体文件多线程异步并发入库压测
     // ========================================================================

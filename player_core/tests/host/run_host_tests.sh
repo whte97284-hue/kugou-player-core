@@ -18,6 +18,9 @@ g++ -std=c++17 $SAN -pthread tests/host/tag_probe.cpp $CORE -o "$OUT/tag_probe"
 g++ -std=c++17 $SAN -pthread tests/host/test_core_host.cpp $CORE -o "$OUT/core_host"
 g++ -std=c++17 $SAN -pthread tests/host/fuzz_parser.cpp $CORE -o "$OUT/fuzz"
 g++ -std=c++17 -O2 -pthread tests/host/test_core_host.cpp $CORE -o "$OUT/core_host_o2"
+# 播放引擎:miniaudio 只启用 null 虚拟声卡后端 (无需真实音频设备)
+g++ -std=c++17 $SAN -pthread -DMA_ENABLE_ONLY_SPECIFIC_BACKENDS -DMA_ENABLE_NULL tests/host/test_engine_host.cpp \
+    src/audio_playback_engine.cpp src/fft_visualizer.cpp $CORE -o "$OUT/engine_host" -ldl -lm
 
 echo "== 1. 解析对照 (ffprobe 为基准)"
 python3 tests/host/check_fixtures.py "$OUT/tag_probe" "$OUT/fx"
@@ -25,5 +28,7 @@ echo "== 2. 入库 / 曲库 / 检索 / CUE / KGM 集成测试"
 "$OUT/core_host" "$OUT/fx" "$OUT/work"
 echo "== 3. 吞吐压测 (O2)"
 "$OUT/core_host_o2" "$OUT/fx" "$OUT/work" 165 | sed -n '/\[5\]/,$p'
-echo "== 4. 变异模糊测试"
+echo "== 4. 播放引擎 (null 虚拟声卡)"
+"$OUT/engine_host" "$OUT/fx"
+echo "== 5. 变异模糊测试"
 "$OUT/fuzz" "${FUZZ_ITERS:-500}" $(ls "$OUT"/fx/* | grep -v manifest)
