@@ -136,6 +136,7 @@ private:
     void finishScan(std::shared_ptr<LibrarySnapshot> snap, const IngestionSummary& sum);
     void saveFolders();
     static std::shared_ptr<LibrarySnapshot> BuildAlbums(std::unique_ptr<MusicCatalog> catalog);
+    static void ReleaseFreeHeap();
 
     mutable std::mutex snap_mutex_;
     std::shared_ptr<const LibrarySnapshot> snap_;

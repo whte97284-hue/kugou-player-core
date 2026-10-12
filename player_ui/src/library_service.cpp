@@ -15,6 +15,10 @@
 #include <map>
 
 #include "audio_ingestion_pipeline.hpp"
+#ifdef Q_OS_WIN
+#include <malloc.h>
+#include <windows.h>
+#endif
 #include "pinyin_table.hpp"
 
 namespace {
@@ -314,12 +318,22 @@ void LibraryService::finishScan(std::shared_ptr<LibrarySnapshot> snap, const Ing
     QMetaObject::invokeMethod(this, [this]() {
         if (scanning_) return;
         job_.reset();
+        ReleaseFreeHeap();
         if (rescanPending_) {
             rescanPending_ = false;
             if (folders_.isEmpty()) finishScan(std::make_shared<LibrarySnapshot>(), IngestionSummary{});
             else startScan();
         }
     }, Qt::QueuedConnection);
+}
+
+// 扫描时几十个线程同时解析标签,堆里会留下大量已释放的零碎块;扫描结束 (旧快照与流水线都已释放) 后
+// 把空闲块交还系统,载入大曲库后的常驻内存回到实际占用水平
+void LibraryService::ReleaseFreeHeap() {
+#ifdef Q_OS_WIN
+    _heapmin();
+    HeapCompact(GetProcessHeap(), 0);
+#endif
 }
 
 std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<MusicCatalog> catalog) {

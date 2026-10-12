@@ -5,8 +5,10 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QImageReader>
 #include <QPainter>
 #include <QRunnable>
+#include <QSaveFile>
 #include <QStandardPaths>
 #include <QtMath>
 #include <cmath>
@@ -33,10 +35,21 @@ QColor TameAccent(const QColor& in) {
 namespace {
 
 // ---------------- 内存 LRU (跨线程共享) ----------------
+// 只存缩略图的 JPEG 字节 (512px 约 40KB),不存解码后的位图 (512px 约 1MB):
+// 界面里正在显示的封面 Qt Quick 自己还持有一份位图,这里再存一份位图会让大曲库翻一遍后常驻上百 MB。
+// 命中时在工作线程里重新解码,一张 512px JPEG 只需 1~2ms
 std::mutex g_cacheMutex;
-QCache<QString, QImage>& MemCache() {
-    static QCache<QString, QImage> c(160 * 1024); // 以 KB 计,约 160MB
+QCache<QString, QByteArray>& MemCache() {
+    static QCache<QString, QByteArray> c(24 * 1024); // 以 KB 计,约 24MB,可容纳数百张缩略图
     return c;
+}
+
+QByteArray EncodeJpeg(const QImage& img) {
+    QByteArray bytes;
+    QBuffer buf(&bytes);
+    buf.open(QIODevice::WriteOnly);
+    img.save(&buf, "JPG", 90);
+    return bytes;
 }
 
 QString DiskCacheDir() {
@@ -104,21 +117,30 @@ private:
         QImage img;
         if (track) {
             QString memKey = CoverIdentity(*track) + QString::number(bucket);
+            QByteArray jpeg;
             {
                 std::lock_guard<std::mutex> lock(g_cacheMutex);
-                if (QImage* hit = MemCache().object(memKey)) img = *hit;
+                if (QByteArray* hit = MemCache().object(memKey)) jpeg = *hit;
             }
-            if (img.isNull()) {
+            if (jpeg.isEmpty()) {
                 QString diskPath = DiskCacheDir() + "/" + memKey + ".jpg";
-                if (QFile::exists(diskPath)) img.load(diskPath);
-                if (img.isNull()) {
+                QFile f(diskPath);
+                if (f.open(QIODevice::ReadOnly)) jpeg = f.readAll();
+                if (jpeg.isEmpty() || !img.loadFromData(jpeg, "JPG")) {
+                    jpeg.clear();
                     img = CoverProvider::LoadTrackCover(*track, bucket);
-                    if (!img.isNull()) img.save(diskPath, "JPG", 90);
+                    if (!img.isNull()) {
+                        jpeg = EncodeJpeg(img);
+                        QSaveFile out(diskPath);
+                        if (out.open(QIODevice::WriteOnly) && out.write(jpeg) == jpeg.size()) out.commit();
+                    }
                 }
-                if (!img.isNull()) {
+                if (!jpeg.isEmpty()) {
                     std::lock_guard<std::mutex> lock(g_cacheMutex);
-                    MemCache().insert(memKey, new QImage(img), std::max<qsizetype>(1, img.sizeInBytes() / 1024));
+                    MemCache().insert(memKey, new QByteArray(jpeg), std::max<qsizetype>(1, jpeg.size() / 1024));
                 }
+            } else {
+                img.loadFromData(jpeg, "JPG");
             }
         }
         if (img.isNull()) img = CoverProvider::Placeholder(seed.isEmpty() ? id_ : seed, bucket);
@@ -176,8 +198,20 @@ QImage CoverProvider::LoadTrackCover(const TrackItem& t, int maxEdge) {
     std::vector<uint8_t> data;
     std::string mime;
     if (!MusicCatalog::LoadCover(t, data, mime) || data.empty()) return {};
-    QImage img;
-    if (!img.loadFromData(data.data(), static_cast<int>(data.size()))) return {};
+    QByteArray bytes = QByteArray::fromRawData(reinterpret_cast<const char*>(data.data()), static_cast<qsizetype>(data.size()));
+    QBuffer buf(&bytes);
+    buf.open(QIODevice::ReadOnly);
+    QImageReader reader(&buf);
+    reader.setAutoTransform(true);
+    // 内嵌封面常见 3000px 以上:先让解码器直接按目标尺寸解码 (JPEG 走 DCT 缩放),
+    // 避免把整张原图 (3000x3000 约 36MB) 解成位图再缩小;解码器缩得较粗,预留 2 倍余量后再平滑缩放
+    const QSize full = reader.size();
+    if (full.isValid() && std::max(full.width(), full.height()) > maxEdge * 2) {
+        const double k = double(maxEdge * 2) / std::max(full.width(), full.height());
+        reader.setScaledSize(QSize(std::max(1, qRound(full.width() * k)), std::max(1, qRound(full.height() * k))));
+    }
+    QImage img = reader.read();
+    if (img.isNull()) return {};
     if (std::max(img.width(), img.height()) > maxEdge)
         img = img.scaled(maxEdge, maxEdge, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     return img.convertToFormat(QImage::Format_RGB32);
