@@ -5,8 +5,8 @@ import PlayerUi
 
 Window {
     id: root
-    width: 1120
-    height: 720
+    width: 1110
+    height: 780
     minimumWidth: 900
     minimumHeight: 600
     visible: true
@@ -126,6 +126,18 @@ Window {
         Aurora {
             anchors.fill: parent
             visible: !nowPlaying.covering
+        }
+        // 播放时首页背景透出当前专辑封面:轻度模糊、压暗,换歌时交叉淡化
+        Backdrop {
+            anchors.fill: parent
+            visible: opacity > 0 && !nowPlaying.covering
+            opacity: player.hasTrack ? 0.85 : 0
+            Behavior on opacity { NumberAnimation { duration: 900; easing.type: Easing.InOutQuad } }
+            source: player.cover
+            solid: false
+            spread: 0.035
+            sampleSize: 192
+            dim: 0.42
         }
 
         Item {
@@ -395,6 +407,7 @@ Window {
     function discLabelRect() {
         const disc = island.disc
         const r = settledRect(disc, null)
+        r.y -= islandShift.y // 岛正在进出场位移时,按停稳后的位置算
         const s = r.width * disc.labelRatio
         return Qt.rect(r.x + (r.width - s) / 2, r.y + (r.height - s) / 2, s, s)
     }
@@ -475,9 +488,20 @@ Window {
         y: root.height - height - 24
         z: 20
         // 沉浸页有自己的控制区,岛下沉隐去
-        opacity: nowPlaying.shown || (library.albumCount === 0 && !player.hasTrack) ? 0 : 1
+        readonly property bool away: nowPlaying.shown || (library.albumCount === 0 && !player.hasTrack)
+        opacity: away ? 0 : 1
         visible: opacity > 0
-        Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+        // 进出场:淡出时下沉,回来时等沉浸页淡出一点后再从下方浮上来
+        Behavior on opacity { SequentialAnimation {
+            PauseAnimation { duration: island.away ? 0 : 140 }
+            NumberAnimation { duration: island.away ? 180 : 420; easing.type: Easing.OutCubic } } }
+        transform: Translate {
+            id: islandShift
+            y: island.away ? 36 : 0
+            Behavior on y { SequentialAnimation {
+                PauseAnimation { duration: island.away ? 0 : 140 }
+                NumberAnimation { duration: island.away ? 200 : 620; easing.type: Easing.OutQuint } } }
+        }
         onChainClicked: chain.shown = !chain.shown
         onExpandRequested: nowPlaying.shown = true
     }

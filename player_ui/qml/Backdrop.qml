@@ -6,6 +6,11 @@ import PlayerUi
 Item {
     id: root
     property string source
+    // 模糊半径 (uv)、整体亮度、取样图尺寸;solid = false 时不画底色,可叠在其他背景上
+    property real spread: 0.16
+    property real dim: 0.5
+    property int sampleSize: 48
+    property bool solid: true
     property Item front: null
 
     onSourceChanged: load()
@@ -38,7 +43,7 @@ Item {
         Image {
             id: img
             source: lay.src
-            sourceSize: Qt.size(48, 48)
+            sourceSize: Qt.size(root.sampleSize, root.sampleSize)
             asynchronous: true
             visible: false
             smooth: true
@@ -54,14 +59,14 @@ Item {
                 property variant source: img
                 readonly property real aspect: width / Math.max(1, height)
                 property size crop: aspect >= 1 ? Qt.size(1, 1 / aspect) : Qt.size(aspect, 1)
-                property real spread: 0.16
-                property real dim: 0.5
+                property real spread: root.spread
+                property real dim: root.dim
                 fragmentShader: "qrc:/shaders/backdrop.frag.qsb"
             }
         }
     }
 
-    Rectangle { anchors.fill: parent; color: Theme.base }
+    Rectangle { anchors.fill: parent; color: Theme.base; visible: root.solid }
     Layer { id: a }
     Layer { id: b }
 }
