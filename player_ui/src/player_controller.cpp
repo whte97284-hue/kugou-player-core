@@ -13,10 +13,12 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QStandardPaths>
 #include <QRegularExpression>
 #include <QTimer>
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 #include <random>
 #include "audio_tag_parser.hpp"
 #include "platform_io.hpp"
@@ -785,23 +787,38 @@ void PlayerController::loadLyrics() {
     applyLyricsText(text, true);
 }
 
+// 酷狗歌词:先查本地酷狗歌词库 (.krc),没有再请求酷狗在线接口 (设置 player/onlineLyrics,默认开),
+// 在线拉到的 KRC 缓存到应用数据目录 lyrics/,下次直接从本地命中
 void PlayerController::loadKugouLyrics() {
     const quint64 gen = lyricsGen_;
     const std::wstring path = current_->file_path, title = current_->title, artist = current_->artist;
+    const uint32_t durationMs = current_->duration_ms;
+    const bool online = QSettings().value("player/onlineLyrics", true).toBool();
+    const std::wstring cacheDir =
+        (QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + QStringLiteral("/lyrics")).toStdWString();
     QPointer<PlayerController> self(this);
-    QThreadPool::globalInstance()->start([self, gen, path, title, artist]() {
+    QThreadPool::globalInstance()->start([self, gen, path, title, artist, durationMs, online, cacheDir]() {
         // 首次使用时探测歌词库目录,之后常驻;内部自带锁,可跨线程复用
         static lyric_core::LyricManager kugou;
+        static std::once_flag cacheOnce;
+        std::call_once(cacheOnce, [&]() { kugou.SetCacheDirectory(cacheDir); });
         lyric_core::ParsedLyrics parsed;
-        if (!kugou.LoadLyricsForTrack(path, title, artist, parsed)) return;
+        bool ok = kugou.LoadLyricsForTrack(path, title, artist, parsed);
+        if (!ok && online) ok = kugou.FetchOnline(path, title, artist, durationMs, parsed);
+        if (!ok) return;
         const QString lrc = QString::fromStdString(parsed.ToStandardLrc());
         // 酷狗歌词带每句的演唱时长,用来让当前句的填充与演唱同步 (键与 LRC 时间戳同为 10ms 精度)
+        // 外文歌的中文翻译来自 KRC 的 [language:] 标签,同样按时间戳挂到对应行
         QHash<qint64, qint64> durations;
-        for (const auto& l : parsed.lines) durations.insert(l.start_ms / 10 * 10, l.duration_ms);
-        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, lrc, durations]() {
+        QHash<qint64, QString> translations;
+        for (const auto& l : parsed.lines) {
+            durations.insert(l.start_ms / 10 * 10, l.duration_ms);
+            if (!l.translation.empty()) translations.insert(l.start_ms / 10 * 10, QString::fromStdWString(l.translation));
+        }
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, lrc, durations, translations]() {
             // 期间切了歌或重新加载过,结果作废
             if (self && self->lyricsGen_ == gen) {
-                self->applyLyricsText(lrc, false, durations);
+                self->applyLyricsText(lrc, false, durations, translations);
                 self->updateLyricIndex();
             }
         }, Qt::QueuedConnection);
@@ -810,7 +827,8 @@ void PlayerController::loadKugouLyrics() {
 
 // 解析 LRC 文本:支持一行多时间戳与 [offset:] 标签;没有时间戳的纯文本歌词按静态歌词显示。
 // wholeFileTimeline:歌词时间轴按整个音频文件计 (CUE 分轨需换算到分轨起点);酷狗歌词按单曲计,不换算
-void PlayerController::applyLyricsText(const QString& text, bool wholeFileTimeline, const QHash<qint64, qint64>& durations) {
+void PlayerController::applyLyricsText(const QString& text, bool wholeFileTimeline, const QHash<qint64, qint64>& durations,
+                                       const QHash<qint64, QString>& translations) {
     lyrics_.clear();
     lyricTimes_.clear();
     lyricIndex_ = -1;
@@ -822,7 +840,7 @@ void PlayerController::applyLyricsText(const QString& text, bool wholeFileTimeli
         qint64 offset = 0;
         auto om = offRe.match(text);
         if (om.hasMatch()) offset = om.captured(1).toLongLong();
-        struct Line { qint64 time; QString text; qint64 duration; };
+        struct Line { qint64 time; QString text; qint64 duration; QString translation; };
         std::vector<Line> lines;
         QStringList plain;
         for (const QString& line : text.split(QRegularExpression(QStringLiteral("[\\r\\n]+")))) {
@@ -842,11 +860,21 @@ void PlayerController::applyLyricsText(const QString& text, bool wholeFileTimeli
                 if (!metaRe.match(body).hasMatch()) plain << body;
                 continue;
             }
-            for (qint64 t : times) lines.push_back({t - offset, body, durations.value(t, -1)});
+            for (qint64 t : times) lines.push_back({t - offset, body, durations.value(t, -1), translations.value(t)});
         }
         if (!lines.empty()) {
             lyricsSynced_ = true;
             std::stable_sort(lines.begin(), lines.end(), [](const Line& a, const Line& b) { return a.time < b.time; });
+            // 双语 LRC:与上一句时间戳相同的第二行是翻译,并到上一句里而不是单独占一行
+            std::vector<Line> merged;
+            for (Line& l : lines) {
+                if (!merged.empty() && merged.back().time == l.time && merged.back().translation.isEmpty() && merged.back().text != l.text) {
+                    merged.back().translation = l.text;
+                    continue;
+                }
+                merged.push_back(std::move(l));
+            }
+            lines.swap(merged);
             // CUE 分轨:歌词时间轴通常按整轨计,换算到分轨起点
             qint64 shift = wholeFileTimeline && current_->is_cue_track ? static_cast<qint64>(current_->cue_start_ms) : 0;
             for (size_t i = 0; i < lines.size(); ++i) {
@@ -856,6 +884,7 @@ void PlayerController::applyLyricsText(const QString& text, bool wholeFileTimeli
                 QVariantMap m;
                 m["text"] = l.text;
                 m["time"] = static_cast<double>(l.time - shift) / 1000.0;
+                if (!l.translation.isEmpty()) m["translation"] = l.translation;
                 // 本句演唱时长 (秒):酷狗歌词自带;普通 LRC 按字数估算,且不超过到下一句的间隔
                 const qint64 gap = i + 1 < lines.size() ? lines[i + 1].time - l.time : 6000;
                 const qint64 guess = std::max<qint64>(1200, static_cast<qint64>(l.text.size()) * 260);

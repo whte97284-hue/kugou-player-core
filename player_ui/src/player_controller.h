@@ -180,7 +180,8 @@ private:
     void onFrameTimer();
     void loadLyrics();
     void loadKugouLyrics();
-    void applyLyricsText(const QString& text, bool wholeFileTimeline, const QHash<qint64, qint64>& durations = {});
+    void applyLyricsText(const QString& text, bool wholeFileTimeline, const QHash<qint64, qint64>& durations = {},
+                         const QHash<qint64, QString>& translations = {});
     void updateLyricIndex();
     void extractAccent();
     void setPlaying(bool p);
