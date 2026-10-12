@@ -205,6 +205,7 @@ int main(int argc, char* argv[]) {
     engine.addImportPath(QStringLiteral("qrc:/qt/qml"));
     engine.load(QUrl(QStringLiteral("qrc:/qt/qml/PlayerUi/qml/Main.qml")));
     if (engine.rootObjects().isEmpty()) return 1;
+    player.attachWindow(qobject_cast<QQuickWindow*>(engine.rootObjects().value(0)));
 
     if (!libraryArg.isEmpty()) library.addFolder(libraryArg);
     else library.rescan();

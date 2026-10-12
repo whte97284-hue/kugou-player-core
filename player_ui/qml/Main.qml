@@ -125,11 +125,13 @@ Window {
 
         Aurora {
             anchors.fill: parent
+            visible: !nowPlaying.covering
         }
 
         Item {
             id: pages
             anchors.fill: parent
+            visible: !nowPlaying.covering
             anchors.leftMargin: Theme.navWidth
             readonly property int inset: Theme.islandHeight + 60
             readonly property bool libraryEmpty: library.albumCount === 0
@@ -214,6 +216,7 @@ Window {
             z: 5
             onCloseRequested: shown = false
             onChainClicked: chain.shown = !chain.shown
+            onShownChanged: Qt.callLater(root.flyNowPlaying, shown)
         }
 
         SideNav {
@@ -269,11 +272,13 @@ Window {
             property real toRadius: 10
             property Item landing: null // 落点:飞行期间隐藏,落地后显示
             property Item origin: null  // 起点:飞行期间隐藏,避免同一张封面出现两份
-            XAnimator { target: flying; to: flight.toX; duration: 460; easing.type: Easing.OutQuint }
-            YAnimator { target: flying; to: flight.toY; duration: 460; easing.type: Easing.OutQuint }
-            ScaleAnimator { target: flying; to: flight.toScale; duration: 460; easing.type: Easing.OutQuint }
+            property Item waitFor: null // 落地前要等它解码完成的图片
+            property int duration: 460
+            XAnimator { target: flying; to: flight.toX; duration: flight.duration; easing.type: Easing.OutQuint }
+            YAnimator { target: flying; to: flight.toY; duration: flight.duration; easing.type: Easing.OutQuint }
+            ScaleAnimator { target: flying; to: flight.toScale; duration: flight.duration; easing.type: Easing.OutQuint }
             // 缩放会连带缩小圆角:同步补偿,让屏幕上的圆角从起点平滑过渡到落点
-            NumberAnimation { target: flying; property: "radius"; to: flight.toRadius; duration: 460; easing.type: Easing.OutQuint }
+            NumberAnimation { target: flying; property: "radius"; to: flight.toRadius; duration: flight.duration; easing.type: Easing.OutQuint }
             onFinished: handoff.start()
         }
         // 落地交接:等落点图片解码完成再显示它,随后再撤掉飞行副本 (落点自己的淡入在副本下面完成,看不出切换)
@@ -285,7 +290,7 @@ Window {
             onRunningChanged: if (running) waited = 0
             onTriggered: {
                 waited += interval
-                const img = root.imageIn(flight.landing)
+                const img = flight.waitFor
                 if (img && img.status !== Image.Ready && img.status !== Image.Error && waited < 1500) return
                 stop()
                 if (flight.landing) flight.landing.opacity = 1
@@ -294,6 +299,7 @@ Window {
                 detail.heroAway = false
                 flight.landing = null
                 flight.origin = null
+                flight.waitFor = null
                 reveal.restart()
             }
         }
@@ -321,7 +327,10 @@ Window {
         const c = page.mapToItem(root.contentItem, page.width / 2, page.height / 2)
         return Qt.rect(c.x + (p.x - c.x) / s, c.y + (p.y - c.y) / s, (q.x - p.x) / s, (q.y - p.y) / s)
     }
-    function fly(fromItem, fromPage, toItem, toPage) {
+    // opts (可选):fromRect / toRect 覆盖屏幕矩形,fromRadius / toRadius 覆盖屏幕圆角,
+    // hideFrom / hideTo = false 时飞行期间不隐藏起点 / 落点,duration 飞行时长
+    function fly(fromItem, fromPage, toItem, toPage, opts) {
+        opts = opts || {}
         // 上一段飞行还没收尾:先把它藏起的图块还原
         flight.stop()
         handoff.stop()
@@ -333,16 +342,19 @@ Window {
 
         const fromImg = imageIn(fromItem), toImg = imageIn(toItem)
         if (!fromImg || !toImg || fromItem.width <= 0 || toItem.width <= 0) return false
-        const a = settledRect(fromItem, fromPage)
-        const b = settledRect(toItem, toPage)
+        const a = opts.fromRect || settledRect(fromItem, fromPage)
+        const b = opts.toRect || settledRect(toItem, toPage)
         if (a.width <= 0 || b.width <= 0) return false
-        const fromRadius = (fromItem.radius !== undefined ? fromItem.radius : fromImg.radius) * a.width / fromItem.width
-        const toRadius = (toItem.radius !== undefined ? toItem.radius : toImg.radius) * b.width / toItem.width
+        const fromRadius = opts.fromRadius !== undefined ? opts.fromRadius
+                         : (fromItem.radius !== undefined ? fromItem.radius : fromImg.radius) * a.width / fromItem.width
+        const toRadius = opts.toRadius !== undefined ? opts.toRadius
+                       : (toItem.radius !== undefined ? toItem.radius : toImg.radius) * b.width / toItem.width
 
         const fromReady = fromImg.status === Image.Ready
         flying.loSource = fromReady ? fromImg.source : toImg.source
         flying.loDecode = fromReady ? fromImg.decodeSize : toImg.decodeSize
-        flying.hiSource = toImg.source
+        // 落点更清晰时才叠加上层 (飞向小图时不要用低分辨率版本盖住清晰的起点图)
+        flying.hiSource = toImg.decodeSize > flying.loDecode ? toImg.source : ""
         flying.hiDecode = toImg.decodeSize
         flying.width = b.width
         flying.height = b.height
@@ -350,10 +362,12 @@ Window {
         flying.y = a.y
         flying.scale = a.width / b.width
         flying.radius = fromRadius / flying.scale
-        flight.landing = toItem
-        flight.origin = fromItem
-        toItem.opacity = 0
-        fromItem.opacity = 0
+        flight.duration = opts.duration || 460
+        flight.waitFor = toImg
+        flight.landing = opts.hideTo === false ? null : toItem
+        flight.origin = opts.hideFrom === false ? null : fromItem
+        if (flight.landing) flight.landing.opacity = 0
+        if (flight.origin) flight.origin.opacity = 0
         flying.visible = true
         flight.toX = b.x
         flight.toY = b.y
@@ -361,6 +375,28 @@ Window {
         flight.toRadius = toRadius
         flight.restart()
         return true
+    }
+    // 播放岛迷你黑胶的中心标签 (封面所在的小圆) 在屏幕上的矩形
+    function discLabelRect() {
+        const disc = island.disc
+        const r = settledRect(disc, null)
+        const s = r.width * disc.labelRatio
+        return Qt.rect(r.x + (r.width - s) / 2, r.y + (r.height - s) / 2, s, s)
+    }
+    // 展开沉浸页:封面从黑胶标签里「升起」放大成大封面;收起时缩回标签
+    function flyNowPlaying(open) {
+        if (!player.hasTrack || Theme.reduced) return
+        const big = nowPlaying.coverItem
+        if (!big) return
+        if (open) {
+            const r = settledRect(big, null)
+            r.y += nowPlaying.coverSettleDy
+            const label = discLabelRect()
+            fly(island.disc, null, big, null, { fromRect: label, fromRadius: label.width / 2, toRect: r, hideFrom: false, duration: 620 })
+        } else {
+            const label = discLabelRect()
+            fly(big, null, island.disc, null, { toRect: label, toRadius: label.width / 2, hideTo: false, duration: 520 })
+        }
     }
 
     function openAlbum(index, coverItem) {

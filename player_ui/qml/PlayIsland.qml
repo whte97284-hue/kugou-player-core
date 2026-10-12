@@ -7,6 +7,7 @@ Item {
     id: island
     signal chainClicked()
     signal expandRequested()
+    readonly property Item disc: discVinyl
     height: 72
     readonly property real r: height / 2
     readonly property bool compact: width < 700
@@ -74,6 +75,7 @@ Item {
         width: 54
         height: 54
         Vinyl {
+            id: discVinyl
             anchors.fill: parent
             cover: player.cover
             spinning: player.playing

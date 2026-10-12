@@ -10,10 +10,30 @@ Item {
     property bool shown: false
     signal closeRequested()
     signal chainClicked()
+    // 共享元素飞行用:大封面,以及它此刻离停稳位置还差多少 (进场时左栏仍在上浮)
+    readonly property Item coverItem: cover
+    readonly property real coverSettleDy: -cardRise.y
+
+    // 进场错峰:左栏各行依次上浮淡入 (order 越大越晚),退场同时下沉,收起时不拖沓
+    component Rise: Item {
+        property int order: 0
+        width: parent ? parent.width : 0
+        height: childrenRect.height
+        opacity: np.shown ? 1 : 0
+        Behavior on opacity { SequentialAnimation { PauseAnimation { duration: np.shown ? 70 + order * 45 : 0 } OpacityAnimator { duration: np.shown ? 420 : 160; easing.type: Easing.OutCubic } } }
+        transform: Translate {
+            y: np.shown ? 0 : 22 + order * 6
+            Behavior on y { SequentialAnimation { PauseAnimation { duration: np.shown ? 70 + order * 45 : 0 } NumberAnimation { duration: np.shown ? 720 : 200; easing.type: Easing.OutQuint } } }
+        }
+    }
 
     opacity: shown ? 1 : 0
     visible: opacity > 0
     Behavior on opacity { OpacityAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
+    // 完全淡入后为 true:此时底下的曲库页面与极光背景被整屏盖住,可以停止绘制它们
+    property bool covering: false
+    onShownChanged: if (shown) coverDelay.restart(); else { coverDelay.stop(); covering = false }
+    Timer { id: coverDelay; interval: Theme.normal + 40; onTriggered: np.covering = true }
 
     // ---------------- 背景 ----------------
     Rectangle { anchors.fill: parent; color: Theme.base }
@@ -67,6 +87,7 @@ Item {
         id: card
         // 进场:左栏先上浮,右栏稍晚跟上;退场同步下沉
         transform: Translate {
+            id: cardRise
             y: np.shown ? 0 : 36
             Behavior on y { NumberAnimation { duration: 520; easing.type: Easing.OutQuint } }
         }
@@ -75,24 +96,46 @@ Item {
         width: np.coverSize
         height: np.columnH
 
-        SoftShadow { target: cover; spread: 40; offsetY: 24; strength: 0.95 }
-        CrossfadeCover {
-            id: cover
+        // 封面舞台:暂停时整张封面连同投影微微后退 (0.86),继续播放时带一点回弹地浮回来
+        Item {
+            id: coverStage
             width: np.coverSize
             height: np.coverSize
-            radius: 14
-            source: player.cover
-            decodeSize: 1024
-            // 随呼吸极轻微地起伏 (最多 1%),只让人「感觉」它活着
-            scale: 1 + 0.01 * player.breath
+            scale: player.playing || !player.hasTrack ? 1 : 0.86
+            Behavior on scale { ScaleAnimator { duration: player.playing ? 680 : 520; easing.type: player.playing ? Easing.OutBack : Easing.OutQuint; easing.overshoot: 1.2 } }
+            SoftShadow { target: cover; spread: 40; offsetY: player.playing ? 26 : 12; strength: player.playing ? 0.95 : 0.6
+                Behavior on offsetY { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } }
+                Behavior on strength { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } } }
+            CrossfadeCover {
+                id: cover
+                width: np.coverSize
+                height: np.coverSize
+                radius: 14
+                source: player.cover
+                decodeSize: 1024
+                // 随呼吸极轻微地起伏 (最多 1%),只让人「感觉」它活着
+                scale: 1 + 0.01 * player.breath
+            }
         }
 
         Column {
-            anchors.top: cover.bottom
+            anchors.top: coverStage.bottom
             anchors.topMargin: 26
             width: parent.width
             spacing: 0
 
+            Rise { order: 0; Column { id: titleBlock; width: parent.width
+            // 切歌:新歌名与歌手从右侧轻轻滑入
+            transform: Translate { id: titleShift }
+            Connections {
+                target: player
+                function onTrackChanged() { if (np.shown) titleIn.restart() }
+            }
+            ParallelAnimation {
+                id: titleIn
+                NumberAnimation { target: titleShift; property: "x"; from: 18; to: 0; duration: 620; easing.type: Easing.OutQuint }
+                OpacityAnimator { target: titleBlock; from: 0; to: 1; duration: 420; easing.type: Easing.OutCubic }
+            }
             Item {
                 width: parent.width
                 height: titleText.implicitHeight
@@ -128,7 +171,9 @@ Item {
                 font.family: Theme.fontFamily
                 font.pixelSize: 15
             }
+            }}
 
+            Rise { order: 1; Column { width: parent.width
             Item { width: 1; height: 22 }
             SeekBar {
                 id: seek
@@ -154,7 +199,9 @@ Item {
                     font.pixelSize: 12
                 }
             }
+            }}
 
+            Rise { order: 2; Column { width: parent.width
             Item { width: 1; height: 14 }
             Item {
                 width: parent.width
@@ -195,7 +242,9 @@ Item {
                     IconButton { icon: "next"; iconSize: 22; width: 48; height: 48; anchors.verticalCenter: parent.verticalCenter; onClicked: player.next() }
                 }
             }
+            }}
 
+            Rise { order: 3; Column { width: parent.width
             Item { width: 1; height: 16 }
             Row {
                 width: parent.width
@@ -212,7 +261,9 @@ Item {
                 }
                 Icon { anchors.verticalCenter: parent.verticalCenter; name: "volume"; size: 15; opacity: 0.45 }
             }
+            }}
 
+            Rise { order: 4; Column { width: parent.width
             Item { width: 1; height: 22 }
             // 音质小胶囊:平时只有一个点与「24/96」这类简写,安静地居中;
             // 悬停时胶囊平滑拉宽、换成完整信号链,点击展开详情
@@ -276,6 +327,7 @@ Item {
                     }
                 }
             }
+            }}
         }
     }
 
@@ -338,7 +390,8 @@ Item {
             }
         }
 
-        // 歌词
+        // 歌词:当前句停在视口上方约 1/3 处。换句时各行带错峰延迟依次跟上 (像一道波浪),
+        // 当前句随演唱从左到右逐渐点亮;手动滚动后暂停跟随,片刻后平滑回到当前句
         ListView {
             id: lyricView
             anchors.top: tabs.bottom
@@ -348,42 +401,128 @@ Item {
             clip: true
             visible: side.tab === "lyrics"
             model: player.lyrics
-            currentIndex: Math.max(0, player.lyricIndex)
             spacing: 6
-            // 无时间戳的纯文本歌词:不跟随进度,整篇以统一的浅色静态展示,可自由滚动
-            highlightRangeMode: player.lyricsSynced ? ListView.ApplyRange : ListView.NoHighlightRange
-            preferredHighlightBegin: height * 0.32
-            preferredHighlightEnd: height * 0.32 + 64
-            highlightMoveDuration: 520
-            highlightMoveVelocity: -1
+            topMargin: player.lyricsSynced ? height * anchorRatio : 0
+            bottomMargin: player.lyricsSynced ? height * 0.6 : 0
+            cacheBuffer: 3000 // 一首歌的歌词基本全部实例化,波浪动画对视口外的行也成立
             boundsBehavior: Flickable.StopAtBounds
+            readonly property real anchorRatio: 0.3
+            property bool following: true
+            property int anchoredIndex: -1
+
+            // 当前句的 Y (内容坐标) → 让它停在视口锚点处的 contentY
+            function targetFor(idx) {
+                const it = itemAtIndex(idx)
+                return it ? it.y - height * anchorRatio : NaN
+            }
+            function follow(wave) {
+                if (!player.lyricsSynced || !following || !visible) return
+                const idx = player.lyricIndex
+                if (idx < 0) { settle.stop(); contentY = -topMargin; anchoredIndex = idx; return }
+                let t = targetFor(idx)
+                if (isNaN(t)) { positionViewAtIndex(idx, ListView.Beginning); t = targetFor(idx) }
+                if (isNaN(t)) return
+                const delta = contentY - t
+                settle.stop()
+                anchoredIndex = idx
+                // 跳转 / 拖动进度条:整体平滑滑到新位置
+                if (Math.abs(delta) >= height * 0.5 && wave) { settle.to = t; settle.restart(); return }
+                contentY = t
+                // 相邻换句才做波浪;跳转 / 拖动进度条时直接到位
+                if (wave && Math.abs(delta) > 0.5 && Math.abs(delta) < height * 0.5 && !Theme.reduced) {
+                    for (let k = 0; k < contentItem.children.length; ++k) {
+                        const c = contentItem.children[k]
+                        if (c.kick) c.kick(delta, idx)
+                    }
+                }
+            }
+            function pauseFollow() {
+                following = false
+                resume.restart()
+            }
+            Timer {
+                id: resume
+                interval: 2600
+                onTriggered: {
+                    lyricView.following = true
+                    const t = lyricView.targetFor(player.lyricIndex)
+                    if (!isNaN(t) && player.lyricIndex >= 0) { settle.to = t; settle.restart() }
+                    else lyricView.follow(false)
+                }
+            }
+            NumberAnimation { id: settle; target: lyricView; property: "contentY"; duration: 760; easing.type: Easing.OutQuint }
+            SmoothScroll { flickable: lyricView; onScrolled: lyricView.pauseFollow() }
+            onMovementStarted: pauseFollow()
+            onVisibleChanged: if (visible) Qt.callLater(follow, false)
+            onCountChanged: { following = true; Qt.callLater(follow, false) }
+            onHeightChanged: Qt.callLater(follow, false)
+            Connections {
+                target: player
+                function onLyricIndexChanged() { lyricView.follow(true) }
+            }
+            Connections {
+                target: np
+                function onShownChanged() { if (np.shown) { lyricView.following = true; Qt.callLater(lyricView.follow, false) } }
+            }
+
             delegate: Item {
+                id: row
                 width: lyricView.width
                 height: line.implicitHeight + 14
                 readonly property int dist: Math.abs(index - player.lyricIndex)
                 readonly property bool current: player.lyricsSynced && index === player.lyricIndex
+                readonly property bool sung: player.lyricsSynced && index < player.lyricIndex
+
+                // 波浪:内容整体已瞬间移到新位置,本行先留在原处 (偏移 delta),
+                // 按与当前句的距离错峰延迟后再弹回;当前句及之前的行最先动
+                transform: Translate { id: lag }
+                function kick(delta, idx) {
+                    wave.stop()
+                    lag.y += delta
+                    const rel = index - idx
+                    waveDelay.duration = rel < -1 ? 0 : Math.min(9, rel + 1) * 34
+                    wave.start()
+                }
+                SequentialAnimation {
+                    id: wave
+                    PauseAnimation { id: waveDelay }
+                    NumberAnimation { target: lag; property: "y"; to: 0; duration: 760; easing.type: Easing.OutBack; easing.overshoot: 0.7 }
+                }
+
                 Text {
                     id: line
-                    width: parent.width
+                    width: Math.min(row.width, implicitWidth)
                     y: 7
                     text: modelData.text
                     wrapMode: Text.WordWrap
-                    color: current ? Theme.text : Theme.textSecondary
+                    color: Theme.text
                     font.family: Theme.fontFamily
                     font.pixelSize: player.lyricsSynced ? 24 : 19
                     font.weight: player.lyricsSynced ? Font.DemiBold : Font.Medium
                     lineHeight: 1.2
-                    opacity: !player.lyricsSynced ? 0.72 : current ? 1 : Math.max(0.22, 0.62 - dist * 0.09)
-                    scale: current || !player.lyricsSynced ? 1 : 0.94
+                    opacity: !player.lyricsSynced ? 0.72 : row.current ? 1 : Math.max(0.2, (row.sung ? 0.5 : 0.56) - row.dist * 0.08)
+                    scale: row.current || !player.lyricsSynced ? 1 : 0.94
                     transformOrigin: Item.Left
-                    Behavior on opacity { OpacityAnimator { duration: 360 } }
-                    Behavior on scale { ScaleAnimator { duration: 360; easing.type: Easing.OutCubic } }
+                    Behavior on opacity { OpacityAnimator { duration: 420; easing.type: Easing.OutCubic } }
+                    Behavior on scale { ScaleAnimator { duration: 520; easing.type: Easing.OutQuint } }
+
+                    // 当前句:未唱部分压暗,随演唱进度从左到右点亮 (交界处约 28px 柔和过渡)
+                    layer.enabled: row.current && !Theme.reduced
+                    layer.effect: ShaderEffect {
+                        readonly property real start: modelData.time
+                        readonly property real span: modelData.duration > 0 ? modelData.duration : 3
+                        property real progress: row.current ? Math.max(0, Math.min(1, (player.position + 0.12 - start) / span)) : 0
+                        property real lines: Math.max(1, line.lineCount)
+                        property real soft: 14 / Math.max(1, line.width)
+                        property real dim: 0.42
+                        fragmentShader: "qrc:/shaders/wipe.frag.qsb"
+                    }
                 }
                 MouseArea {
                     anchors.fill: parent
                     enabled: modelData.time >= 0
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: player.seek(modelData.time)
+                    onClicked: { lyricView.following = true; resume.stop(); player.seek(modelData.time) }
                 }
             }
         }

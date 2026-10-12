@@ -79,6 +79,7 @@ qt_add_shaders(KugouPlayer "shaders"
         shaders/glow.frag
         shaders/ring.frag
         shaders/tint.frag
+        shaders/wipe.frag
 )
 
 target_link_libraries(KugouPlayer PRIVATE player_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::QuickControls2 Qt6::Svg)

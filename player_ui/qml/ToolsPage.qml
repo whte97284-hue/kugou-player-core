@@ -390,7 +390,7 @@ Item {
                                 width: parent.width * 0.3
                                 color: Theme.accent
                                 XAnimator on x {
-                                    running: row.status === 1
+                                    running: row.status === 1 && row.visible
                                     from: 8; to: act.width - flow.width - 8
                                     duration: 700
                                     loops: Animation.Infinite

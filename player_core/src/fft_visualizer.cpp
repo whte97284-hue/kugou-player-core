@@ -111,7 +111,7 @@ void FftVisualizer::ComputeFft(std::vector<float>& real, std::vector<float>& ima
     }
 }
 
-std::vector<float> FftVisualizer::GetSpectrumBars() {
+std::vector<float> FftVisualizer::GetSpectrumBars(float dtSeconds) {
     std::vector<float> real, imag;
     uint32_t sr;
     size_t n;
@@ -163,14 +163,17 @@ std::vector<float> FftVisualizer::GetSpectrumBars() {
         newBars[b] = std::min(1.0f, std::max(0.0f, norm));
     }
 
-    // 时间轴平滑滤波 (Attack 快速上升 + Decay 慢速阻尼下落)
+    // 时间轴平滑滤波 (Attack 快速上升 + Decay 慢速阻尼下落);系数以 60 Hz 为基准按实际间隔换算
+    const float frames = std::min(6.0f, std::max(0.05f, dtSeconds * 60.0f));
+    const float keep = std::pow(0.4f, frames);
+    const float fall = 0.04f * frames;
     std::lock_guard<std::mutex> lock(mtx_);
     current_bars_ = newBars;
     for (size_t b = 0; b < NUM_BANDS; ++b) {
         if (newBars[b] >= smooth_bars_[b]) {
-            smooth_bars_[b] = smooth_bars_[b] * 0.4f + newBars[b] * 0.6f;
+            smooth_bars_[b] = smooth_bars_[b] * keep + newBars[b] * (1.0f - keep);
         } else {
-            smooth_bars_[b] = std::max(newBars[b], smooth_bars_[b] - 0.04f);
+            smooth_bars_[b] = std::max(newBars[b], smooth_bars_[b] - fall);
         }
     }
     return smooth_bars_;

@@ -3,10 +3,15 @@
 #include <QAbstractListModel>
 #include <QColor>
 #include <QObject>
+#include <QElapsedTimer>
+#include <QHash>
+#include <QPointer>
 #include <QTimer>
 #include <QVariantAnimation>
 #include <QVariantList>
 #include <memory>
+
+#include <QQuickWindow>
 
 #include "audio_playback_engine.hpp"
 #include "library_service.h"
@@ -80,6 +85,8 @@ class PlayerController : public QObject {
 
 public:
     explicit PlayerController(LibraryService* lib, QObject* parent = nullptr);
+    // 主窗口创建后调用一次:之后的进度 / 频谱更新由窗口每帧驱动
+    void attachWindow(QQuickWindow* window);
     ~PlayerController() override;
 
     bool hasTrack() const { return current_ != nullptr; }
@@ -170,9 +177,10 @@ private:
     void restoreSession();
     void rebuildSignalChain();
     void tick();
+    void onFrameTimer();
     void loadLyrics();
     void loadKugouLyrics();
-    void applyLyricsText(const QString& text, bool wholeFileTimeline);
+    void applyLyricsText(const QString& text, bool wholeFileTimeline, const QHash<qint64, qint64>& durations = {});
     void updateLyricIndex();
     void extractAccent();
     void setPlaying(bool p);
@@ -219,6 +227,9 @@ private:
     QVariantList spectrum_;
     QString error_;
     QTimer timer_;
+    QPointer<QQuickWindow> window_;  // 有窗口时按显示器刷新节拍推送进度与频谱 (与 vsync 对齐,高刷屏不再只有 60 帧)
+    QElapsedTimer frameClock_;
+    qint64 lastTickMs_ = -1;
     int accentRequest_ = 0;
     QVariantList lyrics_;
     std::vector<qint64> lyricTimes_; // 毫秒,相对于当前曲目起点

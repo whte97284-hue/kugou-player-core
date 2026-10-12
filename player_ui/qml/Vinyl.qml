@@ -8,6 +8,12 @@ Item {
     property string cover
     property bool spinning: false
     property int labelSize: 256
+    // 共享元素飞行读取的描述 (与 RoundedImage 同名):中心标签的封面图
+    readonly property alias status: labelImg.status
+    readonly property int decodeSize: labelSize
+    readonly property url source: labelImg.source
+    // 标签半径占唱片直径的比例 (与 vinyl.frag 的 labelR 一致)
+    readonly property real labelRatio: 0.35
 
     Image {
         id: labelImg
@@ -30,7 +36,8 @@ Item {
             duration: 1800
             loops: Animation.Infinite
             running: true
-            paused: !v.spinning
+            // 不可见 (所在页面隐藏、播放岛下沉) 时也暂停:无限动画会让整个窗口持续重绘
+            paused: !v.spinning || !v.visible
         }
     }
     ShaderEffect {
