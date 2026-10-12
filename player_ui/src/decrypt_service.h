@@ -1,4 +1,6 @@
 #pragma once
+#include <QAbstractListModel>
+#include <QHash>
 #include <QObject>
 #include <QSet>
 #include <QString>
@@ -10,6 +12,61 @@
 #include <vector>
 
 class LibraryService;
+
+// 待解密队列:曲库扫描中暂不解密的文件 + 手动导入的文件,都在这里待命
+// 支持按格式 / 状态筛选与搜索;每行状态 (待命 / 解密中 / 完成 / 失败) 单独刷新,上千行也不卡
+class DecryptQueueModel : public QAbstractListModel {
+    Q_OBJECT
+    Q_PROPERTY(QString filterKind READ filterKind WRITE setFilterKind NOTIFY filterChanged)
+    Q_PROPERTY(QString filterText READ filterText WRITE setFilterText NOTIFY filterChanged)
+    Q_PROPERTY(int count READ rowCount NOTIFY countChanged)
+public:
+    enum Roles { PathRole = Qt::UserRole + 1, NameRole, TitleRole, ArtistRole, KindRole, SizeRole, SourceRole,
+                 StatusRole, MessageRole, OutputRole };
+    enum Status { Waiting = 0, Working = 1, Done = 2, Failed = 3 };
+    struct Entry {
+        QString path, title, artist, kind, message, output;
+        qint64 size = 0;
+        quint64 mtime = 0;
+        bool fromLibrary = false;
+        int status = Waiting;
+    };
+    using QAbstractListModel::QAbstractListModel;
+    int rowCount(const QModelIndex& parent = {}) const override;
+    QVariant data(const QModelIndex& index, int role) const override;
+    QHash<int, QByteArray> roleNames() const override;
+
+    QString filterKind() const { return kind_; }
+    void setFilterKind(const QString& k);
+    QString filterText() const { return text_; }
+    void setFilterText(const QString& t);
+
+    // 全部条目 (不受筛选影响)
+    const std::vector<Entry>& entries() const { return all_; }
+    // 合并曲库待解密列表:新增的加入,已不在曲库待解密列表里的曲库条目移除 (完成 / 失败的保留到清除为止)
+    void syncLibrary(const std::vector<Entry>& lib);
+    bool add(Entry e);
+    void remove(const QString& path);
+    void setStatus(const QString& path, int status, const QString& message = {}, const QString& output = {});
+    void clearFinished();
+    // 统计:all / kgm / ncm / kgg / waiting / done / failed
+    QVariantMap counts() const;
+    // 当前筛选下可见的待命条目路径
+    QStringList visibleWaiting() const;
+
+signals:
+    void filterChanged();
+    void countChanged();
+    void statsChanged();
+
+private:
+    void refilter();
+    bool accept(const Entry& e) const;
+    std::vector<Entry> all_;
+    std::vector<int> rows_;
+    QHash<QString, int> byPath_;
+    QString kind_, text_;
+};
 
 // 解密服务:把三个解密内核 (KGM / NCM / KGG) 以「工具」的形式提供给界面
 //  · 扫描结束发现未解密文件时,按策略询问 (默认) / 自动解密 / 不打扰
@@ -33,6 +90,9 @@ class DecryptService : public QObject {
     Q_PROPERTY(QVariantList results READ results NOTIFY jobChanged)
     Q_PROPERTY(int okCount READ okCount NOTIFY jobChanged)
     Q_PROPERTY(int failCount READ failCount NOTIFY jobChanged)
+    Q_PROPERTY(QObject* queue READ queue CONSTANT)
+    // 队列统计:all / kgm / ncm / kgg / waiting / done / failed
+    Q_PROPERTY(QVariantMap stats READ stats NOTIFY statsChanged)
 
 public:
     explicit DecryptService(LibraryService* lib, QObject* parent = nullptr);
@@ -52,6 +112,17 @@ public:
     QVariantList results() const { return results_; }
     int okCount() const { return ok_; }
     int failCount() const { return fail_; }
+    QObject* queue() { return &queue_; }
+    QVariantMap stats() const { return queue_.counts(); }
+
+    // 导入文件 / 文件夹到待解密队列 (不立即解密),返回新增数量
+    Q_INVOKABLE int addUrls(const QVariantList& urls);
+    // 解密队列中所有待命 (或失败) 的条目;onlyVisible = 只处理当前筛选下可见的
+    Q_INVOKABLE void decryptQueue(bool onlyVisible = false);
+    Q_INVOKABLE void decryptPaths(const QStringList& paths);
+    Q_INVOKABLE void removeFromQueue(const QString& path);
+    Q_INVOKABLE void clearFinished();
+    Q_INVOKABLE void openOutput(const QString& path);
 
     // 解密曲库扫描发现的全部待解密文件,完成后自动重扫曲库
     Q_INVOKABLE void decryptPending();
@@ -74,6 +145,7 @@ signals:
     // 扫描发现了未解密文件且策略为「询问」
     void promptRequested();
     void finished(int ok, int failed);
+    void statsChanged();
 
 private:
     struct Item {
@@ -104,4 +176,6 @@ private:
     int fail_ = 0;
     std::thread worker_;
     std::shared_ptr<std::atomic<bool>> cancel_;
+    DecryptQueueModel queue_;
+    std::vector<Item> collect(const QVariantList& urls) const;
 };

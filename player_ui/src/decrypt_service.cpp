@@ -6,6 +6,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QSet>
 #include <QSaveFile>
 #include <QPointer>
 #include <QSettings>
@@ -15,6 +16,7 @@
 #include <map>
 
 #include "audio_ingestion_pipeline.hpp"
+#include "audio_tag_parser.hpp"
 #include "decryptor.hpp"
 #include "library_service.h"
 #include "platform_io.hpp"
@@ -24,7 +26,183 @@ QString Q(const std::wstring& w) { return QString::fromStdWString(w); }
 QString FileName(const std::wstring& p) { return QFileInfo(Q(p)).fileName(); }
 } // namespace
 
+// ============================================================================
+// 待解密队列
+// ============================================================================
+namespace {
+// 「歌手 - 歌名」式文件名拆成两部分;拆不出时整段作标题
+void SplitName(const QString& path, QString& title, QString& artist) {
+    QString stem = QFileInfo(path).completeBaseName();
+    int i = stem.indexOf(QStringLiteral(" - "));
+    if (i > 0) {
+        artist = stem.left(i).trimmed();
+        title = stem.mid(i + 3).trimmed();
+    } else {
+        title = stem;
+        artist.clear();
+    }
+}
+} // namespace
+
+int DecryptQueueModel::rowCount(const QModelIndex& parent) const { return parent.isValid() ? 0 : int(rows_.size()); }
+
+QVariant DecryptQueueModel::data(const QModelIndex& index, int role) const {
+    if (index.row() < 0 || index.row() >= rowCount()) return {};
+    const Entry& e = all_[rows_[index.row()]];
+    switch (role) {
+        case PathRole: return e.path;
+        case NameRole: return QFileInfo(e.path).fileName();
+        case TitleRole: return e.title;
+        case ArtistRole: return e.artist;
+        case KindRole: return e.kind;
+        case SizeRole: return e.size;
+        case SourceRole: return e.fromLibrary ? QStringLiteral("library") : QStringLiteral("manual");
+        case StatusRole: return e.status;
+        case MessageRole: return e.message;
+        case OutputRole: return e.output;
+    }
+    return {};
+}
+
+QHash<int, QByteArray> DecryptQueueModel::roleNames() const {
+    return {{PathRole, "path"},     {NameRole, "name"},     {TitleRole, "title"},   {ArtistRole, "artist"},
+            {KindRole, "kind"},     {SizeRole, "size"},     {SourceRole, "source"}, {StatusRole, "status"},
+            {MessageRole, "message"}, {OutputRole, "output"}};
+}
+
+void DecryptQueueModel::setFilterKind(const QString& k) {
+    if (k == kind_) return;
+    kind_ = k;
+    refilter();
+    emit filterChanged();
+}
+
+void DecryptQueueModel::setFilterText(const QString& t) {
+    if (t == text_) return;
+    text_ = t;
+    refilter();
+    emit filterChanged();
+}
+
+bool DecryptQueueModel::accept(const Entry& e) const {
+    if (kind_ == QLatin1String("failed")) {
+        if (e.status != Failed) return false;
+    } else if (kind_ == QLatin1String("done")) {
+        if (e.status != Done) return false;
+    } else if (!kind_.isEmpty() && e.kind != kind_) {
+        return false;
+    }
+    const QString q = text_.trimmed();
+    if (q.isEmpty()) return true;
+    return e.title.contains(q, Qt::CaseInsensitive) || e.artist.contains(q, Qt::CaseInsensitive) ||
+           e.path.contains(q, Qt::CaseInsensitive);
+}
+
+void DecryptQueueModel::refilter() {
+    beginResetModel();
+    rows_.clear();
+    for (int i = 0; i < int(all_.size()); ++i)
+        if (accept(all_[i])) rows_.push_back(i);
+    endResetModel();
+    emit countChanged();
+    emit statsChanged();
+}
+
+void DecryptQueueModel::syncLibrary(const std::vector<Entry>& lib) {
+    QSet<QString> keep;
+    for (const Entry& e : lib) keep.insert(e.path);
+    std::vector<Entry> next;
+    next.reserve(all_.size() + lib.size());
+    // 保留:手动导入的、仍在曲库待解密列表里的、已完成 / 失败 (留给用户查看)
+    for (const Entry& e : all_)
+        if (!e.fromLibrary || keep.contains(e.path) || e.status == Done || e.status == Failed) next.push_back(e);
+    QSet<QString> have;
+    for (const Entry& e : next) have.insert(e.path);
+    for (const Entry& e : lib)
+        if (!have.contains(e.path)) next.push_back(e);
+    all_ = std::move(next);
+    byPath_.clear();
+    for (int i = 0; i < int(all_.size()); ++i) byPath_.insert(all_[i].path, i);
+    refilter();
+}
+
+bool DecryptQueueModel::add(Entry e) {
+    auto it = byPath_.find(e.path);
+    if (it != byPath_.end()) {
+        Entry& old = all_[it.value()];
+        if (old.status == Done || old.status == Failed) old.status = Waiting; // 重新导入:回到待命
+        refilter();
+        return false;
+    }
+    byPath_.insert(e.path, int(all_.size()));
+    all_.push_back(std::move(e));
+    refilter();
+    return true;
+}
+
+void DecryptQueueModel::remove(const QString& path) {
+    auto it = byPath_.find(path);
+    if (it == byPath_.end() || all_[it.value()].status == Working) return;
+    all_.erase(all_.begin() + it.value());
+    byPath_.clear();
+    for (int i = 0; i < int(all_.size()); ++i) byPath_.insert(all_[i].path, i);
+    refilter();
+}
+
+void DecryptQueueModel::setStatus(const QString& path, int status, const QString& message, const QString& output) {
+    auto it = byPath_.find(path);
+    if (it == byPath_.end()) return;
+    Entry& e = all_[it.value()];
+    e.status = status;
+    e.message = message;
+    e.output = output;
+    // 只刷新这一行;筛选条件与状态相关时重新筛选
+    if (kind_ == QLatin1String("failed") || kind_ == QLatin1String("done")) {
+        refilter();
+        return;
+    }
+    auto r = std::find(rows_.begin(), rows_.end(), it.value());
+    if (r != rows_.end()) {
+        QModelIndex idx = index(int(r - rows_.begin()));
+        emit dataChanged(idx, idx, {StatusRole, MessageRole, OutputRole});
+    }
+    emit statsChanged();
+}
+
+void DecryptQueueModel::clearFinished() {
+    std::vector<Entry> next;
+    for (const Entry& e : all_)
+        if (e.status != Done) next.push_back(e);
+    all_ = std::move(next);
+    byPath_.clear();
+    for (int i = 0; i < int(all_.size()); ++i) byPath_.insert(all_[i].path, i);
+    refilter();
+}
+
+QVariantMap DecryptQueueModel::counts() const {
+    int kgm = 0, ncm = 0, kgg = 0, waiting = 0, done = 0, failed = 0;
+    for (const Entry& e : all_) {
+        if (e.kind == QLatin1String("kgm")) ++kgm;
+        else if (e.kind == QLatin1String("ncm")) ++ncm;
+        else if (e.kind == QLatin1String("kgg")) ++kgg;
+        if (e.status == Waiting) ++waiting;
+        else if (e.status == Done) ++done;
+        else if (e.status == Failed) ++failed;
+    }
+    return {{"all", int(all_.size())}, {"kgm", kgm}, {"ncm", ncm},     {"kgg", kgg},
+            {"waiting", waiting},      {"done", done}, {"failed", failed}};
+}
+
+QStringList DecryptQueueModel::visibleWaiting() const {
+    QStringList out;
+    for (int r : rows_)
+        if (all_[r].status == Waiting || all_[r].status == Failed) out << all_[r].path;
+    return out;
+}
+
+// ============================================================================
 DecryptService::DecryptService(LibraryService* lib, QObject* parent) : QObject(parent), lib_(lib) {
+    connect(&queue_, &DecryptQueueModel::statsChanged, this, &DecryptService::statsChanged);
     QSettings s;
     policy_ = std::clamp(s.value("decrypt/policy", 0).toInt(), 0, 2);
     outputDir_ = s.value("decrypt/outputDir").toString();
@@ -137,6 +315,18 @@ bool DecryptService::hasUnseen() const {
 }
 
 void DecryptService::onPendingChanged() {
+    std::vector<DecryptQueueModel::Entry> lib;
+    for (const auto& e : lib_->pendingEncrypted()) {
+        DecryptQueueModel::Entry q;
+        q.path = Q(e.path);
+        q.kind = QString::fromStdString(e.kind);
+        q.size = qint64(e.size);
+        q.mtime = e.mtime;
+        q.fromLibrary = true;
+        SplitName(q.path, q.title, q.artist);
+        lib.push_back(std::move(q));
+    }
+    queue_.syncLibrary(lib);
     emit pendingChanged();
     if (lib_->pendingEncrypted().empty() || busy_ || !hasUnseen()) return;
     // 自动模式也只处理新出现的文件:解密失败的不会反复重试
@@ -147,13 +337,45 @@ void DecryptService::onPendingChanged() {
 void DecryptService::dismissPending() { markSeen(); }
 
 void DecryptService::decryptPending() {
-    std::vector<Item> items;
-    for (const auto& e : lib_->pendingEncrypted()) items.push_back({e.path, e.kind, e.size, e.mtime});
     markSeen();
-    start(std::move(items), true);
+    decryptQueue(false);
 }
 
-int DecryptService::decryptUrls(const QVariantList& urls) {
+void DecryptService::decryptQueue(bool onlyVisible) {
+    QStringList paths;
+    if (onlyVisible) paths = queue_.visibleWaiting();
+    else
+        for (const auto& e : queue_.entries())
+            if (e.status == DecryptQueueModel::Waiting || e.status == DecryptQueueModel::Failed) paths << e.path;
+    decryptPaths(paths);
+}
+
+void DecryptService::decryptPaths(const QStringList& paths) {
+    if (busy_ || paths.isEmpty()) return;
+    QSet<QString> want(paths.begin(), paths.end());
+    std::vector<Item> items;
+    bool library = false;
+    for (const auto& e : queue_.entries()) {
+        if (!want.contains(e.path) || e.status == DecryptQueueModel::Working || e.status == DecryptQueueModel::Done) continue;
+        items.push_back({e.path.toStdWString(), e.kind.toStdString(), uint64_t(e.size), e.mtime});
+        library = library || e.fromLibrary;
+    }
+    start(std::move(items), library);
+}
+
+void DecryptService::removeFromQueue(const QString& path) {
+    queue_.remove(path);
+    seen_.insert(qHash(path)); // 从队列移除 = 这一个不再询问
+    saveSeen();
+}
+
+void DecryptService::clearFinished() { queue_.clearFinished(); }
+
+void DecryptService::openOutput(const QString& path) {
+    QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+}
+
+std::vector<DecryptService::Item> DecryptService::collect(const QVariantList& urls) const {
     std::vector<Item> items;
     auto addFile = [&](const QString& path) {
         std::wstring w = QDir::toNativeSeparators(path).toStdWString();
@@ -179,9 +401,39 @@ int DecryptService::decryptUrls(const QVariantList& urls) {
             addFile(fi.absoluteFilePath());
         }
     }
-    const int n = static_cast<int>(items.size());
-    if (n > 0) start(std::move(items), false);
-    return n;
+    return items;
+}
+
+int DecryptService::addUrls(const QVariantList& urls) {
+    int added = 0;
+    for (const Item& it : collect(urls)) {
+        DecryptQueueModel::Entry e;
+        e.path = Q(it.path);
+        e.kind = QString::fromStdString(it.kind);
+        e.size = qint64(it.size);
+        e.mtime = it.mtime;
+        SplitName(e.path, e.title, e.artist);
+        // NCM 头部带元数据,能拿到准确的歌名与歌手
+        if (it.kind == "ncm") {
+            AudioMetadata m;
+            if (AudioTagParser::ParseFile(it.path, m) && !m.title.empty()) {
+                e.title = Q(m.title);
+                e.artist = Q(m.artist);
+            }
+        }
+        added += queue_.add(std::move(e));
+    }
+    return added;
+}
+
+// 其他页面拖入的加密文件:加入队列并立即解密
+int DecryptService::decryptUrls(const QVariantList& urls) {
+    std::vector<Item> items = collect(urls);
+    addUrls(urls);
+    QStringList paths;
+    for (const Item& it : items) paths << Q(it.path);
+    decryptPaths(paths);
+    return int(items.size());
 }
 
 void DecryptService::cancel() {
@@ -234,8 +486,10 @@ void DecryptService::start(std::vector<Item> items, bool rescanAfter) {
         for (size_t i = 0; i < items.size() && !cancel->load(); ++i) {
             const Item& it = items[i];
             const QString name = FileName(it.path);
-            QMetaObject::invokeMethod(self, [self, name, i]() {
+            const QString qpath = Q(it.path);
+            QMetaObject::invokeMethod(self, [self, name, i, qpath]() {
                 if (!self) return;
+                self->queue_.setStatus(qpath, DecryptQueueModel::Working);
                 self->current_ = name;
                 self->done_ = static_cast<int>(i);
                 emit self->progressChanged();
@@ -272,8 +526,10 @@ void DecryptService::start(std::vector<Item> items, bool rescanAfter) {
             m["ok"] = r.ok;
             m["message"] = Q(r.message);
             m["output"] = Q(r.output);
-            QMetaObject::invokeMethod(self, [self, m, i, n]() {
+            QMetaObject::invokeMethod(self, [self, m, i, n, qpath]() {
                 if (!self) return;
+                self->queue_.setStatus(qpath, m.value("ok").toBool() ? DecryptQueueModel::Done : DecryptQueueModel::Failed,
+                                       m.value("message").toString(), m.value("output").toString());
                 self->results_.append(m);
                 (m.value("ok").toBool() ? self->ok_ : self->fail_)++;
                 self->done_ = static_cast<int>(i) + 1;
@@ -287,6 +543,8 @@ void DecryptService::start(std::vector<Item> items, bool rescanAfter) {
             if (!self) return;
             self->busy_ = false;
             self->current_.clear();
+            for (const auto& e : self->queue_.entries())
+                if (e.status == DecryptQueueModel::Working) self->queue_.setStatus(e.path, DecryptQueueModel::Waiting);
             emit self->jobChanged();
             emit self->progressChanged();
             emit self->finished(self->ok_, self->fail_);
