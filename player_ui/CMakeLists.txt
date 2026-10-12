@@ -61,6 +61,7 @@ qt_add_qml_module(KugouPlayer
         qml/SearchPage.qml
         qml/ToolsPage.qml
         qml/CrossfadeCover.qml
+        qml/Backdrop.qml
         qml/Capsule.qml
         qml/SettingsPage.qml
         qml/DecryptPrompt.qml
@@ -80,6 +81,8 @@ qt_add_shaders(KugouPlayer "shaders"
         shaders/ring.frag
         shaders/tint.frag
         shaders/wipe.frag
+        shaders/backdrop.frag
+        shaders/fade.frag
 )
 
 target_link_libraries(KugouPlayer PRIVATE player_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::QuickControls2 Qt6::Svg)

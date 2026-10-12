@@ -5,10 +5,10 @@ import PlayerUi
 
 Window {
     id: root
-    width: 1320
-    height: 860
-    minimumWidth: 960
-    minimumHeight: 620
+    width: 1120
+    height: 720
+    minimumWidth: 900
+    minimumHeight: 600
     visible: true
     title: player.hasTrack ? player.title + " — " + player.artist : "Hi-Fi Player"
     color: Theme.base
@@ -245,23 +245,28 @@ Window {
         property string hiSource
         property int hiDecode: 640
 
-        RoundedImage {
+        // 起落点是旋转中的黑胶标签时,副本带着标签此刻的角度起飞 / 落地,不会一下子摆正
+        Item {
+            id: flyingSpin
             anchors.fill: parent
-            radius: flying.radius
-            source: flying.loSource
-            decodeSize: flying.loDecode
-            fadeIn: false
-            placeholder: false
-            outline: false
-        }
-        RoundedImage {
-            id: flyingHi
-            anchors.fill: parent
-            radius: flying.radius
-            source: flying.hiSource
-            decodeSize: flying.hiDecode
-            fadeIn: false
-            placeholder: false
+            RoundedImage {
+                anchors.fill: parent
+                radius: flying.radius
+                source: flying.loSource
+                decodeSize: flying.loDecode
+                fadeIn: false
+                placeholder: false
+                outline: false
+            }
+            RoundedImage {
+                id: flyingHi
+                anchors.fill: parent
+                radius: flying.radius
+                source: flying.hiSource
+                decodeSize: flying.hiDecode
+                fadeIn: false
+                placeholder: false
+            }
         }
 
         ParallelAnimation {
@@ -270,6 +275,7 @@ Window {
             property real toY
             property real toScale: 1
             property real toRadius: 10
+            property real toAngle: 0
             property Item landing: null // 落点:飞行期间隐藏,落地后显示
             property Item origin: null  // 起点:飞行期间隐藏,避免同一张封面出现两份
             property Item waitFor: null // 落地前要等它解码完成的图片
@@ -279,6 +285,7 @@ Window {
             ScaleAnimator { target: flying; to: flight.toScale; duration: flight.duration; easing.type: Easing.OutQuint }
             // 缩放会连带缩小圆角:同步补偿,让屏幕上的圆角从起点平滑过渡到落点
             NumberAnimation { target: flying; property: "radius"; to: flight.toRadius; duration: flight.duration; easing.type: Easing.OutQuint }
+            RotationAnimator { target: flyingSpin; to: flight.toAngle; duration: flight.duration; easing.type: Easing.OutQuint }
             onFinished: handoff.start()
         }
         // 落地交接:等落点图片解码完成再显示它,随后再撤掉飞行副本 (落点自己的淡入在副本下面完成,看不出切换)
@@ -293,6 +300,7 @@ Window {
                 const img = flight.waitFor
                 if (img && img.status !== Image.Ready && img.status !== Image.Error && waited < 1500) return
                 stop()
+                const hidden = flight.landing
                 if (flight.landing) flight.landing.opacity = 1
                 if (flight.origin) flight.origin.opacity = 1
                 if (detail.heroCover) detail.heroCover.opacity = 1
@@ -300,7 +308,9 @@ Window {
                 flight.landing = null
                 flight.origin = null
                 flight.waitFor = null
-                reveal.restart()
+                // 落点一直可见 (飞回黑胶标签):副本在它正上方,立即撤掉;否则等落点自己的淡入完成
+                if (hidden) reveal.restart()
+                else flying.visible = false
             }
         }
         Timer { id: reveal; interval: Theme.normal + 40; onTriggered: flying.visible = false }
@@ -362,6 +372,11 @@ Window {
         flying.y = a.y
         flying.scale = a.width / b.width
         flying.radius = fromRadius / flying.scale
+        // 角度取最近的等价值,免得多转一圈
+        const norm = (d) => { d = d % 360; return d > 180 ? d - 360 : (d < -180 ? d + 360 : d) }
+        const fromAngle = norm(opts.fromAngle || 0)
+        flyingSpin.rotation = fromAngle
+        flight.toAngle = fromAngle + norm((opts.toAngle || 0) - fromAngle)
         flight.duration = opts.duration || 460
         flight.waitFor = toImg
         flight.landing = opts.hideTo === false ? null : toItem
@@ -388,14 +403,15 @@ Window {
         if (!player.hasTrack || Theme.reduced) return
         const big = nowPlaying.coverItem
         if (!big) return
+        const disc = island.disc
         if (open) {
-            const r = settledRect(big, null)
-            r.y += nowPlaying.coverSettleDy
             const label = discLabelRect()
-            fly(island.disc, null, big, null, { fromRect: label, fromRadius: label.width / 2, toRect: r, hideFrom: false, duration: 620 })
+            fly(disc, null, big, null, { fromRect: label, fromRadius: label.width / 2, fromAngle: disc.angleAfter(0),
+                                         hideFrom: false, duration: 620 })
         } else {
             const label = discLabelRect()
-            fly(big, null, island.disc, null, { toRect: label, toRadius: label.width / 2, hideTo: false, duration: 520 })
+            fly(big, null, disc, null, { toRect: label, toRadius: label.width / 2, toAngle: disc.angleAfter(520 + 16),
+                                         hideTo: false, duration: 520 })
         }
     }
 
