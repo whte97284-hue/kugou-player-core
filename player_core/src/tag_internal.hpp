@@ -142,6 +142,8 @@ void ApplyVorbisComments(Ctx& c, const uint8_t* p, size_t n);
 // FLAC METADATA_BLOCK_PICTURE 结构 (内存版)
 bool ParseFlacPictureStruct(Ctx& c, const uint8_t* p, size_t n, uint64_t fileOffset, bool offsetReliable);
 std::vector<uint8_t> Base64Decode(const uint8_t* p, size_t n);
+// 各标签格式共用的扩展字段:REPLAYGAIN_* 与歌词 (LYRICS / UNSYNCEDLYRICS);已处理返回 true
+bool ApplyExtraTag(Ctx& c, const std::string& key, const std::wstring& value);
 // AES-128-ECB 原地解密 (n 必须是 16 的倍数);NCM 元数据与密钥块共用
 void Aes128EcbDecrypt(const uint8_t key[16], uint8_t* data, size_t n);
 

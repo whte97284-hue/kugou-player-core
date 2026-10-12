@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <functional>
+#include <vector>
 #include <memory>
 #include <atomic>
 #include <mutex>
@@ -24,8 +25,30 @@ enum class PlaybackState {
 //   · 音量平滑斜坡,调音量无「拉链噪声」
 //   · 播放结束回调在独立通知线程中触发,回调里直接切歌也不会与音频线程死锁
 // ============================================================================
+// 输出设备 (系统枚举结果)
+struct OutputDeviceInfo {
+    std::string name;   // UTF-8 设备名,也作为持久化标识
+    bool is_default = false;
+};
+
 class AudioPlaybackEngine {
 public:
+    // 枚举系统的播放设备 (不需要已初始化的引擎)
+    static std::vector<OutputDeviceInfo> EnumerateOutputDevices();
+    // 指定输出设备 (UTF-8 设备名,空 = 系统默认);须在 Init 之前设置
+    void SetPreferredDevice(const std::string& name);
+    // 当前实际输出设备名
+    std::string GetDeviceName() const;
+
+    // ReplayGain:当前曲目的线性增益 (1.0 = 不调整),与用户音量相乘,平滑过渡
+    void SetReplayGain(float linearGain);
+
+    // 无缝播放:预先打开下一首 (同一设备格式),当前曲目结束时在同一个音频回调内无缝切换,
+    // 随后在通知线程调用 on_track_advanced (而不是 on_playback_ended)
+    bool QueueNext(const std::wstring& filePath, double startSeconds, double endSeconds, float replayGain);
+    void ClearNext();
+    std::function<void()> on_track_advanced;
+
     AudioPlaybackEngine();
     ~AudioPlaybackEngine();
 

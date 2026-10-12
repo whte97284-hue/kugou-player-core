@@ -240,6 +240,86 @@ Item {
                     hint: player.exclusive ? qsTr("绕过系统混音器") : qsTr("经过系统混音器")
                     onPicked: (v) => player.exclusive = v
                 }
+                CustomRow {
+                    label: qsTr("输出设备")
+                    Capsule {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: (player.outputDevice || qsTr("系统默认")) + (devList.open ? "   ︿" : "   ﹀")
+                        width: Math.min(implicitWidth, 460)
+                        onClicked: { if (!devList.open) player.refreshDevices(); devList.open = !devList.open }
+                    }
+                }
+                // 设备列表:就地展开,选中即切换 (播放不中断,位置保持)
+                Item {
+                    id: devList
+                    property bool open: false
+                    readonly property var names: [""].concat(player.outputDevices)
+                    width: parent.width
+                    height: open ? devCol.implicitHeight + 14 : 0
+                    clip: true
+                    visible: height > 0
+                    Behavior on height { NumberAnimation { duration: Theme.reduced ? 0 : 320; easing.type: Easing.OutQuint } }
+                    Column {
+                        id: devCol
+                        x: 140
+                        y: 2
+                        spacing: 4
+                        opacity: devList.open ? 1 : 0
+                        Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+                        Repeater {
+                            model: devList.names
+                            Rectangle {
+                                readonly property bool cur: modelData === player.outputDevice
+                                width: Math.min(460, Math.max(220, devText.implicitWidth + 36))
+                                height: page.optH
+                                radius: height / 2
+                                color: cur ? Theme.accent : Qt.rgba(1, 0.96, 0.9, dm.containsMouse ? 0.09 : 0.05)
+                                Behavior on color { ColorAnimation { duration: Theme.fast } }
+                                Text {
+                                    id: devText
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 18
+                                    anchors.rightMargin: 18
+                                    verticalAlignment: Text.AlignVCenter
+                                    elide: Text.ElideRight
+                                    text: modelData || qsTr("系统默认")
+                                    color: parent.cur ? Theme.onAccent : Theme.textSecondary
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: 13
+                                    font.weight: parent.cur ? Font.DemiBold : Font.Normal
+                                }
+                                MouseArea {
+                                    id: dm
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: { player.outputDevice = modelData; devList.open = false }
+                                }
+                            }
+                        }
+                    }
+                }
+                OptionRow {
+                    label: qsTr("无缝播放")
+                    options: [{ t: qsTr("开启"), v: true }, { t: qsTr("关闭"), v: false }]
+                    value: player.gapless
+                    hint: qsTr("曲目之间不留空隙")
+                    onPicked: (v) => player.gapless = v
+                }
+                OptionRow {
+                    label: qsTr("音量标准化")
+                    options: [{ t: qsTr("关闭"), v: 0 }, { t: qsTr("按曲目"), v: 1 }, { t: qsTr("按专辑"), v: 2 }]
+                    value: player.replayGain
+                    hint: qsTr("读取 ReplayGain,不削波")
+                    onPicked: (v) => player.replayGain = v
+                }
+                OptionRow {
+                    label: qsTr("歌词")
+                    options: [{ t: qsTr("LRC 优先"), v: 0 }, { t: qsTr("内嵌优先"), v: 1 }]
+                    value: settings.lyricsSource
+                    hint: qsTr("同名 .lrc 与文件内嵌歌词")
+                    onPicked: (v) => { settings.lyricsSource = v; player.reloadLyrics() }
+                }
                 OptionRow {
                     label: qsTr("淡入淡出")
                     options: [{ t: qsTr("开启"), v: true }, { t: qsTr("关闭"), v: false }]

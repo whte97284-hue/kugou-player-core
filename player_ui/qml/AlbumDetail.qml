@@ -7,6 +7,8 @@ Item {
     property int bottomInset: 140
     readonly property Item heroCover: list.headerItem ? list.headerItem.coverItem : null
     readonly property bool isCurrentAlbum: player.hasTrack && player.albumIndex === albumTracks.albumIndex
+    // 封面正飞回专辑墙:唱片随之隐去,不让它在封面离开后单独露出来
+    property bool heroAway: false
     signal back()
 
     function heroCoverRect() {
@@ -74,6 +76,8 @@ Item {
                 x: page.isCurrentAlbum ? hero.coverSize * 0.42 : hero.coverSize * 0.04
                 Behavior on x { NumberAnimation { duration: 1000; easing.type: Easing.OutCubic } }
                 cover: albumTracks.cover
+                opacity: page.heroAway ? 0 : 1
+                Behavior on opacity { OpacityAnimator { duration: 90 } }
                 spinning: page.isCurrentAlbum && player.playing
                 labelSize: 256
             }

@@ -209,6 +209,24 @@ int main(int argc, char** argv) {
                   DecryptorRegistry::Instance().ById("kgg") && DecryptorRegistry::Instance().All().size() == 3);
     }
 
+    // ReplayGain + 内嵌歌词
+    {
+        AudioMetadata a, b, c;
+        ParseOptions lo;
+        lo.load_lyrics = true;
+        AudioTagParser::ParseFile(W((fx / "tag_extras" / "rg.flac").string()), a, lo);
+        Check("FLAC ReplayGain:曲目 -6.50 dB / 峰值 0.95,专辑 -5.00 dB",
+              a.has_rg_track && std::fabs(a.rg_track_gain + 6.5f) < 1e-3 && std::fabs(a.rg_track_peak - 0.95f) < 1e-3 &&
+                  a.has_rg_album && std::fabs(a.rg_album_gain + 5.0f) < 1e-3);
+        Check("FLAC 内嵌歌词 (LYRICS)", a.lyrics.find(L"第二句") != std::wstring::npos);
+        AudioTagParser::ParseFile(W((fx / "tag_extras" / "rg.mp3").string()), b, lo);
+        Check("MP3 TXXX ReplayGain +2.10 dB 与 USLT 歌词",
+              b.has_rg_track && std::fabs(b.rg_track_gain - 2.1f) < 1e-3 && b.lyrics.find(L"世界") != std::wstring::npos,
+              U8(b.lyrics));
+        AudioTagParser::ParseFile(W((fx / "tag_extras" / "rg.flac").string()), c);
+        Check("未请求时不读取歌词 (入库省内存)", c.lyrics.empty() && c.has_rg_track);
+    }
+
     // 询问模式:扫描只收集加密源,不解密、不入库;解密并写入索引后,再次扫描直接复用产物
     {
         fs::path idx = work / "decrypt.index";

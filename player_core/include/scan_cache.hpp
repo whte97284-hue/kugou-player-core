@@ -26,7 +26,7 @@ struct ScanCacheEntry {
 class ScanCache {
 public:
     // 解析结果格式版本:解析逻辑有任何影响输出的修改都必须递增
-    static constexpr uint32_t kParserVersion = 4;
+    static constexpr uint32_t kParserVersion = 5; // 5:ReplayGain 字段
 
     bool Load(const std::wstring& path);
     bool Save(const std::wstring& path) const;

@@ -54,6 +54,12 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
     steps->push_back({"00_decrypt_prompt", [] {}, 900});
     steps->push_back({"01_albums", [call] { call("automationDecryptPrompt", false); }, 1500});
     steps->push_back({"02_album_detail", [call] { call("automationOpenAlbum", 0); }, 1500});
+    // 封面飞回专辑墙的中途与落地 (检查飞行副本与卡片是否对齐、有无重影)
+    steps->push_back({"02a_wall", [call] { call("automationBack"); }, 900});
+    steps->push_back({"02a_card_album", [call] { call("automationOpenAlbum", 3); }, 1300});
+    steps->push_back({"02b_close_mid", [call] { call("automationBack"); }, 260});
+    steps->push_back({"02c_closed", [] {}, 900});
+    steps->push_back({"02d_reopen", [call] { call("automationOpenAlbum", 0); }, 1300});
     steps->push_back({"03_playing", [&player, call] {
         player.playAlbum(0, 0);
     }, 2000});

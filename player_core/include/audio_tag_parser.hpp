@@ -53,6 +53,17 @@ struct AudioMetadata {
     uint64_t cover_offset = 0;       // 封面原始字节在文件中的物理偏移 (0 = 无法直接定位,需重新解析)
     uint32_t cover_size = 0;         // 封面原始字节长度
 
+    // ReplayGain (dB / 线性峰值);has_* 为 false 表示文件中没有对应标签
+    bool has_rg_track = false;
+    bool has_rg_album = false;
+    float rg_track_gain = 0.0f;
+    float rg_track_peak = 0.0f;
+    float rg_album_gain = 0.0f;
+    float rg_album_peak = 0.0f;
+
+    // 内嵌歌词 (ID3 USLT / Vorbis LYRICS / MP4 ©lyr / APE Lyrics),仅 ParseOptions::load_lyrics 时读取
+    std::wstring lyrics;
+
     // I/O 审计 (ParseFile 填写):本次解析真实发生的磁盘读取次数与字节数
     uint32_t io_read_calls = 0;
     uint64_t io_bytes_read = 0;
@@ -73,6 +84,7 @@ struct ParseOptions {
     uint32_t max_cover_bytes = 32u * 1024 * 1024;  // 单张封面最大读取上限
     unsigned int legacy_code_page = 936;           // 非 Unicode 标签 (ID3 Latin-1 / RIFF INFO) 的回退代码页
     bool read_id3v1 = true;                        // MP3 无 ID3v2 标题时是否回读文件尾部的 ID3v1/APEv2
+    bool load_lyrics = false;                      // 是否读取内嵌歌词 (入库时不读,播放时按需读取)
 };
 
 class AudioTagParser {

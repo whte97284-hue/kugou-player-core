@@ -114,6 +114,12 @@ TrackItem MusicCatalog::BuildTrack(const std::wstring& filePath, const AudioMeta
     track.file_size = meta.file_size;
 
     bool dsd = track.codec.compare(0, 3, L"DSD") == 0 || track.codec == L"DST";
+    track.has_rg_track = meta.has_rg_track;
+    track.has_rg_album = meta.has_rg_album;
+    track.rg_track_gain = meta.rg_track_gain;
+    track.rg_track_peak = meta.rg_track_peak;
+    track.rg_album_gain = meta.rg_album_gain;
+    track.rg_album_peak = meta.rg_album_peak;
     track.is_lossless = meta.is_lossless || track.format == L"FLAC" || track.format == L"KGMA" ||
                         track.format == L"WAV" || dsd || (track.bitrate_kbps >= 800 && track.format != L"MP3");
     track.is_hires = dsd || (track.is_lossless && (track.sample_rate > 48000 || track.bits_per_sample > 16));

@@ -39,6 +39,17 @@ void MergeTags(AudioMetadata& dst, AudioMetadata& src) {
     SetIfEmpty(dst.track_number, src.track_number);
     SetIfEmpty(dst.disc_number, src.disc_number);
     SetIfEmpty(dst.comment, src.comment);
+    SetIfEmpty(dst.lyrics, src.lyrics);
+    if (src.has_rg_track && !dst.has_rg_track) {
+        dst.has_rg_track = true;
+        dst.rg_track_gain = src.rg_track_gain;
+        dst.rg_track_peak = src.rg_track_peak;
+    }
+    if (src.has_rg_album && !dst.has_rg_album) {
+        dst.has_rg_album = true;
+        dst.rg_album_gain = src.rg_album_gain;
+        dst.rg_album_peak = src.rg_album_peak;
+    }
     if (src.has_cover && (!dst.has_cover || (dst.cover_picture_type != 3 && src.cover_picture_type == 3))) {
         dst.has_cover = true;
         dst.cover_mime_type = src.cover_mime_type;

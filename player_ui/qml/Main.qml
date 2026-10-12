@@ -116,12 +116,14 @@ Window {
             flying.x = from.x
             flying.y = from.y
             flying.scale = fromItem.width / hero.width
+            flying.radius = (fromItem.radius !== undefined ? fromItem.radius : hero.radius) / flying.scale
             flight.landing = hero
             hero.opacity = 0
             flying.visible = true
             flight.toX = to.x
             flight.toY = to.y
             flight.toScale = 1
+            flight.toRadius = hero.radius
             flight.restart()
         })
     }
@@ -255,6 +257,7 @@ Window {
         transformOrigin: Item.TopLeft
         radius: 16
         decodeSize: 640
+        fadeIn: false
         z: 50
 
         ParallelAnimation {
@@ -262,14 +265,18 @@ Window {
             property real toX
             property real toY
             property real toScale: 1
+            property real toRadius: 10
             property bool reverse: false
             property Item landing: null
             XAnimator { target: flying; to: flight.toX; duration: 460; easing.type: Easing.OutQuint }
             YAnimator { target: flying; to: flight.toY; duration: 460; easing.type: Easing.OutQuint }
             ScaleAnimator { target: flying; to: flight.toScale; duration: 460; easing.type: Easing.OutQuint }
+            // 缩放会连带缩小圆角:同步补偿,让屏幕上的圆角从起点平滑过渡到落点
+            NumberAnimation { target: flying; property: "radius"; to: flight.toRadius; duration: 460; easing.type: Easing.OutQuint }
             onFinished: {
                 flying.visible = false
                 if (detail.heroCover) detail.heroCover.opacity = 1
+                detail.heroAway = false
                 if (flight.landing) { flight.landing.opacity = 1; flight.landing = null }
             }
         }
@@ -289,41 +296,52 @@ Window {
             const from = fromItem.mapToItem(root.contentItem, 0, 0)
             const to = hero.mapToItem(root.contentItem, 0, 0)
             flying.source = albumTracks.cover
-            flying.radius = hero.radius
             flying.width = hero.width
             flying.height = hero.height
             flying.x = from.x
             flying.y = from.y
-            flying.scale = fromItem.width / hero.width
+            flying.scale = fromItem.width * wall.scale / hero.width
+            flying.radius = 10 / flying.scale
+            flight.landing = null
             hero.opacity = 0
             flying.visible = true
             flight.toX = to.x
             flight.toY = to.y
             flight.toScale = 1
+            flight.toRadius = hero.radius
             flight.restart()
         })
     }
 
     // 返回专辑墙时封面飞回对应卡片
+    // 此刻专辑墙仍处于离场状态 (缩小 0.985、透明),量到的位置会随它回弹而漂移:
+    // 按缩放中心换算出回弹后的最终位置;落点卡片在飞行期间隐藏,避免同一张封面出现两份
     function closeAlbumFlight() {
         if (detailKind !== "album" || section !== "albums") return
         const hero = detail.heroCover
         const card = wall.coverOf(albumTracks.albumIndex)
         if (!hero || !card) return
         const from = hero.mapToItem(root.contentItem, 0, 0)
-        const to = card.mapToItem(root.contentItem, 0, 0)
+        const p = card.mapToItem(root.contentItem, 0, 0)
+        const c = wall.mapToItem(root.contentItem, wall.width / 2, wall.height / 2)
+        const s = wall.scale > 0 ? wall.scale : 1
         flying.source = albumTracks.cover
-        flying.radius = hero.radius
         flying.width = hero.width
         flying.height = hero.height
         flying.x = from.x
         flying.y = from.y
         flying.scale = 1
+        flying.radius = hero.radius
         flying.visible = true
         hero.opacity = 0
-        flight.toX = to.x
-        flight.toY = to.y
+        detail.heroAway = true
+        if (flight.landing) flight.landing.opacity = 1
+        flight.landing = card
+        card.opacity = 0
+        flight.toX = c.x + (p.x - c.x) / s
+        flight.toY = c.y + (p.y - c.y) / s
         flight.toScale = card.width / hero.width
+        flight.toRadius = 10 / flight.toScale
         flight.restart()
     }
     function closeArtistFlight() {

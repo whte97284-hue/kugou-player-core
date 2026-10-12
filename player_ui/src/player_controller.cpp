@@ -12,7 +12,9 @@
 #include <QJsonObject>
 #include <QSaveFile>
 #include <QRegularExpression>
+#include <QTimer>
 #include <algorithm>
+#include <cmath>
 #include <random>
 #include "audio_tag_parser.hpp"
 #include "platform_io.hpp"
@@ -43,6 +45,9 @@ PlayerController::PlayerController(LibraryService* lib, QObject* parent) : QObje
     shuffle_ = s.value("player/shuffle", false).toBool();
     exclusive_ = s.value("audio/exclusive", false).toBool();
     repeat_ = std::clamp(s.value("player/repeat", 0).toInt(), 0, 2);
+    gapless_ = s.value("player/gapless", true).toBool();
+    rgMode_ = std::clamp(s.value("player/replayGain", 0).toInt(), 0, 2);
+    device_ = s.value("audio/device").toString();
     timer_.setInterval(16); // 约 60Hz 推送进度与频谱
     timer_.setTimerType(Qt::PreciseTimer);
     connect(&timer_, &QTimer::timeout, this, &PlayerController::tick);
@@ -125,6 +130,7 @@ PlayerController::~PlayerController() {
     timer_.stop();
     if (engine_) {
         engine_->on_playback_ended = nullptr;
+        engine_->on_track_advanced = nullptr;
         engine_->Shutdown();
     }
 }
@@ -195,6 +201,7 @@ void PlayerController::setQueue(std::vector<uint64_t> ids, int start) {
 void PlayerController::queueContentChanged() {
     queueModel_.reset(snap_, queue_, lib_->generation());
     emit queueChanged();
+    scheduleGapless(); // 队列变了,预加载的「下一首」可能也变了
 }
 
 void PlayerController::playTracks(const QVariantList& trackIds, int start) {
@@ -264,12 +271,70 @@ void PlayerController::setExclusive(bool on) {
     exclusive_ = on;
     QSettings().setValue("audio/exclusive", on);
     emit modeChanged();
+    rebuildOutput();
+}
+
+void PlayerController::setOutputDevice(const QString& name) {
+    if (name == device_) return;
+    device_ = name;
+    QSettings().setValue("audio/device", name);
+    emit modeChanged();
+    rebuildOutput();
+}
+
+void PlayerController::refreshDevices() {
+    QStringList list;
+    for (const auto& d : AudioPlaybackEngine::EnumerateOutputDevices()) list << QString::fromStdString(d.name);
+    if (list == devices_) return;
+    devices_ = list;
+    emit devicesChanged();
+}
+
+void PlayerController::setGapless(bool on) {
+    if (on == gapless_) return;
+    gapless_ = on;
+    QSettings().setValue("player/gapless", on);
+    emit modeChanged();
+    if (!on && engine_) {
+        engine_->ClearNext();
+        nextId_ = 0;
+        nextIndex_ = -1;
+    }
+    scheduleGapless();
+}
+
+void PlayerController::setReplayGain(int mode) {
+    mode = std::clamp(mode, 0, 2);
+    if (mode == rgMode_) return;
+    rgMode_ = mode;
+    QSettings().setValue("player/replayGain", mode);
+    emit modeChanged();
+    if (engine_ && current_) engine_->SetReplayGain(gainFor(current_));
+    nextId_ = 0; // 增益变了,下一首重新预加载
+    scheduleGapless();
+    rebuildSignalChain();
+}
+
+// ReplayGain:dB 换算为线性增益,并以峰值限制不削波;缺少所选模式的数据时退回另一种
+float PlayerController::gainFor(const TrackItem* t) const {
+    if (!t || rgMode_ == 0) return 1.0f;
+    bool album = rgMode_ == 2 ? t->has_rg_album : !t->has_rg_track && t->has_rg_album;
+    if (!album && !t->has_rg_track) return 1.0f;
+    float db = album ? t->rg_album_gain : t->rg_track_gain;
+    float peak = album ? t->rg_album_peak : t->rg_track_peak;
+    float g = std::pow(10.0f, db / 20.0f);
+    if (peak > 0.0f) g = std::min(g, 1.0f / peak);
+    return std::clamp(g, 0.05f, 4.0f);
+}
+
+// 重建输出:记下位置与播放状态,关闭旧设备后在同一位置继续
+void PlayerController::rebuildOutput() {
     if (!engine_) return;
-    // 重建输出:记下位置与播放状态,关闭旧设备后在同一位置继续
     const double pos = position_;
     const bool wasPlaying = playing_;
     const int idx = queueIndex_;
     engine_->on_playback_ended = nullptr;
+    engine_->on_track_advanced = nullptr;
     engine_->Shutdown();
     engine_.reset();
     if (idx >= 0 && openIndex(idx, false)) {
@@ -278,11 +343,77 @@ void PlayerController::setExclusive(bool on) {
     }
 }
 
+void PlayerController::ensureEngine() {
+    if (engine_) return;
+    engine_ = std::make_unique<AudioPlaybackEngine>();
+    engine_->SetPreferredDevice(device_.toStdString());
+    engine_->Init(exclusive_);
+    // 回调来自引擎通知线程,排队回到界面线程处理
+    QPointer<PlayerController> self(this);
+    engine_->on_playback_ended = [self]() {
+        if (self) QMetaObject::invokeMethod(self, [self]() { if (self) self->onEnded(); }, Qt::QueuedConnection);
+    };
+    engine_->on_track_advanced = [self]() {
+        if (self) QMetaObject::invokeMethod(self, [self]() { if (self) self->onAdvanced(); }, Qt::QueuedConnection);
+    };
+}
+
+void PlayerController::scheduleGapless() {
+    if (gaplessPending_) return;
+    gaplessPending_ = true;
+    // 合并同一轮事件里的多次队列变动,也让切歌后的界面先更新,再去打开下一首
+    QTimer::singleShot(0, this, [this]() {
+        gaplessPending_ = false;
+        queueGapless();
+    });
+}
+
+// 把「下一首」交给引擎预加载;当前曲目结束时在同一音频回调内无缝衔接
+void PlayerController::queueGapless() {
+    if (!engine_ || !current_ || !snap_ || queue_.empty()) return;
+    int idx = -1;
+    if (gapless_) {
+        if (repeat_ == 2) idx = queueIndex_;
+        else if (queueIndex_ + 1 < static_cast<int>(queue_.size())) idx = queueIndex_ + 1;
+        else if (repeat_ == 1) idx = 0;
+    }
+    const TrackItem* t = idx >= 0 ? snap_->catalog.FindById(queue_[idx]) : nullptr;
+    if (!t) {
+        if (nextId_) engine_->ClearNext();
+        nextId_ = 0;
+        nextIndex_ = -1;
+        return;
+    }
+    if (t->id == nextId_ && idx == nextIndex_) return;
+    bool ok = t->is_cue_track
+                  ? engine_->QueueNext(t->file_path, t->cue_start_ms / 1000.0, t->cue_end_ms / 1000.0, gainFor(t))
+                  : engine_->QueueNext(t->file_path, 0.0, 0.0, gainFor(t));
+    nextId_ = ok ? t->id : 0;
+    nextIndex_ = ok ? idx : -1;
+}
+
+// 引擎已无缝切到预加载的曲目:同步界面状态,再预加载再下一首
+void PlayerController::onAdvanced() {
+    uint64_t id = nextId_;
+    int idx = nextIndex_;
+    nextId_ = 0;
+    nextIndex_ = -1;
+    if (!snap_ || !id) return;
+    if (idx < 0 || idx >= static_cast<int>(queue_.size()) || queue_[idx] != id) {
+        auto it = std::find(queue_.begin(), queue_.end(), id);
+        idx = it == queue_.end() ? queueIndex_ : static_cast<int>(it - queue_.begin());
+    }
+    const TrackItem* t = snap_->catalog.FindById(id);
+    if (!t) return;
+    onTrackOpened(t, idx);
+}
+
 void PlayerController::setRepeatMode(int m) {
     m = std::clamp(m, 0, 2);
     if (m == repeat_) return;
     repeat_ = m;
     emit modeChanged();
+    scheduleGapless();
 }
 
 void PlayerController::onEnded() {
@@ -306,15 +437,7 @@ void PlayerController::playTrack(double trackId) {
 
 bool PlayerController::openIndex(int index, bool autoPlay) {
     if (!snap_ || index < 0 || index >= static_cast<int>(queue_.size())) return false;
-    if (!engine_) {
-        engine_ = std::make_unique<AudioPlaybackEngine>();
-        engine_->Init(exclusive_);
-        // 结束回调来自引擎通知线程,排队回到界面线程再切歌
-        QPointer<PlayerController> self(this);
-        engine_->on_playback_ended = [self]() {
-            if (self) QMetaObject::invokeMethod(self, [self]() { if (self) self->onEnded(); }, Qt::QueuedConnection);
-        };
-    }
+    ensureEngine();
     // 跳过无法解码的曲目 (例如 DSD:当前解码器不支持),最多尝试整个队列一遍
     for (size_t attempt = 0; attempt < queue_.size(); ++attempt) {
         int i = static_cast<int>((index + attempt) % queue_.size());
@@ -332,24 +455,32 @@ bool PlayerController::openIndex(int index, bool autoPlay) {
             error_.clear();
             emit errorChanged();
         }
-        current_ = t;
-        queueIndex_ = i;
-        position_ = 0;
+        nextId_ = 0; // OpenFile 已清掉引擎里预加载的下一首
+        nextIndex_ = -1;
+        engine_->SetReplayGain(gainFor(t));
         fade_.stop();
         gain_ = 1.0;
         applyVolume();
         if (autoPlay) engine_->Play();
         setPlaying(autoPlay);
-        timer_.start();
-        emit trackChanged();
-        emit queueIndexChanged();
-        emit positionChanged();
-        rebuildSignalChain();
-        extractAccent();
-        loadLyrics();
+        onTrackOpened(t, i);
         return true;
     }
     return false;
+}
+
+void PlayerController::onTrackOpened(const TrackItem* t, int index) {
+    current_ = t;
+    queueIndex_ = index;
+    position_ = 0;
+    timer_.start();
+    emit trackChanged();
+    emit queueIndexChanged();
+    emit positionChanged();
+    rebuildSignalChain();
+    extractAccent();
+    loadLyrics();
+    scheduleGapless();
 }
 
 void PlayerController::toggle() {
@@ -578,47 +709,68 @@ QString PlayerController::chainSummary() const {
     return parts.join(QStringLiteral("  ·  "));
 }
 
-// 读取同名 .lrc 歌词 (自动识别 UTF-8 / UTF-16 / GBK),支持一行多时间戳与 [offset:] 标签
+// 歌词来源:同名 .lrc (自动识别 UTF-8 / UTF-16 / GBK) 与文件内嵌歌词 (USLT / LYRICS / ©lyr),优先级可在设置中调整
+// 支持一行多时间戳与 [offset:] 标签;没有时间戳的纯文本歌词按静态歌词显示
 void PlayerController::loadLyrics() {
     lyrics_.clear();
     lyricTimes_.clear();
     lyricIndex_ = -1;
+    lyricsSynced_ = false;
     if (current_) {
-        QString path = Q(current_->file_path);
-        QFileInfo fi(path);
-        QString base = fi.path() + "/" + fi.completeBaseName();
-        QByteArray raw;
-        for (const QString& ext : {QStringLiteral(".lrc"), QStringLiteral(".LRC")}) {
-            platform::ReadOnlyFile f;
-            if (f.Open((base + ext).toStdWString(), false) && f.Size() > 0 && f.Size() < (1 << 20)) {
-                raw.resize(static_cast<int>(f.Size()));
-                f.ReadAt(0, raw.data(), static_cast<size_t>(raw.size()));
-                break;
-            }
-        }
-        if (!raw.isEmpty()) {
-            QString text = QString::fromStdWString(AudioTagParser::DecodeTextAuto(raw.toStdString()));
-            static const QRegularExpression tagRe(QStringLiteral("\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?\\]"));
-            static const QRegularExpression offRe(QStringLiteral("\\[offset:\\s*([+-]?\\d+)\\]"), QRegularExpression::CaseInsensitiveOption);
-            qint64 offset = 0;
-            auto om = offRe.match(text);
-            if (om.hasMatch()) offset = om.captured(1).toLongLong();
-            std::vector<std::pair<qint64, QString>> lines;
-            for (const QString& line : text.split(QRegularExpression(QStringLiteral("[\\r\\n]+")))) {
-                std::vector<qint64> times;
-                int pos = 0;
-                QRegularExpressionMatch m;
-                while ((m = tagRe.match(line, pos)).hasMatch() && m.capturedStart() == pos) {
-                    QString frac = m.captured(3);
-                    qint64 ms = m.captured(1).toLongLong() * 60000 + m.captured(2).toLongLong() * 1000;
-                    if (!frac.isEmpty()) ms += frac.length() == 1 ? frac.toLongLong() * 100 : frac.length() == 2 ? frac.toLongLong() * 10 : frac.toLongLong();
-                    times.push_back(ms - offset);
-                    pos = m.capturedEnd();
+        auto readLrc = [this]() -> QString {
+            QFileInfo fi(Q(current_->file_path));
+            QString base = fi.path() + "/" + fi.completeBaseName();
+            for (const QString& ext : {QStringLiteral(".lrc"), QStringLiteral(".LRC")}) {
+                platform::ReadOnlyFile f;
+                if (f.Open((base + ext).toStdWString(), false) && f.Size() > 0 && f.Size() < (1 << 20)) {
+                    QByteArray raw(static_cast<int>(f.Size()), Qt::Uninitialized);
+                    f.ReadAt(0, raw.data(), static_cast<size_t>(raw.size()));
+                    return QString::fromStdWString(AudioTagParser::DecodeTextAuto(raw.toStdString()));
                 }
-                QString body = line.mid(pos).trimmed();
-                if (times.empty() || body.isEmpty()) continue;
-                for (qint64 t : times) lines.emplace_back(t, body);
             }
+            return {};
+        };
+        auto readEmbedded = [this]() -> QString {
+            AudioMetadata m;
+            ParseOptions o;
+            o.load_lyrics = true;
+            o.load_cover = false;
+            AudioTagParser::ParseFile(current_->file_path, m, o);
+            return QString::fromStdWString(m.lyrics);
+        };
+        const bool embeddedFirst = QSettings().value("player/lyricsSource", 0).toInt() == 1;
+        QString text = embeddedFirst ? readEmbedded() : readLrc();
+        if (text.trimmed().isEmpty()) text = embeddedFirst ? readLrc() : readEmbedded();
+
+        static const QRegularExpression tagRe(QStringLiteral("\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?\\]"));
+        static const QRegularExpression offRe(QStringLiteral("\\[offset:\\s*([+-]?\\d+)\\]"), QRegularExpression::CaseInsensitiveOption);
+        static const QRegularExpression metaRe(QStringLiteral("^\\[[a-zA-Z]+:.*\\]$"));
+        qint64 offset = 0;
+        auto om = offRe.match(text);
+        if (om.hasMatch()) offset = om.captured(1).toLongLong();
+        std::vector<std::pair<qint64, QString>> lines;
+        QStringList plain;
+        for (const QString& line : text.split(QRegularExpression(QStringLiteral("[\\r\\n]+")))) {
+            std::vector<qint64> times;
+            int pos = 0;
+            QRegularExpressionMatch m;
+            while ((m = tagRe.match(line, pos)).hasMatch() && m.capturedStart() == pos) {
+                QString frac = m.captured(3);
+                qint64 ms = m.captured(1).toLongLong() * 60000 + m.captured(2).toLongLong() * 1000;
+                if (!frac.isEmpty()) ms += frac.length() == 1 ? frac.toLongLong() * 100 : frac.length() == 2 ? frac.toLongLong() * 10 : frac.toLongLong();
+                times.push_back(ms - offset);
+                pos = m.capturedEnd();
+            }
+            QString body = line.mid(pos).trimmed();
+            if (body.isEmpty()) continue;
+            if (times.empty()) {
+                if (!metaRe.match(body).hasMatch()) plain << body;
+                continue;
+            }
+            for (qint64 t : times) lines.emplace_back(t, body);
+        }
+        if (!lines.empty()) {
+            lyricsSynced_ = true;
             std::stable_sort(lines.begin(), lines.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
             // CUE 分轨:歌词时间轴通常按整轨计,换算到分轨起点
             qint64 shift = current_->is_cue_track ? static_cast<qint64>(current_->cue_start_ms) : 0;
@@ -628,6 +780,13 @@ void PlayerController::loadLyrics() {
                 QVariantMap m;
                 m["text"] = l.second;
                 m["time"] = static_cast<double>(l.first - shift) / 1000.0;
+                lyrics_.append(m);
+            }
+        } else {
+            for (const QString& l : plain) {
+                QVariantMap m;
+                m["text"] = l;
+                m["time"] = -1.0;
                 lyrics_.append(m);
             }
         }

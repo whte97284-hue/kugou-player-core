@@ -8,6 +8,7 @@ Item {
     property real radius: Theme.radiusM
     property int decodeSize: 512
     property alias status: img.status
+    property bool fadeIn: true // 共享元素飞行用的副本关掉淡入,首帧即可见
 
     Rectangle {
         anchors.fill: parent
@@ -33,7 +34,7 @@ Item {
         property real radius: root.radius
         fragmentShader: "qrc:/shaders/rounded.frag.qsb"
         opacity: img.status === Image.Ready ? 1 : 0
-        Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+        Behavior on opacity { enabled: root.fadeIn; OpacityAnimator { duration: Theme.normal } }
     }
     // 细微内描边,让深色封面在深色背景上也有边界
     Rectangle {

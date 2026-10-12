@@ -530,5 +530,25 @@ open(os.path.join(LIB, "jp", "random_encrypted.flac"), "wb").write(os.urandom(50
 os.makedirs(os.path.join(LIB, "YANKEE (Deluxe)", "CD1"), exist_ok=True)
 sine(os.path.join(LIB, "YANKEE (Deluxe)", "CD1", "02. Lemon.wav"), 2, 44100, 2, ["-c:a", "pcm_s16le"])
 
+# ReplayGain + 内嵌歌词 (不进 manifest,也不进入库测试曲库)
+TAGX = os.path.join(OUT, "tag_extras")
+os.makedirs(TAGX, exist_ok=True)
+fp = os.path.join(TAGX, "rg.flac")
+sine(fp, 1, 44100, 2, ["-c:a", "flac"])
+f = FLAC(fp)
+f["TITLE"] = "RG"
+f["REPLAYGAIN_TRACK_GAIN"], f["REPLAYGAIN_TRACK_PEAK"] = "-6.50 dB", "0.950000"
+f["REPLAYGAIN_ALBUM_GAIN"], f["REPLAYGAIN_ALBUM_PEAK"] = "-5.00 dB", "0.990000"
+f["LYRICS"] = "[00:01.00]第一句\n[00:02.00]第二句"
+f.save()
+fp = os.path.join(TAGX, "rg.mp3")
+sine(fp, 1, 44100, 2, ["-c:a", "libmp3lame", "-b:a", "128k"])
+from mutagen.id3 import TXXX, USLT
+t = ID3()
+t.add(TIT2(encoding=3, text="RG mp3"))
+t.add(TXXX(encoding=3, desc="REPLAYGAIN_TRACK_GAIN", text="+2.10 dB"))
+t.add(USLT(encoding=1, lang="chi", desc="", text="[00:00.50]你好\n[00:01.00]世界"))
+t.save(fp, v2_version=3)
+
 json.dump(manifest, open(p("manifest.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 print(f"generated {len(manifest)} fixtures in {OUT}")

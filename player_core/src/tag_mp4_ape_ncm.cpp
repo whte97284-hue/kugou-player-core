@@ -246,6 +246,25 @@ static void ParseIlst(Ctx& c, const Box& ilst) {
     AudioMetadata& m = c.m;
     std::vector<uint8_t> buf;
     ForEachBox(r, ilst.Body(), ilst.End(), [&](const Box& item) {
+        // 自由格式 ----:mean / name / data (iTunes 的 replaygain_track_gain 等)
+        if (item.Is("----")) {
+            std::string name;
+            std::wstring value;
+            ForEachBox(r, item.Body(), item.End(), [&](const Box& sub) {
+                if (sub.Is("name") && sub.size > sub.hdr + 4) {
+                    std::vector<uint8_t> nb;
+                    if (r.ReadVec(sub.Body() + 4, static_cast<size_t>(std::min<uint64_t>(sub.End() - sub.Body() - 4, 256)), nb))
+                        name.assign(reinterpret_cast<const char*>(nb.data()), nb.size());
+                } else if (sub.Is("data") && sub.size > sub.hdr + 8) {
+                    std::vector<uint8_t> vb;
+                    if (r.ReadVec(sub.Body() + 8, static_cast<size_t>(std::min<uint64_t>(sub.End() - sub.Body() - 8, 4096)), vb))
+                        value = DecodeUtf8(vb.data(), vb.size());
+                }
+                return true;
+            });
+            if (!name.empty() && !value.empty()) ApplyExtraTag(c, name, value);
+            return true;
+        }
         Box data;
         if (!ReadBox(r, item.Body(), item.End(), data) || !data.Is("data") || data.size < data.hdr + 8) return true;
         uint32_t typeCode = 0;
@@ -277,6 +296,8 @@ static void ParseIlst(Ctx& c, const Box& ilst) {
             return true;
         }
         if (typeCode != 1 && typeCode != 2) return true;
+        const bool isLyrics = static_cast<uint8_t>(t[0]) == 0xA9 && !std::memcmp(t + 1, "lyr", 3);
+        if (isLyrics && !c.opt.load_lyrics) return true;
         if (!r.ReadVec(valOff, static_cast<size_t>(std::min<uint64_t>(valLen, 64 * 1024)), buf)) return true;
         std::wstring v = (typeCode == 1) ? DecodeUtf8(buf.data(), buf.size()) : DecodeUtf16(buf.data(), buf.size(), true);
         if (static_cast<uint8_t>(t[0]) == 0xA9) {
@@ -286,6 +307,7 @@ static void ParseIlst(Ctx& c, const Box& ilst) {
             else if (!std::memcmp(t + 1, "gen", 3)) SetIfEmpty(m.genre, v);
             else if (!std::memcmp(t + 1, "day", 3)) SetIfEmpty(m.year, v);
             else if (!std::memcmp(t + 1, "cmt", 3)) SetIfEmpty(m.comment, v);
+            else if (isLyrics) SetIfEmpty(m.lyrics, v);
         } else if (item.Is("aART")) {
             SetIfEmpty(m.album_artist, v);
         }

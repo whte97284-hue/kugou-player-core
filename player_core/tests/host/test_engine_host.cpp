@@ -92,7 +92,31 @@ int main(int argc, char** argv) {
     Sleep(300);
     Check("切歌后继续推进", eng.GetPositionSeconds() > 0.1, F(eng.GetPositionSeconds()));
 
-    std::printf("\n[4] 音量平滑\n");
+    std::printf("\n[4] 无缝播放 (预加载下一首,同一回调内切换)\n");
+    {
+        std::atomic<int> advanced{0}, ended{0};
+        eng.on_track_advanced = [&]() { advanced++; };
+        eng.on_playback_ended = [&]() { ended++; };
+        Check("打开片段 A 0.0s ~ 0.6s", eng.OpenFile(cueImg, 0.0, 0.6));
+        Check("预加载片段 B 10.0s ~ 10.7s", eng.QueueNext(cueImg, 10.0, 10.7, 0.5f));
+        eng.Play();
+        auto t0 = std::chrono::steady_clock::now();
+        while (advanced.load() == 0 && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(3)) Sleep(20);
+        double tookA = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        Check("A 结束时切到 B:触发 on_track_advanced 而非结束回调", advanced.load() == 1 && ended.load() == 0,
+              std::to_string(advanced.load()) + "/" + std::to_string(ended.load()));
+        Check("切换时刻约 0.6s,播放状态保持", tookA > 0.45 && tookA < 1.0 && eng.GetState() == PlaybackState::Playing, F(tookA) + "s");
+        Check("切换后时长为 B 的 0.7s", std::fabs(eng.GetDurationSeconds() - 0.7) < 0.01, F(eng.GetDurationSeconds()));
+        while (ended.load() == 0 && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(4)) Sleep(20);
+        Check("B 播完后正常触发结束回调", ended.load() == 1 && advanced.load() == 1);
+        eng.on_track_advanced = nullptr;
+        eng.on_playback_ended = nullptr;
+        eng.OpenFile(hires);
+        eng.Play();
+    }
+    Check("枚举输出设备 (null 后端下至少一个)", !AudioPlaybackEngine::EnumerateOutputDevices().empty());
+
+    std::printf("\n[5] 音量平滑\n");
     eng.SetVolume(0.0f);
     Sleep(200);
     eng.SetVolume(1.0f);

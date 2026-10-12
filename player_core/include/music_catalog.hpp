@@ -39,6 +39,14 @@ struct TrackItem {
     uint32_t cover_size = 0;
     std::wstring external_cover_path; // 同目录伴生封面 (cover.jpg / folder.jpg ...)
 
+    // ReplayGain (dB / 线性峰值)
+    bool has_rg_track = false;
+    bool has_rg_album = false;
+    float rg_track_gain = 0.0f;
+    float rg_track_peak = 0.0f;
+    float rg_album_gain = 0.0f;
+    float rg_album_peak = 0.0f;
+
     // CUE 分轨:同一物理文件内的片段 (cue_end_ms == 0 表示到文件结尾)
     bool is_cue_track = false;
     uint32_t cue_start_ms = 0;

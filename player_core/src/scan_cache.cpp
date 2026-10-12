@@ -88,6 +88,13 @@ void WriteEntry(Writer& w, const std::wstring& path, const ScanCacheEntry& e) {
     w.U64(m.cover_offset);
     w.U32(m.cover_size);
     w.Str(m.error_code);
+    // ReplayGain:标志位 + 4 个 float (按位存储)
+    w.U8(static_cast<uint8_t>((m.has_rg_track ? 1 : 0) | (m.has_rg_album ? 2 : 0)));
+    for (float f : {m.rg_track_gain, m.rg_track_peak, m.rg_album_gain, m.rg_album_peak}) {
+        uint32_t bits;
+        std::memcpy(&bits, &f, 4);
+        w.U32(bits);
+    }
 }
 
 bool ReadEntry(Parser& r, std::wstring& path, ScanCacheEntry& e) {
@@ -103,6 +110,15 @@ bool ReadEntry(Parser& r, std::wstring& path, ScanCacheEntry& e) {
         !r.U32(m.cover_width) || !r.U32(m.cover_height) || !r.U8(m.cover_picture_type) || !r.U64(m.cover_offset) ||
         !r.U32(m.cover_size) || !r.Str(m.error_code))
         return false;
+    uint8_t rg = 0;
+    if (!r.U8(rg)) return false;
+    for (float* f : {&m.rg_track_gain, &m.rg_track_peak, &m.rg_album_gain, &m.rg_album_peak}) {
+        uint32_t bits = 0;
+        if (!r.U32(bits)) return false;
+        std::memcpy(f, &bits, 4);
+    }
+    m.has_rg_track = rg & 1;
+    m.has_rg_album = rg & 2;
     e.parse_ok = ok != 0;
     m.is_lossless = lossless != 0;
     m.has_cover = cover != 0;

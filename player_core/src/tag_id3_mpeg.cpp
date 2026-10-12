@@ -115,7 +115,7 @@ static std::wstring BeforeSlash(const std::wstring& s) {
     return TrimTag(p == std::wstring::npos ? s : s.substr(0, p));
 }
 
-enum class Id3Field { None, Title, Artist, Album, AlbumArtist, Genre, Year, Track, Disc, Comment, Picture, PicV22 };
+enum class Id3Field { None, Title, Artist, Album, AlbumArtist, Genre, Year, Track, Disc, Comment, Picture, PicV22, UserText, Lyrics };
 
 static Id3Field MapFrame(const uint8_t* id, int ver) {
     if (ver == 2) {
@@ -128,6 +128,8 @@ static Id3Field MapFrame(const uint8_t* id, int ver) {
         if (!std::memcmp(id, "TRK", 3)) return Id3Field::Track;
         if (!std::memcmp(id, "TPA", 3)) return Id3Field::Disc;
         if (!std::memcmp(id, "COM", 3)) return Id3Field::Comment;
+        if (!std::memcmp(id, "TXX", 3)) return Id3Field::UserText;
+        if (!std::memcmp(id, "ULT", 3)) return Id3Field::Lyrics;
         if (!std::memcmp(id, "PIC", 3)) return Id3Field::PicV22;
         return Id3Field::None;
     }
@@ -140,6 +142,8 @@ static Id3Field MapFrame(const uint8_t* id, int ver) {
     if (!std::memcmp(id, "TRCK", 4)) return Id3Field::Track;
     if (!std::memcmp(id, "TPOS", 4)) return Id3Field::Disc;
     if (!std::memcmp(id, "COMM", 4)) return Id3Field::Comment;
+    if (!std::memcmp(id, "TXXX", 4)) return Id3Field::UserText;
+    if (!std::memcmp(id, "USLT", 4)) return Id3Field::Lyrics;
     if (!std::memcmp(id, "APIC", 4)) return Id3Field::Picture;
     return Id3Field::None;
 }
@@ -198,8 +202,22 @@ static void HandleTextBody(Ctx& c, Id3Field kind, const uint8_t* p, size_t n) {
         if (!vals.empty()) SetIfEmpty(m.comment, vals[0]);
         return;
     }
+    if (kind == Id3Field::Lyrics) {
+        // USLT:编码(1) + 语言(3) + 描述 (以编码对应的终止符结束) + 歌词正文
+        if (!c.opt.load_lyrics || n < 5 || !m.lyrics.empty()) return;
+        size_t i = SkipTerminated(enc, p, n, 4);
+        if (i > n) return;
+        std::vector<std::wstring> vals = DecodeId3Strings(enc, p + i, n - i, c.opt.legacy_code_page);
+        if (!vals.empty()) m.lyrics = vals[0];
+        return;
+    }
     std::vector<std::wstring> vals = DecodeId3Strings(enc, p + 1, n - 1, c.opt.legacy_code_page);
     if (vals.empty()) return;
+    if (kind == Id3Field::UserText) {
+        // TXXX:描述 + 值 (如 REPLAYGAIN_TRACK_GAIN / -6.54 dB)
+        if (vals.size() >= 2) ApplyExtraTag(c, AudioTagParser::WideToUtf8(vals[0]), vals[1]);
+        return;
+    }
     switch (kind) {
         case Id3Field::Title: SetIfEmpty(m.title, vals[0]); break;
         case Id3Field::Artist: SetIfEmpty(m.artist, JoinSlash(vals)); break;
@@ -262,6 +280,7 @@ static void ParseId3Frames(Ctx& c, uint64_t pos, uint64_t end, int ver, bool rel
             if (flags & 0x0001) { bodyOff += 4; size = (size >= 4) ? size - 4 : 0; }
         }
 
+        if (kind == Id3Field::Lyrics && !c.opt.load_lyrics) skip = true; // 入库扫描不读歌词正文
         if (!skip && kind != Id3Field::None && size > 0) {
             bool isPic = (kind == Id3Field::Picture || kind == Id3Field::PicV22);
             if (!isPic) {
@@ -400,6 +419,7 @@ bool ParseApeTagAt(Ctx& c, uint64_t footerOff, uint64_t* outTagBytes) {
             }
         }
         if (parts.empty()) continue;
+        if (ApplyExtraTag(c, key, parts[0])) continue;
         if (ApeKeyEq(key, "Title")) SetIfEmpty(m.title, parts[0]);
         else if (ApeKeyEq(key, "Artist")) SetIfEmpty(m.artist, JoinSlash(parts));
         else if (ApeKeyEq(key, "Album")) SetIfEmpty(m.album, parts[0]);

@@ -13,6 +13,7 @@ class SettingsService : public QObject {
     // ---- 播放 ----
     Q_PROPERTY(bool fade READ fade WRITE setFade NOTIFY changed)            // 暂停 / 继续时淡出淡入
     Q_PROPERTY(bool resume READ resume WRITE setResume NOTIFY changed)      // 启动时恢复上次的队列与位置
+    Q_PROPERTY(int lyricsSource READ lyricsSource WRITE setLyricsSource NOTIFY changed) // 0 .lrc 优先 / 1 内嵌优先
     // ---- 曲库 ----
     Q_PROPERTY(int scanThreads READ scanThreads WRITE setScanThreads NOTIFY changed) // 0 = 自动
     Q_PROPERTY(bool splitCue READ splitCue WRITE setSplitCue NOTIFY changed)
@@ -42,6 +43,8 @@ public:
     void setFade(bool v) { put("player/fade", v); }
     bool resume() const { return get("player/resume", true).toBool(); }
     void setResume(bool v) { put("player/resume", v); }
+    int lyricsSource() const { return get("player/lyricsSource", 0).toInt(); }
+    void setLyricsSource(int v) { put("player/lyricsSource", v); }
 
     int scanThreads() const { return get("library/threads", 0).toInt(); }
     void setScanThreads(int v) { put("library/threads", v); }

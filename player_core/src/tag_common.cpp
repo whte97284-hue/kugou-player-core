@@ -1,3 +1,4 @@
+#include <cstdlib>
 // 解析内核公共设施:字节源、带缓存的读取器、文本编解码、封面择优、Vorbis Comment
 #include "tag_internal.hpp"
 #include <algorithm>
@@ -454,6 +455,32 @@ static bool KeyEq(const uint8_t* k, size_t kl, const char* name) {
     return true;
 }
 
+bool ApplyExtraTag(Ctx& c, const std::string& key, const std::wstring& value) {
+    std::string k;
+    for (char ch : key) k += static_cast<char>(ch >= 'a' && ch <= 'z' ? ch - 32 : ch);
+    AudioMetadata& m = c.m;
+    if (k == "LYRICS" || k == "UNSYNCEDLYRICS" || k == "UNSYNCED LYRICS") {
+        if (c.opt.load_lyrics && m.lyrics.empty()) m.lyrics = value;
+        return true;
+    }
+    if (k.compare(0, 11, "REPLAYGAIN_") != 0) return false;
+    // "-6.54 dB" / "+1.2 dB" / "0.988"
+    std::string num;
+    for (wchar_t ch : value) {
+        if ((ch >= L'0' && ch <= L'9') || ch == L'.' || ch == L'-' || ch == L'+') num += static_cast<char>(ch);
+        else if (!num.empty()) break;
+    }
+    if (num.empty()) return true;
+    char* endp = nullptr;
+    float v = std::strtof(num.c_str(), &endp);
+    if (endp == num.c_str() || !(v == v)) return true;
+    if (k == "REPLAYGAIN_TRACK_GAIN") { m.rg_track_gain = v; m.has_rg_track = true; }
+    else if (k == "REPLAYGAIN_TRACK_PEAK") m.rg_track_peak = v;
+    else if (k == "REPLAYGAIN_ALBUM_GAIN") { m.rg_album_gain = v; m.has_rg_album = true; }
+    else if (k == "REPLAYGAIN_ALBUM_PEAK") m.rg_album_peak = v;
+    return true;
+}
+
 void ApplyVorbisComments(Ctx& c, const uint8_t* p, size_t n) {
     if (n < 8) return;
     uint32_t vendorLen = LE32(p);
@@ -505,6 +532,7 @@ void ApplyVorbisComments(Ctx& c, const uint8_t* p, size_t n) {
 
         std::wstring val = TrimTag(DecodeUtf8(v, vl));
         if (val.empty()) continue;
+        if (ApplyExtraTag(c, std::string(reinterpret_cast<const char*>(e), kl), val)) continue;
         if (KeyEq(e, kl, "TITLE")) { if (title.empty()) title = val; }
         else if (KeyEq(e, kl, "ARTIST")) artists.push_back(val);
         else if (KeyEq(e, kl, "ALBUM")) { if (album.empty()) album = val; }
