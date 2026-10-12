@@ -12,6 +12,7 @@ BorderImage {
     height: target ? target.height + spread * 2 : 0
     source: "qrc:/images/shadow.png"
     border { left: 64; top: 64; right: 64; bottom: 64 }
-    opacity: strength
+    // 跟随目标的透明度:共享元素飞行时目标被隐藏,投影不该单独留在原地
+    opacity: strength * (target ? target.opacity : 1)
     smooth: true
 }

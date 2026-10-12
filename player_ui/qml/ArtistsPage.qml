@@ -10,10 +10,12 @@ Item {
     readonly property int columns: Math.max(3, Math.floor((width - sidePadding * 2 - 24) / minCell))
     readonly property real cellW: (width - sidePadding * 2 - 24) / columns
 
+    // 返回歌手墙时头像飞回的落点。不能用 visible 判断:歌手墙此刻还处于隐藏状态,所有格子的 visible 都是 false;
+    // 改用 itemAtIndex 排除回收池里闲置的格子
     function avatarOf(i) {
         for (let k = 0; k < grid.contentItem.children.length; ++k) {
             const c = grid.contentItem.children[k]
-            if (c.artistIndex === i && c.avatarItem && c.visible) return c.avatarItem
+            if (c.artistIndex === i && c.avatarItem && grid.itemAtIndex(c.row) === c) return c.avatarItem
         }
         return null
     }
@@ -39,6 +41,7 @@ Item {
             height: grid.cellHeight
             readonly property string letter: model.letter
             readonly property int artistIndex: model.artistIndex
+            readonly property int row: index
             readonly property Item avatarItem: avatarImg
             readonly property bool hovered: m.containsMouse
             readonly property real d: width - 36

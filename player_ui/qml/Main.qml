@@ -100,31 +100,10 @@ Window {
     function openArtist(i, fromItem) {
         if (i < 0) return
         openDetail("artist", i)
-        if (fromItem) flyBetween(fromItem, function() { return artistLoader.item ? artistLoader.item.heroAvatar : null }, "")
-    }
-    // 共享元素飞行:from 是来源图块,targetFn 在目标页布局完成后返回落点
-    function flyBetween(fromItem, targetFn, src) {
+        if (!fromItem) return
         Qt.callLater(function() {
-            const hero = targetFn()
-            if (!hero || !fromItem) return
-            const from = fromItem.mapToItem(root.contentItem, 0, 0)
-            const to = hero.mapToItem(root.contentItem, 0, 0)
-            flying.source = src.length ? src : hero.source
-            flying.radius = hero.radius
-            flying.width = hero.width
-            flying.height = hero.height
-            flying.x = from.x
-            flying.y = from.y
-            flying.scale = fromItem.width / hero.width
-            flying.radius = (fromItem.radius !== undefined ? fromItem.radius : hero.radius) / flying.scale
-            flight.landing = hero
-            hero.opacity = 0
-            flying.visible = true
-            flight.toX = to.x
-            flight.toY = to.y
-            flight.toScale = 1
-            flight.toRadius = hero.radius
-            flight.restart()
+            const hero = artistLoader.item ? artistLoader.item.heroAvatar : null
+            if (hero) fly(fromItem, null, hero, artistLoader)
         })
     }
     function openPlaylist(id) { if (id && id.length) openDetail("playlist", id) }
@@ -251,14 +230,36 @@ Window {
     }
 
     // ======================= 共享元素:飞行的封面 =======================
-    RoundedImage {
+    // 两层:底层用来源图块已解码好的那张 (缓存命中,首帧就有画面),上层是落点尺寸的清晰版,就绪后直接盖上 (同一张图,只是更清晰)
+    Item {
         id: flying
         visible: false
         transformOrigin: Item.TopLeft
-        radius: 16
-        decodeSize: 640
-        fadeIn: false
         z: 50
+        property real radius: 16
+        property string loSource
+        property int loDecode: 640
+        property string hiSource
+        property int hiDecode: 640
+
+        RoundedImage {
+            anchors.fill: parent
+            radius: flying.radius
+            source: flying.loSource
+            decodeSize: flying.loDecode
+            fadeIn: false
+            placeholder: false
+            outline: false
+        }
+        RoundedImage {
+            id: flyingHi
+            anchors.fill: parent
+            radius: flying.radius
+            source: flying.hiSource
+            decodeSize: flying.hiDecode
+            fadeIn: false
+            placeholder: false
+        }
 
         ParallelAnimation {
             id: flight
@@ -266,20 +267,100 @@ Window {
             property real toY
             property real toScale: 1
             property real toRadius: 10
-            property bool reverse: false
-            property Item landing: null
+            property Item landing: null // 落点:飞行期间隐藏,落地后显示
+            property Item origin: null  // 起点:飞行期间隐藏,避免同一张封面出现两份
             XAnimator { target: flying; to: flight.toX; duration: 460; easing.type: Easing.OutQuint }
             YAnimator { target: flying; to: flight.toY; duration: 460; easing.type: Easing.OutQuint }
             ScaleAnimator { target: flying; to: flight.toScale; duration: 460; easing.type: Easing.OutQuint }
             // 缩放会连带缩小圆角:同步补偿,让屏幕上的圆角从起点平滑过渡到落点
             NumberAnimation { target: flying; property: "radius"; to: flight.toRadius; duration: 460; easing.type: Easing.OutQuint }
-            onFinished: {
-                flying.visible = false
+            onFinished: handoff.start()
+        }
+        // 落地交接:等落点图片解码完成再显示它,随后再撤掉飞行副本 (落点自己的淡入在副本下面完成,看不出切换)
+        Timer {
+            id: handoff
+            interval: 16
+            repeat: true
+            property int waited: 0
+            onRunningChanged: if (running) waited = 0
+            onTriggered: {
+                waited += interval
+                const img = root.imageIn(flight.landing)
+                if (img && img.status !== Image.Ready && img.status !== Image.Error && waited < 1500) return
+                stop()
+                if (flight.landing) flight.landing.opacity = 1
+                if (flight.origin) flight.origin.opacity = 1
                 if (detail.heroCover) detail.heroCover.opacity = 1
                 detail.heroAway = false
-                if (flight.landing) { flight.landing.opacity = 1; flight.landing = null }
+                flight.landing = null
+                flight.origin = null
+                reveal.restart()
             }
         }
+        Timer { id: reveal; interval: Theme.normal + 40; onTriggered: flying.visible = false }
+    }
+
+    // 图块里真正显示封面的 RoundedImage (来源可能是卡片容器或交叉淡化封面)
+    function imageIn(item) {
+        if (!item) return null
+        if (item.status !== undefined && item.decodeSize !== undefined) return item
+        let best = null
+        for (let k = 0; k < item.children.length; ++k) {
+            const c = imageIn(item.children[k])
+            if (c && (!best || (c.opacity > best.opacity) || (c.status === Image.Ready && best.status !== Image.Ready))) best = c
+        }
+        return best
+    }
+    // 图块在屏幕上的矩形。page 正处于切页缩放 (0.985 / 1.015 → 1) 时,按它的缩放中心换算成停稳后的位置与尺寸,
+    // 否则飞行落在缩放中途的位置,页面停稳后封面会再跳一下
+    function settledRect(item, page) {
+        const p = item.mapToItem(root.contentItem, 0, 0)
+        const q = item.mapToItem(root.contentItem, item.width, item.height)
+        const s = page && page.scale > 0 ? page.scale : 1
+        if (s === 1) return Qt.rect(p.x, p.y, q.x - p.x, q.y - p.y)
+        const c = page.mapToItem(root.contentItem, page.width / 2, page.height / 2)
+        return Qt.rect(c.x + (p.x - c.x) / s, c.y + (p.y - c.y) / s, (q.x - p.x) / s, (q.y - p.y) / s)
+    }
+    function fly(fromItem, fromPage, toItem, toPage) {
+        // 上一段飞行还没收尾:先把它藏起的图块还原
+        flight.stop()
+        handoff.stop()
+        reveal.stop()
+        if (flight.landing) flight.landing.opacity = 1
+        if (flight.origin) flight.origin.opacity = 1
+        flight.landing = null
+        flight.origin = null
+
+        const fromImg = imageIn(fromItem), toImg = imageIn(toItem)
+        if (!fromImg || !toImg || fromItem.width <= 0 || toItem.width <= 0) return false
+        const a = settledRect(fromItem, fromPage)
+        const b = settledRect(toItem, toPage)
+        if (a.width <= 0 || b.width <= 0) return false
+        const fromRadius = (fromItem.radius !== undefined ? fromItem.radius : fromImg.radius) * a.width / fromItem.width
+        const toRadius = (toItem.radius !== undefined ? toItem.radius : toImg.radius) * b.width / toItem.width
+
+        const fromReady = fromImg.status === Image.Ready
+        flying.loSource = fromReady ? fromImg.source : toImg.source
+        flying.loDecode = fromReady ? fromImg.decodeSize : toImg.decodeSize
+        flying.hiSource = toImg.source
+        flying.hiDecode = toImg.decodeSize
+        flying.width = b.width
+        flying.height = b.height
+        flying.x = a.x
+        flying.y = a.y
+        flying.scale = a.width / b.width
+        flying.radius = fromRadius / flying.scale
+        flight.landing = toItem
+        flight.origin = fromItem
+        toItem.opacity = 0
+        fromItem.opacity = 0
+        flying.visible = true
+        flight.toX = b.x
+        flight.toY = b.y
+        flight.toScale = 1
+        flight.toRadius = toRadius
+        flight.restart()
+        return true
     }
 
     function openAlbum(index, coverItem) {
@@ -291,81 +372,24 @@ Window {
         // 从专辑墙打开时封面飞入详情页;其他入口直接淡入
         if (!fromItem) return
         Qt.callLater(function() {
-            const hero = detail.heroCover
-            if (!hero) return
-            const from = fromItem.mapToItem(root.contentItem, 0, 0)
-            const to = hero.mapToItem(root.contentItem, 0, 0)
-            flying.source = albumTracks.cover
-            flying.width = hero.width
-            flying.height = hero.height
-            flying.x = from.x
-            flying.y = from.y
-            flying.scale = fromItem.width * wall.scale / hero.width
-            flying.radius = 10 / flying.scale
-            flight.landing = null
-            hero.opacity = 0
-            flying.visible = true
-            flight.toX = to.x
-            flight.toY = to.y
-            flight.toScale = 1
-            flight.toRadius = hero.radius
-            flight.restart()
+            if (detail.heroCover) fly(fromItem, null, detail.heroCover, detail)
         })
     }
 
-    // 返回专辑墙时封面飞回对应卡片
-    // 此刻专辑墙仍处于离场状态 (缩小 0.985、透明),量到的位置会随它回弹而漂移:
-    // 按缩放中心换算出回弹后的最终位置;落点卡片在飞行期间隐藏,避免同一张封面出现两份
+    // 返回专辑墙时封面飞回对应卡片 (专辑墙此刻仍在回弹缩放,落点按停稳后的位置算)
     function closeAlbumFlight() {
         if (detailKind !== "album" || section !== "albums") return
         const hero = detail.heroCover
         const card = wall.coverOf(albumTracks.albumIndex)
         if (!hero || !card) return
-        const from = hero.mapToItem(root.contentItem, 0, 0)
-        const p = card.mapToItem(root.contentItem, 0, 0)
-        const c = wall.mapToItem(root.contentItem, wall.width / 2, wall.height / 2)
-        const s = wall.scale > 0 ? wall.scale : 1
-        flying.source = albumTracks.cover
-        flying.width = hero.width
-        flying.height = hero.height
-        flying.x = from.x
-        flying.y = from.y
-        flying.scale = 1
-        flying.radius = hero.radius
-        flying.visible = true
-        hero.opacity = 0
-        detail.heroAway = true
-        if (flight.landing) flight.landing.opacity = 1
-        flight.landing = card
-        card.opacity = 0
-        flight.toX = c.x + (p.x - c.x) / s
-        flight.toY = c.y + (p.y - c.y) / s
-        flight.toScale = card.width / hero.width
-        flight.toRadius = 10 / flight.toScale
-        flight.restart()
+        if (fly(hero, null, card, wall)) detail.heroAway = true
     }
     function closeArtistFlight() {
         const page = artistLoader.item, grid = artistsLoader.item
         if (!page || !grid) return
         const hero = page.heroAvatar
         const cell = grid.avatarOf(root.lastArtist)
-        if (!hero || !cell) return
-        const from = hero.mapToItem(root.contentItem, 0, 0)
-        const to = cell.mapToItem(root.contentItem, 0, 0)
-        flying.source = hero.source
-        flying.radius = hero.radius
-        flying.width = hero.width
-        flying.height = hero.height
-        flying.x = from.x
-        flying.y = from.y
-        flying.scale = 1
-        flight.landing = cell
-        cell.opacity = 0
-        flying.visible = true
-        flight.toX = to.x
-        flight.toY = to.y
-        flight.toScale = cell.width / hero.width
-        flight.restart()
+        if (hero && cell) fly(hero, null, cell, artistsLoader)
     }
     function closeAlbum() { if (detailKind === "album") back() }
 
