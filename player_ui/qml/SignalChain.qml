@@ -1,7 +1,7 @@
 import QtQuick
 import PlayerUi
 
-// 信号链面板:从音源到设备的每一个环节。绿色 = 无损直通,琥珀色 = 存在转换 (附原因);底部可切换独占输出
+// 信号链面板:从音源到设备的每一个环节。绿色 = 无损直通,琥珀色 = 存在转换 (附原因);独占输出在设置页切换
 Rectangle {
     id: panel
     property bool shown: false
@@ -100,39 +100,5 @@ Rectangle {
             }
         }
 
-        // 独占输出开关
-        Item { width: 1; height: 10 }
-        Rectangle { width: col.width; height: 1; color: Theme.hairline }
-        Item {
-            width: col.width
-            height: 48
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: qsTr("WASAPI 独占")
-                color: Theme.text
-                font.family: Theme.fontFamily
-                font.pixelSize: 13
-            }
-            Rectangle {
-                id: sw
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                width: 40; height: 22; radius: 11
-                color: player.exclusive ? Theme.accent : Qt.rgba(1, 1, 1, 0.12)
-                Behavior on color { ColorAnimation { duration: Theme.normal } }
-                Rectangle {
-                    width: 16; height: 16; radius: 8
-                    y: 3
-                    x: player.exclusive ? sw.width - width - 3 : 3
-                    color: player.exclusive ? Theme.onAccent : Theme.text
-                    Behavior on x { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
-                }
-            }
-            MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: player.exclusive = !player.exclusive
-            }
-        }
     }
 }

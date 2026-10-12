@@ -1,4 +1,5 @@
 #include <QDir>
+#include <cmath>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -12,6 +13,7 @@
 #include "player_controller.h"
 #include "playlist_service.h"
 #include "decrypt_service.h"
+#include "settings_service.h"
 #include "decryptor.hpp"
 #include "window_helper.h"
 
@@ -99,6 +101,10 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
     }, 60});
     steps->push_back({"17_tools_done", [] {}, 3000});
     steps->push_back({"18_songs_after_decrypt", [call] { call("automationGo", QStringLiteral("songs")); }, 1400});
+    steps->push_back({"19_settings", [window, call] {
+        window->resize(1320, 1180);
+        call("automationGo", QStringLiteral("settings"));
+    }, 1600});
     steps->push_back({"14_small_window", [window, call] {
         call("automationHideChain");
         window->resize(980, 640);
@@ -135,9 +141,13 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
 
 int main(int argc, char* argv[]) {
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
+    QCoreApplication::setOrganizationName("KugouPlayer");
+    QCoreApplication::setApplicationName("KugouPlayer");
+    // 界面缩放 (设置页):必须在创建应用对象之前生效
+    const double scale = SettingsService::StartupScale();
+    if (scale > 0.5 && scale < 3.0 && std::abs(scale - 1.0) > 0.01 && qEnvironmentVariableIsEmpty("QT_SCALE_FACTOR"))
+        qputenv("QT_SCALE_FACTOR", QByteArray::number(scale, 'f', 2));
     QGuiApplication app(argc, argv);
-    app.setOrganizationName("KugouPlayer");
-    app.setApplicationName("KugouPlayer");
     QQuickStyle::setStyle("Basic");
 
     QString screenshotDir, libraryArg, flowArg;
@@ -157,6 +167,7 @@ int main(int argc, char* argv[]) {
     SearchModel search(&library);
     PlaylistService playlists(&library);
     DecryptService decrypt(&library);
+    SettingsService settings(&library);
     ArtistModel artists(&library);
     TrackCollectionModel songs(&library, &playlists);
     TrackCollectionModel artistTracks(&library, &playlists);
@@ -175,6 +186,7 @@ int main(int argc, char* argv[]) {
     ctx->setContextProperty("searchModel", &search);
     ctx->setContextProperty("playlists", &playlists);
     ctx->setContextProperty("decrypt", &decrypt);
+    ctx->setContextProperty("settings", &settings);
     ctx->setContextProperty("artistModel", &artists);
     ctx->setContextProperty("songsModel", &songs);
     ctx->setContextProperty("artistTracks", &artistTracks);

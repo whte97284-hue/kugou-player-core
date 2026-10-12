@@ -17,7 +17,9 @@ Window {
     Component.onCompleted: windowHelper.applyNativeFrame(root)
 
     // 强调色跟随当前专辑
-    Binding { target: Theme; property: "accent"; value: player.accent }
+    // 强调色:跟随封面,或设置页里选的固定色
+    Binding { target: Theme; property: "accent"; value: settings.accent >= 0 ? settings.accentPresets[settings.accent] : player.accent }
+    Binding { target: Theme; property: "reduced"; value: settings.reducedMotion }
 
     // 页面加载器:后台异步预创建 (不卡当前帧),之后常驻;进场稍慢带轻微放大,退场更快,两页交叠时间短
     component PageLoader: Loader {
@@ -187,6 +189,7 @@ Window {
                 allowEmpty: true
                 sourceComponent: SearchPage { bottomInset: pages.inset; onBack: root.back() }
             }
+            PageLoader { id: settingsLoader; key: "settings"; allowEmpty: true; sourceComponent: SettingsPage { bottomInset: pages.inset } }
             PageLoader { id: toolsLoader; key: "tools"; allowEmpty: true; sourceComponent: ToolsPage { bottomInset: pages.inset } }
             PageLoader {
                 id: artistLoader
@@ -218,7 +221,7 @@ Window {
             Onboarding {
                 anchors.fill: parent
                 visible: opacity > 0
-                opacity: pages.libraryEmpty && ["playlist", "playlists", "search", "tools"].indexOf(root.view) < 0 ? 1 : 0
+                opacity: pages.libraryEmpty && ["playlist", "playlists", "search", "tools", "settings"].indexOf(root.view) < 0 ? 1 : 0
                 Behavior on opacity { OpacityAnimator { duration: Theme.slow; easing.type: Easing.OutCubic } }
                 onPickFolder: folderDialog.open()
             }

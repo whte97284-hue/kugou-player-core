@@ -90,6 +90,10 @@ Item {
             sourceComponent: navButton
             property var modelData: ({ key: "folder", icon: "folder", tip: qsTr("音乐文件夹") })
         }
+        Loader {
+            sourceComponent: navButton
+            property var modelData: ({ key: "settings", icon: "settings", tip: qsTr("设置") })
+        }
     }
 
     Component {

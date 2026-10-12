@@ -4,6 +4,7 @@
 #include <QDate>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QFileInfo>
 #include <QSettings>
 #include <QStandardPaths>
@@ -216,6 +217,14 @@ void LibraryService::startScan() {
     QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     QDir().mkpath(dataDir);
     job->pipeline.SetLazyCoverExtract(true);
+    // 设置页:扫描线程 / CUE 分轨 / 旧编码标签代码页 / ID3v1 回读
+    QSettings st;
+    // 影响解析结果的设置改过:丢弃扫描缓存,本次全量解析
+    if (st.value("library/needRescan", false).toBool()) QFile::remove(dataDir + "/scan.cache");
+    job->pipeline.SetThreadCount(static_cast<size_t>(std::max(0, st.value("library/threads", 0).toInt())));
+    job->pipeline.SetSplitCueSheets(st.value("library/splitCue", true).toBool());
+    job->pipeline.SetLegacyCodePage(static_cast<unsigned>(st.value("library/codePage", 936).toInt()));
+    job->pipeline.SetReadId3v1(st.value("library/readId3v1", true).toBool());
     job->pipeline.SetScanCacheFile((dataDir + "/scan.cache").toStdWString());
     job->pipeline.SetTargetLibraryDir((dataDir + "/decoded").toStdWString());
     // 加密源:默认只收集,由界面询问后再解密;产物索引让已解密的文件下次直接入库

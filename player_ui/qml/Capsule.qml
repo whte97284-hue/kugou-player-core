@@ -19,9 +19,9 @@ Rectangle {
     width: implicitWidth
     height: implicitHeight
     radius: height / 2
-    color: filled ? Theme.accent : accent ? Theme.accentAlpha(0.16) : Theme.hover
-    border.width: filled ? 0 : 1
-    border.color: accent ? Theme.accentAlpha(0.4) : Theme.hairline
+    // 未选中:极淡暖色底、无描边;强调态:淡强调色底;实心:强调色
+    color: filled ? Theme.accent : accent ? Theme.accentAlpha(0.16) : Qt.rgba(1, 0.96, 0.9, 0.05)
+    border.width: 0
     scale: area.pressed ? 0.96 : 1
     Behavior on scale { ScaleAnimator { duration: Theme.fast; easing.type: Easing.OutCubic } }
 
@@ -29,7 +29,7 @@ Rectangle {
     Rectangle {
         anchors.fill: parent
         radius: parent.radius
-        color: cap.filled ? Qt.rgba(1, 1, 1, 0.12) : Theme.hover
+        color: cap.filled ? Qt.rgba(1, 1, 1, 0.12) : Qt.rgba(1, 0.96, 0.9, 0.05)
         opacity: cap.interactive && area.containsMouse ? 1 : 0
         Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
     }

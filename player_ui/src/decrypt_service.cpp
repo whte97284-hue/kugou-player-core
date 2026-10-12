@@ -473,9 +473,10 @@ void DecryptService::start(std::vector<Item> items, bool rescanAfter) {
     const std::wstring outDir = outputDir_.toStdWString();
     const std::wstring indexPath = (LibraryService::dataDir() + "/decrypt.index").toStdWString();
     QStringList folders = lib_->folders();
+    const bool writeTags = QSettings().value("decrypt/writeTags", true).toBool();
     QPointer<DecryptService> self(this);
 
-    worker_ = std::thread([self, items = std::move(items), cancel, outDir, indexPath, rescanAfter, folders]() {
+    worker_ = std::thread([self, items = std::move(items), cancel, outDir, indexPath, rescanAfter, folders, writeTags]() {
         DecryptIndex index;
         index.Load(indexPath);
         QElapsedTimer clock;
@@ -497,6 +498,7 @@ void DecryptService::start(std::vector<Item> items, bool rescanAfter) {
 
             DecryptOptions o;
             o.output_dir = outDir;
+            o.write_tags = writeTags;
             o.cancel = cancel.get();
             o.progress = [&](uint64_t done, uint64_t total) {
                 qint64 now = clock.elapsed();

@@ -6,6 +6,11 @@
 #include <QVariantMap>
 #include <QFile>
 #include <QFileInfo>
+#include <QDateTime>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSaveFile>
 #include <QRegularExpression>
 #include <algorithm>
 #include <random>
@@ -41,9 +46,78 @@ PlayerController::PlayerController(LibraryService* lib, QObject* parent) : QObje
     timer_.setInterval(16); // 约 60Hz 推送进度与频谱
     timer_.setTimerType(Qt::PreciseTimer);
     connect(&timer_, &QTimer::timeout, this, &PlayerController::tick);
+
+    fade_.setEasingCurve(QEasingCurve::OutCubic);
+    connect(&fade_, &QVariantAnimation::valueChanged, this, [this](const QVariant& v) {
+        gain_ = v.toDouble();
+        applyVolume();
+    });
+    // 曲库首次就绪后恢复上次的播放会话
+    connect(lib_, &LibraryService::libraryChanged, this, [this]() {
+        if (!restored_) {
+            restored_ = true;
+            restoreSession();
+        }
+    });
+}
+
+void PlayerController::applyVolume() {
+    if (engine_) engine_->SetVolume(static_cast<float>(volume_ * gain_));
+}
+
+namespace {
+QString SessionFile() { return LibraryService::dataDir() + "/session.json"; }
+} // namespace
+
+void PlayerController::saveSession() {
+    if (!snap_ || queue_.empty()) return;
+    QJsonArray keys;
+    for (uint64_t id : queue_)
+        if (const TrackItem* t = snap_->catalog.FindById(id)) keys.append(TrackKeyOf(*t));
+    QJsonObject o;
+    o["keys"] = keys;
+    o["index"] = queueIndex_;
+    o["position"] = position_;
+    QSaveFile f(SessionFile());
+    if (f.open(QIODevice::WriteOnly)) {
+        f.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
+        f.commit();
+    }
+    lastSessionSave_ = QDateTime::currentMSecsSinceEpoch();
+}
+
+void PlayerController::restoreSession() {
+    if (!QSettings().value("player/resume", true).toBool() || !queue_.empty()) return;
+    QFile f(SessionFile());
+    if (!f.open(QIODevice::ReadOnly)) return;
+    QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
+    auto snap = lib_->snapshot();
+    std::unordered_map<QString, uint64_t> byKey;
+    byKey.reserve(snap->catalog.GetAllTracks().size());
+    for (const TrackItem& t : snap->catalog.GetAllTracks()) byKey.emplace(TrackKeyOf(t), t.id);
+    std::vector<uint64_t> ids;
+    int index = o.value("index").toInt(), mapped = -1;
+    const QJsonArray keys = o.value("keys").toArray();
+    for (int i = 0; i < keys.size(); ++i) {
+        auto it = byKey.find(keys[i].toString());
+        if (it == byKey.end()) continue;
+        if (i == index) mapped = static_cast<int>(ids.size());
+        ids.push_back(it->second);
+    }
+    if (ids.empty()) return;
+    snap_ = snap;
+    queue_ = ids;
+    unshuffled_ = ids;
+    queueContentChanged();
+    // 暂停在上次的位置,等用户按播放
+    if (openIndex(std::max(0, mapped), false) && mapped >= 0) {
+        double pos = o.value("position").toDouble();
+        if (pos > 1.0 && pos < duration() - 1.0) seek(pos);
+    }
 }
 
 PlayerController::~PlayerController() {
+    saveSession();
     QSettings st;
     st.setValue("player/volume", volume_);
     st.setValue("player/shuffle", shuffle_);
@@ -81,7 +155,7 @@ void PlayerController::setVolume(double v) {
     v = std::clamp(v, 0.0, 1.0);
     if (qFuzzyCompare(v + 1, volume_ + 1)) return;
     volume_ = v;
-    if (engine_) engine_->SetVolume(static_cast<float>(v));
+    applyVolume();
     emit volumeChanged();
     rebuildSignalChain();
 }
@@ -261,7 +335,9 @@ bool PlayerController::openIndex(int index, bool autoPlay) {
         current_ = t;
         queueIndex_ = i;
         position_ = 0;
-        engine_->SetVolume(static_cast<float>(volume_));
+        fade_.stop();
+        gain_ = 1.0;
+        applyVolume();
         if (autoPlay) engine_->Play();
         setPlaying(autoPlay);
         timer_.start();
@@ -281,13 +357,39 @@ void PlayerController::toggle() {
         if (!queue_.empty()) openIndex(std::max(0, queueIndex_), true);
         return;
     }
-    if (engine_->GetState() == PlaybackState::Playing) {
-        engine_->Pause();
+    const bool useFade = QSettings().value("player/fade", true).toBool();
+    if (playing_) {
         setPlaying(false);
+        if (!useFade) {
+            engine_->Pause();
+            return;
+        }
+        // 淡出 180ms 后真正暂停,避免「咔」的一声截断
+        fade_.stop();
+        fade_.setDuration(180);
+        fade_.setStartValue(gain_);
+        fade_.setEndValue(0.0);
+        disconnect(&fade_, &QVariantAnimation::finished, nullptr, nullptr);
+        connect(&fade_, &QVariantAnimation::finished, this, [this]() {
+            if (!playing_ && engine_) engine_->Pause();
+        });
+        fade_.start();
+        saveSession();
     } else {
-        engine_->TogglePlay();
+        fade_.stop();
+        disconnect(&fade_, &QVariantAnimation::finished, nullptr, nullptr);
+        if (engine_->GetState() != PlaybackState::Playing) engine_->TogglePlay();
         setPlaying(true);
         timer_.start();
+        if (!useFade) {
+            gain_ = 1.0;
+            applyVolume();
+            return;
+        }
+        fade_.setDuration(280);
+        fade_.setStartValue(engine_->GetState() == PlaybackState::Playing && gain_ < 1.0 ? gain_ : 0.0);
+        fade_.setEndValue(1.0);
+        fade_.start();
     }
 }
 
@@ -359,6 +461,7 @@ void PlayerController::tick() {
     bass_ = low > bass_ ? bass_ * 0.4 + low * 0.6 : bass_ * 0.9 + low * 0.1;
     emit spectrumChanged();
     updateLyricIndex();
+    if (playing_ && QDateTime::currentMSecsSinceEpoch() - lastSessionSave_ > 5000) saveSession();
     // 暂停且频谱已完全衰减后停止定时器,空闲时零 CPU
     if (!isPlaying && energy < 1e-3) timer_.stop();
 }

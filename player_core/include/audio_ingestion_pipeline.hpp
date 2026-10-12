@@ -83,7 +83,11 @@ public:
     void SetKgmMaskPath(const std::wstring& maskPath);
     void SetThreadCount(size_t threads);               // 0 = 按存储类型自适应 (机械盘 4 / 固态盘按核心数)
     void SetLazyCoverExtract(bool lazy);               // 开启后入库不读取封面图片,仅记录偏移,光速构建万级曲库
-    void SetSplitCueSheets(bool split);                // 默认开启:整轨 + CUE 自动拆分为独立曲目
+    void SetSplitCueSheets(bool split);
+    // 非 Unicode 标签的回退代码页 (936 GBK / 950 Big5 / 932 Shift-JIS);变更后需重建扫描缓存
+    void SetLegacyCodePage(unsigned int codePage);
+    // MP3 无 ID3v2 标题时是否回读文件尾部的 ID3v1 / APEv2
+    void SetReadId3v1(bool on);                // 默认开启:整轨 + CUE 自动拆分为独立曲目
     // 增量扫描缓存文件 (仅惰性封面模式生效)。设置后,大小与修改时间未变的文件直接复用上次解析结果,零磁盘读取
     void SetScanCacheFile(const std::wstring& path);
     // 加密源处理策略 (默认 Auto) 与解密产物索引文件 (源文件 → 产物,扫描时直接复用产物)
@@ -123,6 +127,8 @@ private:
     size_t thread_count_ = 0;
     bool lazy_cover_extract_ = false;
     bool split_cue_ = true;
+    unsigned int code_page_ = 936;
+    bool read_id3v1_ = true;
     std::wstring scan_cache_path_;
     DecryptPolicy decrypt_policy_ = DecryptPolicy::Auto;
     std::wstring decrypt_index_path_;

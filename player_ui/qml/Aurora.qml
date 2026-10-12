@@ -19,6 +19,7 @@ Item {
     ShaderEffect {
         id: fx
         anchors.fill: parent
+        visible: settings.background !== 2
         layer.enabled: true
         layer.smooth: true
         layer.textureSize: Qt.size(Math.max(1, Math.round(width / 4)), Math.max(1, Math.round(height / 4)))
@@ -40,7 +41,8 @@ Item {
             to: 3600
             duration: 3600 * 1000
             loops: Animation.Infinite
-            running: true
+            // 背景:0 流动 / 1 静止 / 2 纯色;减弱动效时也停止流动
+            running: settings.background === 0 && !Theme.reduced
             paused: Qt.application.state !== Qt.ApplicationActive
         }
     }

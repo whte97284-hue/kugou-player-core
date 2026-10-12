@@ -48,9 +48,11 @@ QtObject {
     readonly property int radiusM: 12
     readonly property int radiusL: 22
 
-    readonly property int fast: 140
-    readonly property int normal: 260
-    readonly property int slow: 520
+    // 「减弱动效」:时长缩短,背景停止流动
+    property bool reduced: false
+    readonly property int fast: reduced ? 80 : 140
+    readonly property int normal: reduced ? 140 : 260
+    readonly property int slow: reduced ? 220 : 520
 
     readonly property int navWidth: 72
     readonly property int islandHeight: 84

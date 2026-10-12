@@ -3,6 +3,7 @@
 #include <QColor>
 #include <QObject>
 #include <QTimer>
+#include <QVariantAnimation>
 #include <QVariantList>
 #include <memory>
 
@@ -139,6 +140,10 @@ private:
     void setQueue(std::vector<uint64_t> ids, int start);
     void queueContentChanged();
     void onEnded();
+    void applyVolume();
+    // 启动恢复:保存 / 读取上次的队列 (路径 + CUE 起点)、位置
+    void saveSession();
+    void restoreSession();
     void rebuildSignalChain();
     void tick();
     void loadLyrics();
@@ -157,6 +162,10 @@ private:
     int repeat_ = 0;
     double pulse_[3] = {0, 0, 0};
     QueueModel queueModel_;
+    double gain_ = 1.0;              // 淡入淡出增益,与用户音量相乘
+    QVariantAnimation fade_;
+    bool restored_ = false;
+    qint64 lastSessionSave_ = 0;
     const TrackItem* current_ = nullptr;
     QVariantList chain_;
     bool bitPerfect_ = false;

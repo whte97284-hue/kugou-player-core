@@ -141,6 +141,16 @@ void AudioIngestionPipeline::SetLazyCoverExtract(bool lazy) {
     lazy_cover_extract_ = lazy;
 }
 
+void AudioIngestionPipeline::SetReadId3v1(bool on) {
+    std::lock_guard<std::mutex> lock(pipeline_mutex_);
+    read_id3v1_ = on;
+}
+
+void AudioIngestionPipeline::SetLegacyCodePage(unsigned int codePage) {
+    std::lock_guard<std::mutex> lock(pipeline_mutex_);
+    code_page_ = codePage;
+}
+
 void AudioIngestionPipeline::SetSplitCueSheets(bool split) {
     std::lock_guard<std::mutex> lock(pipeline_mutex_);
     split_cue_ = split;
@@ -189,6 +199,8 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
     std::wstring targetDir;
     size_t requestedThreads;
     bool lazy, splitCue;
+    unsigned int codePage = 936;
+    bool readId3v1 = true;
     std::wstring cachePath, indexPath;
     DecryptPolicy policy;
     {
@@ -198,6 +210,8 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
         requestedThreads = thread_count_;
         lazy = lazy_cover_extract_;
         splitCue = split_cue_;
+        codePage = code_page_;
+        readId3v1 = read_id3v1_;
         cachePath = scan_cache_path_;
         policy = decrypt_policy_;
         indexPath = decrypt_index_path_;
@@ -325,6 +339,8 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
 
     ParseOptions parseOpt;
     parseOpt.load_cover = !lazy;
+    parseOpt.legacy_code_page = codePage;
+    parseOpt.read_id3v1 = readId3v1;
 
     std::atomic<size_t> nextIndex{0};
     std::atomic<uint64_t> bytesRead{0};

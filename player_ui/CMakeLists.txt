@@ -10,6 +10,7 @@ qt_add_executable(KugouPlayer
     src/window_helper.h src/window_helper.cpp
     src/playlist_service.h src/playlist_service.cpp
     src/decrypt_service.h src/decrypt_service.cpp
+    src/settings_service.h src/settings_service.cpp
 )
 
 set_source_files_properties(qml/Theme.qml qml/Nav.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -61,6 +62,7 @@ qt_add_qml_module(KugouPlayer
         qml/ToolsPage.qml
         qml/CrossfadeCover.qml
         qml/Capsule.qml
+        qml/SettingsPage.qml
         qml/DecryptPrompt.qml
         qml/DecryptToast.qml
 )
