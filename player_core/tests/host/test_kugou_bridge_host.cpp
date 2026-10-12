@@ -151,6 +151,52 @@ int main(int argc, char** argv) {
     CHECK(!bridge.PreparePlayableTrack(bad.wstring(), ex) && !ex.is_ready_to_play);
     CHECK(!bridge.PreparePlayableTrack(bad.wstring(), ex));
 
+    std::printf("[7] 没有 kgm.mask 时用内置掩码解密 (含超过 80MB 掩码长度的偏移)\n");
+    {
+        DecryptorRegistry::Instance().SetKgmMaskPath((work / "不存在.mask").wstring());
+        // 内置掩码流 Z[i] = 用全零密钥解密全零数据的结果;加密 = f(明文 ^ Z) ^ key
+        const auto plain = MakePlain("fLaC", 4, 0, 200000);
+        uint8_t key17[17];
+        for (int i = 0; i < 16; ++i) key17[i] = static_cast<uint8_t>(g_rng());
+        key17[16] = 0;
+        const uint8_t zeroKey[17] = {0};
+        std::vector<uint8_t> z(plain.size(), 0);
+        KgmDecryptBlockBuiltin(z.data(), z.size(), 0, zeroKey);
+        std::vector<uint8_t> enc(plain.size());
+        for (size_t i = 0; i < plain.size(); ++i) {
+            uint8_t x = static_cast<uint8_t>(plain[i] ^ z[i]);
+            enc[i] = static_cast<uint8_t>((x ^ (x << 4)) ^ key17[i % 17]);
+        }
+        std::vector<uint8_t> hdr(1024, 0);
+        static const uint8_t kKgmMagic[16] = {0x7C, 0xD5, 0x32, 0xEB, 0x86, 0x02, 0x7F, 0x4B,
+                                              0xA8, 0xAF, 0xA6, 0x8E, 0x0F, 0xFF, 0x99, 0x14};
+        std::memcpy(hdr.data(), kKgmMagic, 16);
+        uint32_t hlen = 1024;
+        std::memcpy(&hdr[16], &hlen, 4);
+        std::memcpy(&hdr[28], key17, 16);
+        fs::path p = work / "内置掩码.kgma";
+        std::ofstream o(p, std::ios::binary);
+        o.write(reinterpret_cast<const char*>(hdr.data()), hdr.size());
+        o.write(reinterpret_cast<const char*>(enc.data()), enc.size());
+        o.close();
+        const Decryptor* dec = DecryptorRegistry::Instance().ByExtension(L".kgma");
+        CHECK(dec && dec->IsAvailable());
+        KuGouTrackEntry e;
+        CHECK(bridge.PreparePlayableTrack(p.wstring(), e));
+        CHECK(e.is_ready_to_play && ReadAll(e.playable_path) == plain);
+
+        // 分块解密与整块一致 (偏移跨过 272 字节周期、17 字节密钥周期,以及 81,979,072 之后)
+        for (uint64_t base : {0ull, 81979072ull - 100, 81979072ull + 12345}) {
+            std::vector<uint8_t> a(5000), b;
+            for (auto& x : a) x = static_cast<uint8_t>(g_rng());
+            b = a;
+            KgmDecryptBlockBuiltin(a.data(), a.size(), base, key17);
+            KgmDecryptBlockBuiltin(b.data(), 1234, base, key17);
+            KgmDecryptBlockBuiltin(b.data() + 1234, b.size() - 1234, base + 1234, key17);
+            CHECK(a == b);
+        }
+    }
+
     std::printf(g_fail ? "\n酷狗桥接: %d 项失败\n" : "\n酷狗桥接: 全部通过\n", g_fail);
     return g_fail ? 1 : 0;
 }

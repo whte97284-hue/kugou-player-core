@@ -10,7 +10,7 @@
 
 // ============================================================================
 //  加密音频解密工具集
-//   · kgm  酷狗 KGM / KGMA / VPR —— 原生 C++,kgm.mask 掩码表只映射一次、多线程共享
+//   · kgm  酷狗 KGM / KGMA / VPR —— 原生 C++,掩码内置 (可选用外部 kgm.mask 覆盖)
 //   · ncm  网易云 NCM            —— 原生 C++ (AES 密钥块 → RC4 变体密钥流),产物自动写回标题/歌手/专辑/封面
 //   · kgg  酷狗 KGG              —— 外部工具 kgg-dec.exe + infra.dll (仅 Windows);
 //                                  源文件先复制到临时工作目录,绝不在曲库目录里写任何东西
@@ -62,7 +62,7 @@ public:
     // 外部资源位置:<tools>/kgm/kgm.mask、<tools>/kgg/kgg-dec.exe
     void SetToolsDir(const std::wstring& dir);
     std::wstring ToolsDir() const;
-    // 显式指定 KGM 掩码表 (优先于 tools 目录)
+    // 显式指定 KGM 掩码表 (可选;文件不存在时用内置掩码)
     void SetKgmMaskPath(const std::wstring& path);
     std::wstring KgmMaskPath() const;
 
@@ -75,6 +75,8 @@ private:
 };
 
 // KGM 掩码解密内核 (单元测试用):out = x ^ (x << 4), x = c ^ key[i % 17] ^ mask[i % maskLen]
+// 不需要掩码文件的 KGM 解密 (内置掩码,与 tools/kgm/kgm.mask 逐字节等价)
+void KgmDecryptBlockBuiltin(uint8_t* data, size_t len, uint64_t fileOffset, const uint8_t key17[17]);
 void KgmDecryptBlock(uint8_t* data, size_t len, uint64_t fileOffset, const uint8_t key17[17], const uint8_t* mask,
                      uint64_t maskLen);
 
