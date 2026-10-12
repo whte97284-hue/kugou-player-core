@@ -19,8 +19,7 @@ Item {
         width: parent.width * 1.15
         height: parent.height * 2.6
         property color color: Theme.accent
-        property real intensity: player.playing ? 0.16 + 0.5 * Math.min(1, player.bass * 1.3) : 0.08
-        Behavior on intensity { NumberAnimation { duration: 90 } }
+        property real intensity: 0.08 + 0.42 * player.breath
         fragmentShader: "qrc:/shaders/glow.frag.qsb"
     }
     SoftShadow {
@@ -165,9 +164,8 @@ Item {
                 anchors.centerIn: parent
                 width: 48; height: 48; radius: 24
                 color: Theme.accentAlpha(0.35)
-                scale: player.playing ? 1.0 + 0.22 * Math.min(1, player.bass * 1.4) : 1.0
-                opacity: player.playing ? 0.9 : 0
-                Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+                scale: 1.0 + 0.2 * player.breath
+                opacity: Math.min(1, player.breath * 2.2)
             }
             IconButton {
                 anchors.centerIn: parent

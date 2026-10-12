@@ -372,7 +372,6 @@ Window {
     // 顶部渐暗:内容滚到窗口顶端时,保证窗口按钮在浅色封面上依然可见
     Rectangle {
         anchors.left: parent.left
-        anchors.leftMargin: Theme.navWidth
         anchors.right: parent.right
         height: 56
         z: 9

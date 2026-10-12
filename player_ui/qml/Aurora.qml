@@ -25,7 +25,7 @@ Item {
         layer.textureSize: Qt.size(Math.max(1, Math.round(width / 4)), Math.max(1, Math.round(height / 4)))
         property size size: Qt.size(width, height)
         property real time: 0
-        property real energy: player.playing ? Math.min(1, player.bass * 1.4) : 0
+        property real energy: player.breath
         Behavior on energy { NumberAnimation { duration: 120 } }
         property color c0: root.c0
         property color c1: root.c1

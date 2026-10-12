@@ -590,11 +590,18 @@ void PlayerController::tick() {
     pulse_[1] = band(10, 18);
     pulse_[2] = band(18, 28);
     bass_ = low > bass_ ? bass_ * 0.4 + low * 0.6 : bass_ * 0.9 + low * 0.1;
+    // 呼吸:低音包络起得稳 (约 120ms)、落得更慢 (约 400ms),避免逐帧抖动;
+    // 底波让安静段落也有生命感;播放 / 暂停时整体在约 0.6s 内浮现或沉下,而不是跳变
+    const double target = playing_ ? std::min(1.0, bass_ * 1.25) : 0.0;
+    breathEnv_ += (target - breathEnv_) * (target > breathEnv_ ? 0.12 : 0.04);
+    breathPresence_ += ((playing_ ? 1.0 : 0.0) - breathPresence_) * 0.045;
+    if (playing_) breathPhase_ = std::fmod(breathPhase_ + 0.016 / 5.2, 1.0);
+    breath_ = breathPresence_ * (0.30 + 0.12 * std::sin(breathPhase_ * 6.283185307)) + breathEnv_ * 0.58;
     emit spectrumChanged();
     updateLyricIndex();
     if (playing_ && QDateTime::currentMSecsSinceEpoch() - lastSessionSave_ > 5000) saveSession();
     // 暂停且频谱已完全衰减后停止定时器,空闲时零 CPU
-    if (!isPlaying && energy < 1e-3) timer_.stop();
+    if (!isPlaying && energy < 1e-3 && breathPresence_ < 1e-3 && breathEnv_ < 1e-3) timer_.stop();
 }
 
 void PlayerController::rebuildSignalChain() {

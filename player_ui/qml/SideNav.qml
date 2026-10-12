@@ -1,9 +1,10 @@
 import QtQuick
 import PlayerUi
 
-// 侧边导航条:固定宽度、纯图标,不再悬停展开 (不遮挡内容、不抖动)
-//  · 选中项背后一块圆角底板随切换平滑滑动,左缘一道强调色短线同步移动
-//  · 悬停图标提亮并轻微放大,按下回弹;停留片刻在右侧浮出名称提示
+// 侧边导航:不再是一条深色竖栏,而是两枚悬浮的竖向胶囊 (与播放岛、设置页同一套胶囊语言)
+//  · 上:五个主分区;选中项是一枚柔和的强调色圆底,切换时像液滴一样先伸长、再收拢到新位置
+//  · 下:转换 · 音乐文件夹 · 设置
+//  · 悬停只提亮图标并给一层极淡的圆底;停留片刻在右侧浮出名称
 Item {
     id: nav
     property string current: "albums"
@@ -17,83 +18,99 @@ Item {
         { key: "playlists", icon: "playlist", tip: qsTr("歌单") },
         { key: "search", icon: "search", tip: qsTr("搜索  Ctrl K") }
     ]
-    readonly property int itemSize: 48
-    readonly property int itemGap: 8
-    readonly property int listTop: 56
-    readonly property int currentIndex: {
-        for (let i = 0; i < items.length; ++i) if (items[i].key === current) return i
+    readonly property var tools: [
+        { key: "tools", icon: "tools", tip: qsTr("转换") },
+        { key: "folder", icon: "folder", tip: qsTr("音乐文件夹") },
+        { key: "settings", icon: "settings", tip: qsTr("设置") }
+    ]
+    readonly property int itemSize: 44
+    readonly property int itemGap: 6
+    readonly property int capPad: 5
+    readonly property int capW: itemSize + capPad * 2
+    function indexIn(list) {
+        for (let i = 0; i < list.length; ++i) if (list[i].key === current) return i
         return -1
     }
+    readonly property int currentIndex: indexIn(items)
+    readonly property int toolIndex: indexIn(tools)
 
-    Rectangle {
-        anchors.fill: parent
-        color: Qt.rgba(0, 0, 0, 0.16)
-        Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: Theme.hairline }
-    }
+    // 一枚竖向胶囊:极淡暖色底 + 发丝描边,内含若干图标与滑动的选中圆底
+    component Dock: Rectangle {
+        id: dock
+        property var model: []
+        property int sel: -1
+        property real topEdge: 0
+        property real bottomEdge: nav.itemSize
+        property int prev: -1
+        width: nav.capW
+        height: model.length * (nav.itemSize + nav.itemGap) - nav.itemGap + nav.capPad * 2
+        radius: width / 2
+        color: Qt.rgba(1, 0.96, 0.9, 0.035)
+        border.width: 1
+        border.color: Theme.hairline
 
-    // 滑动的选中底板
-    Rectangle {
-        id: pill
-        visible: nav.currentIndex >= 0
-        x: (nav.width - nav.itemSize) / 2
-        y: nav.listTop + Math.max(0, nav.currentIndex) * (nav.itemSize + nav.itemGap)
-        width: nav.itemSize
-        height: nav.itemSize
-        radius: 14
-        color: Theme.accentAlpha(0.15)
-        Behavior on y { NumberAnimation { duration: 340; easing.type: Easing.OutQuint } }
-    }
-    Rectangle {
-        visible: pill.visible
-        x: 0
-        y: pill.y + (nav.itemSize - 20) / 2
-        width: 3
-        height: 20
-        radius: 1.5
-        color: Theme.accent
-    }
-
-    Column {
-        y: nav.listTop
-        x: (nav.width - nav.itemSize) / 2
-        spacing: nav.itemGap
-        Repeater {
-            model: nav.items
-            delegate: navButton
+        function slotY(i) { return nav.capPad + i * (nav.itemSize + nav.itemGap) }
+        // 液滴式滑动:前缘先到、后缘稍慢跟上,中途拉长,到位后收成圆
+        function moveTo(i) {
+            if (i < 0) return
+            const y = slotY(i)
+            if (prev < 0 || Theme.reduced) {
+                lead.stop()
+                topEdge = y; bottomEdge = y + nav.itemSize
+            } else {
+                const down = i > prev
+                topAnim.duration = down ? 460 : 260
+                bottomAnim.duration = down ? 260 : 460
+                topAnim.to = y
+                bottomAnim.to = y + nav.itemSize
+                lead.restart()
+            }
+            prev = i
         }
-    }
+        onSelChanged: moveTo(sel)
+        Component.onCompleted: moveTo(sel)
+        ParallelAnimation {
+            id: lead
+            NumberAnimation { id: topAnim; target: dock; property: "topEdge"; easing.type: Easing.OutQuint }
+            NumberAnimation { id: bottomAnim; target: dock; property: "bottomEdge"; easing.type: Easing.OutQuint }
+        }
 
-    // 底部:解密工具 · 音乐文件夹
-    Column {
-        x: (nav.width - nav.itemSize) / 2
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: 22
-        spacing: nav.itemGap
-        Loader {
-            sourceComponent: navButton
-            property var modelData: ({ key: "tools", icon: "tools", tip: qsTr("转换") })
-            // 曲库里有待解密文件时,图标右上角一个强调色小点
-            Rectangle {
-                x: 31; y: 11
-                width: 7; height: 7; radius: 3.5
-                color: Theme.accent
-                visible: (decrypt.pending.total || 0) > 0 && nav.current !== "tools"
-                SequentialAnimation on scale {
-                    running: parent.visible
-                    loops: Animation.Infinite
-                    ScaleAnimator { from: 1; to: 1.35; duration: 900; easing.type: Easing.InOutSine }
-                    ScaleAnimator { from: 1.35; to: 1; duration: 900; easing.type: Easing.InOutSine }
-                }
+        Rectangle {
+            visible: dock.sel >= 0
+            opacity: dock.sel >= 0 ? 1 : 0
+            x: nav.capPad
+            y: dock.topEdge
+            width: nav.itemSize
+            height: dock.bottomEdge - dock.topEdge
+            radius: width / 2
+            color: Theme.accentAlpha(0.17)
+        }
+        Column {
+            x: nav.capPad
+            y: nav.capPad
+            spacing: nav.itemGap
+            Repeater {
+                model: dock.model
+                delegate: navButton
             }
         }
-        Loader {
-            sourceComponent: navButton
-            property var modelData: ({ key: "folder", icon: "folder", tip: qsTr("音乐文件夹") })
-        }
-        Loader {
-            sourceComponent: navButton
-            property var modelData: ({ key: "settings", icon: "settings", tip: qsTr("设置") })
-        }
+    }
+
+    Dock {
+        id: mainDock
+        x: (nav.width - width) / 2
+        y: 52
+        model: nav.items
+        sel: nav.currentIndex
+    }
+
+    Dock {
+        id: toolDock
+        x: (nav.width - width) / 2
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 20
+        model: nav.tools
+        sel: nav.toolIndex
     }
 
     Component {
@@ -103,28 +120,35 @@ Item {
             width: nav.itemSize
             height: nav.itemSize
             readonly property bool active: nav.current === modelData.key
-            Icon {
-                anchors.centerIn: parent
-                name: modelData.icon
-                size: 22
-                tint: btn.active ? Theme.accent : "transparent"
-                opacity: btn.active || m.containsMouse ? 1 : 0.5
-                scale: m.pressed ? 0.88 : (m.containsMouse ? 1.08 : 1)
-                Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
-                Behavior on scale { ScaleAnimator { duration: 180; easing.type: Easing.OutBack } }
-            }
             Rectangle {
                 anchors.fill: parent
-                radius: 14
-                color: Theme.accentAlpha(0.15)
-                visible: btn.active && nav.currentIndex < 0
-            }
-            Rectangle {
-                anchors.fill: parent
-                radius: 14
+                radius: width / 2
                 color: Theme.hover
                 opacity: m.containsMouse && !btn.active ? 1 : 0
                 Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+            }
+            Icon {
+                anchors.centerIn: parent
+                name: modelData.icon
+                size: 20
+                tint: btn.active ? Theme.accent : "transparent"
+                opacity: btn.active ? 1 : (m.containsMouse ? 0.9 : 0.46)
+                scale: m.pressed ? 0.86 : 1
+                Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+                Behavior on scale { ScaleAnimator { duration: 220; easing.type: Easing.OutBack } }
+            }
+            // 曲库里有待转换的文件:转换图标右上角一个缓慢呼吸的小点
+            Rectangle {
+                x: 29; y: 9
+                width: 6; height: 6; radius: 3
+                color: Theme.accent
+                visible: modelData.key === "tools" && (decrypt.pending.total || 0) > 0 && nav.current !== "tools"
+                SequentialAnimation on opacity {
+                    running: parent.visible && !Theme.reduced
+                    loops: Animation.Infinite
+                    OpacityAnimator { from: 1; to: 0.35; duration: 1400; easing.type: Easing.InOutSine }
+                    OpacityAnimator { from: 0.35; to: 1; duration: 1400; easing.type: Easing.InOutSine }
+                }
             }
             MouseArea {
                 id: m
@@ -148,7 +172,7 @@ Item {
         property string text
         parent: nav.parent
         z: 200
-        x: nav.width + 6
+        x: nav.width - 4
         y: target ? target.mapToItem(nav.parent, 0, 0).y + (target.height - height) / 2 : 0
         width: tipText.implicitWidth + 22
         height: 30

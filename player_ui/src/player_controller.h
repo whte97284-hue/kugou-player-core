@@ -66,6 +66,8 @@ class PlayerController : public QObject {
     // 0 顺序播放 / 1 列表循环 / 2 单曲循环
     Q_PROPERTY(int repeatMode READ repeatMode WRITE setRepeatMode NOTIFY modeChanged)
     // 三段律动值 (低 / 中 / 高频),供「正在播放」小图标使用,避免每帧把 32 段频谱转换成 JS 数组
+    // 「呼吸」:平滑后的低音包络 + 一条约 5 秒一周的缓慢底波,播放时缓缓浮现、暂停时缓缓沉下 (0..1)
+    Q_PROPERTY(double breath READ breath NOTIFY spectrumChanged)
     Q_PROPERTY(double pulse0 READ pulse0 NOTIFY spectrumChanged)
     Q_PROPERTY(double pulse1 READ pulse1 NOTIFY spectrumChanged)
     Q_PROPERTY(double pulse2 READ pulse2 NOTIFY spectrumChanged)
@@ -119,6 +121,7 @@ public:
     Q_INVOKABLE void reloadLyrics() { loadLyrics(); updateLyricIndex(); }
     int repeatMode() const { return repeat_; }
     void setRepeatMode(int m);
+    double breath() const { return breath_; }
     double pulse0() const { return pulse_[0]; }
     double pulse1() const { return pulse_[1]; }
     double pulse2() const { return pulse_[2]; }
@@ -196,6 +199,7 @@ private:
     int nextIndex_ = -1;
     bool gaplessPending_ = false;
     double pulse_[3] = {0, 0, 0};
+    double breath_ = 0, breathEnv_ = 0, breathPresence_ = 0, breathPhase_ = 0;
     QueueModel queueModel_;
     double gain_ = 1.0;              // 淡入淡出增益,与用户音量相乘
     QVariantAnimation fade_;

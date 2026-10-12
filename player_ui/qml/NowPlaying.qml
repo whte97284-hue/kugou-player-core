@@ -33,7 +33,7 @@ Item {
         width: np.coverSize * 2.6
         height: width
         property color color: Theme.accent
-        property real intensity: 0.30
+        property real intensity: 0.2 + 0.16 * player.breath
         fragmentShader: "qrc:/shaders/glow.frag.qsb"
     }
     ShaderEffect {
@@ -83,6 +83,8 @@ Item {
             radius: 14
             source: player.cover
             decodeSize: 1024
+            // 随呼吸极轻微地起伏 (最多 1%),只让人「感觉」它活着
+            scale: 1 + 0.01 * player.breath
         }
 
         Column {
@@ -211,34 +213,67 @@ Item {
                 Icon { anchors.verticalCenter: parent.verticalCenter; name: "volume"; size: 15; opacity: 0.45 }
             }
 
-            Item { width: 1; height: 18 }
-            // 一行信号链:点击展开详情
+            Item { width: 1; height: 22 }
+            // 音质小胶囊:平时只有一个点与「24/96」这类简写,安静地居中;
+            // 悬停时胶囊平滑拉宽、换成完整信号链,点击展开详情
             Item {
                 width: parent.width
-                height: 20
+                height: 28
                 Rectangle {
-                    id: dot
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: 6; height: 6; radius: 3
-                    color: player.bitPerfect ? Theme.ok : Theme.warn
-                }
-                Text {
-                    anchors.left: dot.right
-                    anchors.leftMargin: 9
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: player.chainSummary
-                    elide: Text.ElideRight
-                    color: chainMouse.containsMouse ? Theme.textSecondary : Theme.textTertiary
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 12
-                }
-                MouseArea {
-                    id: chainMouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: np.chainClicked()
+                    id: qcap
+                    readonly property bool open: chainMouse.containsMouse
+                    readonly property real shortW: shortText.implicitWidth + 40
+                    readonly property real longW: Math.min(parent.width, longText.implicitWidth + 40)
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    height: 28
+                    width: open ? longW : shortW
+                    radius: 14
+                    color: Qt.rgba(1, 0.96, 0.9, open ? 0.07 : 0.035)
+                    border.width: 1
+                    border.color: Theme.hairline
+                    clip: true
+                    visible: player.hasTrack
+                    Behavior on width { NumberAnimation { duration: 420; easing.type: Easing.OutQuint } }
+                    Behavior on color { ColorAnimation { duration: Theme.normal } }
+                    Rectangle {
+                        id: dot
+                        x: 15
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 5; height: 5; radius: 2.5
+                        color: player.bitPerfect ? Theme.accent : Theme.textTertiary
+                    }
+                    Text {
+                        id: shortText
+                        x: 27
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: player.quality
+                        opacity: qcap.open ? 0 : 1
+                        color: Theme.textSecondary
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                        Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+                    }
+                    Text {
+                        id: longText
+                        x: 27
+                        width: qcap.longW - 40
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: player.chainSummary
+                        elide: Text.ElideRight
+                        opacity: qcap.open ? 1 : 0
+                        color: Theme.textSecondary
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 12
+                        Behavior on opacity { SequentialAnimation { PauseAnimation { duration: qcap.open ? 120 : 0 } OpacityAnimator { duration: Theme.normal } } }
+                    }
+                    MouseArea {
+                        id: chainMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: np.chainClicked()
+                    }
                 }
             }
         }
@@ -315,7 +350,8 @@ Item {
             model: player.lyrics
             currentIndex: Math.max(0, player.lyricIndex)
             spacing: 6
-            highlightRangeMode: ListView.ApplyRange
+            // 无时间戳的纯文本歌词:不跟随进度,整篇以统一的浅色静态展示,可自由滚动
+            highlightRangeMode: player.lyricsSynced ? ListView.ApplyRange : ListView.NoHighlightRange
             preferredHighlightBegin: height * 0.32
             preferredHighlightEnd: height * 0.32 + 64
             highlightMoveDuration: 520
@@ -325,7 +361,7 @@ Item {
                 width: lyricView.width
                 height: line.implicitHeight + 14
                 readonly property int dist: Math.abs(index - player.lyricIndex)
-                readonly property bool current: index === player.lyricIndex
+                readonly property bool current: player.lyricsSynced && index === player.lyricIndex
                 Text {
                     id: line
                     width: parent.width
@@ -334,17 +370,18 @@ Item {
                     wrapMode: Text.WordWrap
                     color: current ? Theme.text : Theme.textSecondary
                     font.family: Theme.fontFamily
-                    font.pixelSize: 24
-                    font.weight: Font.DemiBold
+                    font.pixelSize: player.lyricsSynced ? 24 : 19
+                    font.weight: player.lyricsSynced ? Font.DemiBold : Font.Medium
                     lineHeight: 1.2
-                    opacity: current ? 1 : Math.max(0.22, 0.62 - dist * 0.09)
-                    scale: current ? 1 : 0.94
+                    opacity: !player.lyricsSynced ? 0.72 : current ? 1 : Math.max(0.22, 0.62 - dist * 0.09)
+                    scale: current || !player.lyricsSynced ? 1 : 0.94
                     transformOrigin: Item.Left
                     Behavior on opacity { OpacityAnimator { duration: 360 } }
                     Behavior on scale { ScaleAnimator { duration: 360; easing.type: Easing.OutCubic } }
                 }
                 MouseArea {
                     anchors.fill: parent
+                    enabled: modelData.time >= 0
                     cursorShape: Qt.PointingHandCursor
                     onClicked: player.seek(modelData.time)
                 }
