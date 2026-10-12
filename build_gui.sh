@@ -106,6 +106,16 @@ windeployqt.exe --release --no-translations --qmldir "$BUILD_ROOT/player_ui/qml"
 [ -f Qt6Svg.dll ] || cp -n "$QT_ROOT/bin/Qt6Svg.dll" . 2>/dev/null || true
 [ -f Qt6ShaderTools.dll ] || cp -n "$QT_ROOT/bin/Qt6ShaderTools.dll" . 2>/dev/null || true
 
+# 解密工具:程序启动时从 <exe>\tools 查找 kgm.mask / kgg-dec.exe,缺了会提示「缺少 kgm.mask 掩码表」
+# (与 build_ui.bat 一致;kgm.mask 约 80MB,已存在且大小相同就不重复拷贝)
+for f in kgm/kgm.mask kgg/kgg-dec.exe kgg/infra.dll; do
+    [ -f "$SRC_ROOT/tools/$f" ] || continue
+    mkdir -p "tools/$(dirname "$f")"
+    if [ ! -f "tools/$f" ] || [ "$(stat -c%s "tools/$f")" != "$(stat -c%s "$SRC_ROOT/tools/$f")" ]; then
+        cp -f "$SRC_ROOT/tools/$f" "tools/$f"
+    fi
+done
+
 echo "[6/6] 完成"
 echo
 echo "  可执行文件: $(cygpath -w "$EXE")"
