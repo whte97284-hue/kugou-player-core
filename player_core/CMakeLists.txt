@@ -18,6 +18,8 @@ add_library(player_core STATIC
     src/audio_ingestion_pipeline.cpp
     src/fft_visualizer.cpp
     src/audio_playback_engine.cpp
+    src/lyric_manager.cpp
+    src/tinf.cpp
 )
 target_include_directories(player_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(player_core PUBLIC cxx_std_17)
@@ -28,7 +30,7 @@ endif()
 find_package(Threads REQUIRED)
 target_link_libraries(player_core PUBLIC Threads::Threads)
 if(WIN32)
-    target_link_libraries(player_core PUBLIC ole32 winmm user32)
+    target_link_libraries(player_core PUBLIC ole32 winmm user32 shell32 advapi32)
 else()
     target_link_libraries(player_core PUBLIC ${CMAKE_DL_LIBS} m)
 endif()

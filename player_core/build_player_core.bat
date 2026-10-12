@@ -26,9 +26,13 @@ echo [3/4] Building test_hires_runner.exe ...
 cl.exe %CFLAGS% test\test_hires_runner.cpp %P2_SRC% /Fe:test\test_hires_runner.exe /link /OPT:REF ole32.lib winmm.lib user32.lib
 if errorlevel 1 goto :fail_build3
 
-echo [4/4] Building library_audit.exe ...
+echo [4/5] Building library_audit.exe ...
 cl.exe %CFLAGS% tests\library_audit.cpp %PARSER_SRC% /Fe:test\library_audit.exe /link /OPT:REF
 if errorlevel 1 goto :fail_build4
+
+echo [5/5] Building test_lyric_runner.exe ...
+cl.exe %CFLAGS% test\test_lyric_runner.cpp src\lyric_manager.cpp src\tinf.cpp /Fe:test\test_lyric_runner.exe /link /OPT:REF shell32.lib advapi32.lib ole32.lib
+if errorlevel 1 goto :fail_build5
 
 del /q *.obj test\*.obj 2>nul
 echo.
@@ -57,6 +61,10 @@ exit /b 1
 
 :fail_build4
 echo [ERROR] Failed to build library_audit.exe
+exit /b 1
+
+:fail_build5
+echo [ERROR] Failed to build test_lyric_runner.exe
 exit /b 1
 
 :end
