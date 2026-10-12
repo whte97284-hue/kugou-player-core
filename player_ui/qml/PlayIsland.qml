@@ -10,7 +10,7 @@ Item {
     readonly property Item disc: discVinyl
     height: 72
     readonly property real r: height / 2
-    readonly property bool compact: width < 700
+    readonly property bool compact: width < 760
 
     // ---- 呼吸光晕 (随低音) ----
     ShaderEffect {
@@ -140,13 +140,27 @@ Item {
             font.pixelSize: 15
             font.weight: Font.DemiBold
         }
-        Text {
+        // 歌手,后面跟着播放时间 (时间常驻,歌手名过长时先省略歌手)
+        Row {
             width: parent.width
-            text: player.hasTrack ? island.shownArtist : ""
-            elide: Text.ElideRight
-            color: Theme.textSecondary
-            font.family: Theme.fontFamily
-            font.pixelSize: 12
+            spacing: 8
+            Text {
+                id: artistText
+                width: Math.min(implicitWidth, parent.width - timeText.implicitWidth - 8)
+                text: player.hasTrack ? island.shownArtist : ""
+                elide: Text.ElideRight
+                color: Theme.textSecondary
+                font.family: Theme.fontFamily
+                font.pixelSize: 12
+            }
+            Text {
+                id: timeText
+                visible: player.hasTrack
+                text: edge.fmt(edge.dragging ? edge.dragValue : player.position) + " / " + edge.fmt(player.duration)
+                color: Theme.textTertiary
+                font.family: Theme.fontFamily
+                font.pixelSize: 12
+            }
         }
     }
     MouseArea {
@@ -196,13 +210,15 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         spacing: 14
 
-        Text {
+        // 小频谱:随音乐跳动,暂停后自然回落
+        Spectrum {
             anchors.verticalCenter: parent.verticalCenter
             visible: player.hasTrack && !island.compact
-            text: edge.fmt(edge.dragging ? edge.dragValue : player.position) + "  /  " + edge.fmt(player.duration)
-            color: Theme.textTertiary
-            font.family: Theme.fontFamily
-            font.pixelSize: 12
+            width: 46
+            height: 22
+            bars: 10
+            gap: 2.6
+            opacity: 0.9
         }
         Rectangle {
             visible: player.hasTrack
@@ -239,7 +255,7 @@ Item {
                 onClicked: island.chainClicked()
             }
         }
-        VolumeControl { anchors.verticalCenter: parent.verticalCenter; visible: !island.compact }
+        VolumeControl { anchors.verticalCenter: parent.verticalCenter; pinned: !island.compact }
     }
 
     // ---- 底边发光进度线 ----

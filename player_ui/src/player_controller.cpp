@@ -905,6 +905,15 @@ void PlayerController::applyLyricsText(const QString& text, bool wholeFileTimeli
     emit lyricIndexChanged();
 }
 
+QString PlayerController::lyricAt(double seconds) const {
+    if (lyricTimes_.empty() || !(seconds >= 0)) return {};
+    const qint64 ms = static_cast<qint64>(seconds * 1000.0);
+    auto it = std::upper_bound(lyricTimes_.begin(), lyricTimes_.end(), ms);
+    const int idx = static_cast<int>(it - lyricTimes_.begin()) - 1;
+    if (idx < 0 || idx >= lyrics_.size()) return {};
+    return lyrics_.at(idx).toMap().value(QStringLiteral("text")).toString();
+}
+
 void PlayerController::updateLyricIndex() {
     if (lyricTimes_.empty()) return;
     qint64 ms = static_cast<qint64>(position_ * 1000.0) + 120; // 略微提前,视觉上与演唱同步

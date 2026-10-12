@@ -389,8 +389,9 @@ Item {
             model: player.lyrics
             spacing: 4
             readonly property real anchorRatio: 0.42
-            topMargin: player.lyricsSynced ? height * anchorRatio : 72
-            bottomMargin: player.lyricsSynced ? height * (1 - anchorRatio) : 72
+            // 首句停在顶部渐隐带下方、末句停在底部渐隐带上方:开头和结尾不再把歌词推出视野
+            topMargin: height * 0.2
+            bottomMargin: height * 0.28
             // 一首歌的歌词全部实例化:每行位置都是实测的,不会因估算行高在滚动中途跳动
             cacheBuffer: 100000
             boundsBehavior: Flickable.StopAtBounds
@@ -415,6 +416,8 @@ Item {
                 let t = idx < 0 ? -topMargin : targetFor(idx)
                 if (isNaN(t)) { positionViewAtIndex(idx, ListView.Center); t = targetFor(idx) }
                 if (isNaN(t)) return
+                // 夹在可滚动范围内:前几句时列表停在顶端,当前句自己往下走;末尾同理
+                t = Math.max(originY - topMargin, Math.min(t, originY + contentHeight + bottomMargin - height))
                 settle.stop()
                 if (!animate || Theme.reduced || Math.abs(contentY - t) < 0.5) { contentY = t; return }
                 // 跨越很远 (拖动进度条) 时稍慢一点,相邻换句约 0.62 秒

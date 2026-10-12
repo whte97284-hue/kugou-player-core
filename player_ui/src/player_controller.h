@@ -126,6 +126,8 @@ public:
     void setReplayGain(int mode);
     Q_INVOKABLE void refreshDevices();
     Q_INVOKABLE void reloadLyrics() { loadLyrics(); updateLyricIndex(); }
+    // 某一时刻 (秒) 正在唱的那句歌词;没有同步歌词或尚未开始时为空 (进度条悬停提示用)
+    Q_INVOKABLE QString lyricAt(double seconds) const;
     int repeatMode() const { return repeat_; }
     void setRepeatMode(int m);
     double breath() const { return breath_; }

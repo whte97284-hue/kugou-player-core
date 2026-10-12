@@ -7,6 +7,7 @@ Item {
     property real position: 0
     property real duration: 0
     property bool showTip: true
+    property bool lyricHint: true
     signal seekRequested(real seconds)
     height: 24
 
@@ -48,15 +49,21 @@ Item {
     Rectangle {
         visible: bar.showTip && mouse.containsMouse && bar.duration > 0
         x: Math.max(0, Math.min(bar.width - width, mouse.mouseX - width / 2))
-        y: -30
-        width: tip.implicitWidth + 14
-        height: 22
-        radius: 6
+        y: -32
+        width: Math.min(tip.implicitWidth, 340) + 16
+        height: 24
+        radius: 7
         color: Theme.tooltip
+        // 悬停处的时间,后面跟着那一刻正在唱的歌词 (有同步歌词时)
+        readonly property real at: bar.duration * Math.max(0, Math.min(1, mouse.mouseX / bar.width))
+        readonly property string line: visible && bar.lyricHint ? player.lyricAt(at) : ""
         Text {
             id: tip
             anchors.centerIn: parent
-            text: bar.fmt(bar.duration * Math.max(0, Math.min(1, mouse.mouseX / bar.width)))
+            width: Math.min(implicitWidth, 340)
+            elide: Text.ElideRight
+            textFormat: Text.StyledText
+            text: bar.fmt(parent.at) + (parent.line.length ? "<font color='#aaa49b'>&nbsp;&nbsp;" + parent.line.replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</font>" : "")
             color: Theme.text
             font.family: Theme.fontFamily
             font.pixelSize: 11

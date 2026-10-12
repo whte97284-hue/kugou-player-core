@@ -7,7 +7,9 @@ Item {
     width: row.width
     height: 34
     property real lastVolume: 0.85
-    readonly property bool open: hover.containsMouse || slider.dragging
+    // pinned:滑条常驻 (播放岛宽度足够时);否则悬停时向左展开
+    property bool pinned: false
+    readonly property bool open: pinned || hover.containsMouse || slider.dragging
 
     Row {
         id: row

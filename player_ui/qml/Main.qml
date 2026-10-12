@@ -486,7 +486,7 @@ Window {
     // ======================= 悬浮播放岛 =======================
     PlayIsland {
         id: island
-        width: Math.min(920, root.width - Theme.navWidth - 96)
+        width: Math.min(980, root.width - Theme.navWidth - 96)
         x: Theme.navWidth + (root.width - Theme.navWidth - width) / 2
         y: root.height - height - 24
         z: 20
