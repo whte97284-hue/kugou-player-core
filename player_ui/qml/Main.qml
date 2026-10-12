@@ -428,11 +428,14 @@ Window {
         }
     }
 
+    // 打开专辑时点的那张封面 (卡片或顶部横幅);关闭时若它仍在视野里就飞回它
+    property Item albumFrom: null
     function openAlbum(index, coverItem) {
         if (index < 0) return
         albumTracks.albumIndex = index
         detail.resetScroll()
         const fromItem = coverItem
+        albumFrom = coverItem || null
         openDetail("album", index)
         // 从专辑墙打开时封面飞入详情页;其他入口直接淡入
         if (!fromItem) return
@@ -445,7 +448,7 @@ Window {
     function closeAlbumFlight() {
         if (detailKind !== "album" || section !== "albums") return
         const hero = detail.heroCover
-        const card = wall.coverOf(albumTracks.albumIndex)
+        const card = wall.coverOf(albumTracks.albumIndex, albumFrom)
         if (!hero || !card) return
         if (fly(hero, null, card, wall)) detail.heroAway = true
     }
