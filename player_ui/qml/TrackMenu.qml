@@ -66,7 +66,7 @@ Item {
     // ---- 一级菜单 ----
     Rectangle {
         id: panel
-        width: 216
+        width: 196
         implicitHeight: col.implicitHeight + 12
         height: implicitHeight
         radius: 14
@@ -107,30 +107,22 @@ Item {
             radius: 9
             readonly property bool hot: m.containsMouse || (!!entry.sub && menu.subShown)
             color: hot ? Theme.hover : "transparent"
-            Icon {
-                x: 12
-                anchors.verticalCenter: parent.verticalCenter
-                name: entry.icon
-                size: 16
-                tint: entry.key === "fav" && menu.fav ? Theme.accent : "transparent"
-                opacity: 0.8
-            }
             Text {
-                x: 40
+                x: 14
                 anchors.verticalCenter: parent.verticalCenter
                 text: entry.text
-                color: entry.key === "remove" ? Theme.warn : Theme.text
+                color: entry.key === "fav" && menu.fav ? Theme.accent : Theme.text
                 font.family: Theme.fontFamily
                 font.pixelSize: 13
             }
-            Icon {
+            Text {
                 visible: !!entry.sub
                 anchors.right: parent.right
-                anchors.rightMargin: 10
+                anchors.rightMargin: 12
                 anchors.verticalCenter: parent.verticalCenter
-                name: "chevron"
-                size: 13
-                opacity: 0.5
+                text: "›"
+                color: Theme.textTertiary
+                font.pixelSize: 16
             }
             MouseArea {
                 id: m
@@ -180,16 +172,9 @@ Item {
                 height: 38
                 radius: 9
                 color: sm.containsMouse ? Theme.hover : "transparent"
-                Icon {
-                    x: 12
-                    anchors.verticalCenter: parent.verticalCenter
-                    name: modelData.create ? "plus" : (modelData.builtin ? "heart" : "playlist")
-                    size: 16
-                    opacity: 0.8
-                }
                 Text {
-                    x: 40
-                    width: parent.width - 40 - 36
+                    x: 14
+                    width: parent.width - 14 - 36
                     anchors.verticalCenter: parent.verticalCenter
                     text: modelData.name
                     elide: Text.ElideRight

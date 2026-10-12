@@ -71,7 +71,7 @@ Item {
         spacing: nav.itemGap
         Loader {
             sourceComponent: navButton
-            property var modelData: ({ key: "tools", icon: "tools", tip: qsTr("解密工具") })
+            property var modelData: ({ key: "tools", icon: "tools", tip: qsTr("转换") })
             // 曲库里有待解密文件时,图标右上角一个强调色小点
             Rectangle {
                 x: 31; y: 11

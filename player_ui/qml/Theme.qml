@@ -23,8 +23,9 @@ QtObject {
 
     // ---- 功能色 (低饱和,与强调色并存不抢戏) ----
     readonly property color perfect: "#d6b77e"   // Hi-Res / DSD 品质标签:香槟金
-    readonly property color ok: "#9fbf9a"        // 信号链无损直通:鼠尾草绿
-    readonly property color warn: "#d9a066"      // 信号链存在转换:琥珀
+    // 状态色不另起色相:正常 = 强调色,存在转换 = 暖灰,全应用只有一个彩色
+    readonly property color ok: accent
+    readonly property color warn: "#a89c8c"
     function okAlpha(a) { return Qt.rgba(ok.r, ok.g, ok.b, a) }
     function warnAlpha(a) { return Qt.rgba(warn.r, warn.g, warn.b, a) }
     function perfectAlpha(a) { return Qt.rgba(perfect.r, perfect.g, perfect.b, a) }

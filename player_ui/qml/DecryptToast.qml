@@ -26,7 +26,9 @@ Rectangle {
         spacing: 10
         Item {
             anchors.verticalCenter: parent.verticalCenter
-            width: 20; height: 20
+            width: decrypt.busy ? 18 : 0
+            height: 18
+            visible: decrypt.busy
             ShaderEffect {
                 anchors.fill: parent
                 visible: decrypt.busy
@@ -40,29 +42,23 @@ Rectangle {
                 Behavior on span { NumberAnimation { duration: 240; easing.type: Easing.OutCubic } }
                 fragmentShader: "qrc:/shaders/ring.frag.qsb"
             }
-            Icon {
-                anchors.centerIn: parent
-                visible: !decrypt.busy
-                name: decrypt.failCount > 0 && decrypt.okCount === 0 ? "close" : "check"
-                size: 16
-                tint: decrypt.failCount > 0 && decrypt.okCount === 0 ? Theme.warn : Theme.accent
-            }
         }
         Text {
             anchors.verticalCenter: parent.verticalCenter
-            text: decrypt.busy ? decrypt.done + " / " + decrypt.total
-                               : decrypt.okCount + (decrypt.failCount > 0 ? "  ·  " + decrypt.failCount : "")
+            text: decrypt.busy ? qsTr("转换 %1 / %2").arg(decrypt.done).arg(decrypt.total)
+                               : qsTr("已转换 %1").arg(decrypt.okCount) + (decrypt.failCount > 0 ? qsTr("  ·  失败 %1").arg(decrypt.failCount) : "")
             color: Theme.textSecondary
             font.family: Theme.fontFamily
             font.pixelSize: 13
         }
-        IconButton {
+        Capsule {
             anchors.verticalCenter: parent.verticalCenter
             visible: decrypt.busy
-            width: 22; height: 22
-            icon: "close"
-            iconSize: 11
-            opacity: hover.containsMouse || hovered ? 1 : 0.35
+            height: 24
+            pad: 9
+            text: qsTr("取消")
+            color: "transparent"
+            border.width: 0
             onClicked: decrypt.cancel()
         }
     }

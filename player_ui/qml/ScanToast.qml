@@ -5,7 +5,7 @@ import PlayerUi
 Rectangle {
     id: toast
     property bool shown: enabled && (library.scanning || hold.running)
-    width: Math.max(120, label.implicitWidth + 50)
+    width: label.implicitWidth + 36
     height: 38
     radius: 19
     color: Theme.panel
@@ -21,27 +21,12 @@ Rectangle {
         function onScanningChanged() { if (!library.scanning) hold.restart() }
     }
 
-    Rectangle {
-        anchors.left: parent.left
-        anchors.leftMargin: 16
-        anchors.verticalCenter: parent.verticalCenter
-        width: 8; height: 8; radius: 4
-        color: Theme.accent
-        SequentialAnimation on opacity {
-            running: library.scanning
-            loops: Animation.Infinite
-            OpacityAnimator { from: 1; to: 0.25; duration: 600 }
-            OpacityAnimator { from: 0.25; to: 1; duration: 600 }
-        }
-    }
     Text {
         id: label
-        anchors.left: parent.left
-        anchors.leftMargin: 32
-        anchors.verticalCenter: parent.verticalCenter
+        anchors.centerIn: parent
         // 扫描中:已识别 / 总数;完成:曲目数 (纯数字,配合左侧状态点)
-        text: library.scanning ? (library.scanTotal > 0 ? library.scanDone + " / " + library.scanTotal : "···")
-                               : library.trackCount.toLocaleString(Qt.locale(), "f", 0)
+        text: library.scanning ? (library.scanTotal > 0 ? qsTr("扫描 %1 / %2").arg(library.scanDone).arg(library.scanTotal) : qsTr("扫描中"))
+                               : qsTr("%1 首").arg(library.trackCount.toLocaleString(Qt.locale(), "f", 0))
         color: Theme.textSecondary
         font.family: Theme.fontFamily
         font.pixelSize: 13

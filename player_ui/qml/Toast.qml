@@ -23,7 +23,6 @@ Rectangle {
         id: row
         anchors.centerIn: parent
         spacing: 10
-        Icon { anchors.verticalCenter: parent.verticalCenter; name: toast.icon; size: 16; tint: Theme.accent }
         Text {
             anchors.verticalCenter: parent.verticalCenter
             text: toast.text
