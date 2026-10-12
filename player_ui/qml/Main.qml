@@ -125,19 +125,26 @@ Window {
 
         Aurora {
             anchors.fill: parent
-            visible: !nowPlaying.covering
+            // 封面背景完全盖住时停止绘制 (省 GPU)
+            visible: !nowPlaying.covering && homeBackdrop.opacity < 1
         }
-        // 播放时首页背景透出当前专辑封面:轻度模糊、压暗,换歌时交叉淡化
+        // 播放时首页背景与播放页同一套:当前封面模糊铺满、压暗,换歌时交叉淡化;再叠一层颗粒防色带
         Backdrop {
+            id: homeBackdrop
             anchors.fill: parent
             visible: opacity > 0 && !nowPlaying.covering
-            opacity: player.hasTrack ? 0.85 : 0
+            opacity: player.hasTrack ? 1 : 0
             Behavior on opacity { NumberAnimation { duration: 900; easing.type: Easing.InOutQuad } }
             source: player.cover
             solid: false
-            spread: 0.05
-            sampleSize: 96
-            dim: 0.42
+        }
+        ShaderEffect {
+            anchors.fill: parent
+            visible: homeBackdrop.visible
+            opacity: homeBackdrop.opacity
+            property size size: Qt.size(width, height)
+            property real strength: 0.022
+            fragmentShader: "qrc:/shaders/grain.frag.qsb"
         }
 
         Item {
