@@ -136,6 +136,27 @@ Item {
                 readonly property bool current: model.queueIndex === player.queuePosition
                 readonly property bool played: model.queueIndex < player.queuePosition
                 readonly property bool hovered: rowMouse.containsMouse || rm.hovered
+                // 抽屉打开时,可见的行自上而下依次滑入淡入
+                transform: Translate { id: rowShift }
+                Connections {
+                    target: panel
+                    function onShownChanged() {
+                        if (!panel.shown || Theme.reduced) return
+                        const rel = Math.max(0, Math.min(10, Math.round((row.y - list.contentY) / row.height)))
+                        rowIn.delay = 60 + rel * 28
+                        rowIn.restart()
+                    }
+                }
+                SequentialAnimation {
+                    id: rowIn
+                    property int delay: 0
+                    ScriptAction { script: { row.opacity = 0; rowShift.x = 28 } }
+                    PauseAnimation { duration: rowIn.delay }
+                    ParallelAnimation {
+                        NumberAnimation { target: row; property: "opacity"; to: 1; duration: 320; easing.type: Easing.OutCubic }
+                        NumberAnimation { target: rowShift; property: "x"; to: 0; duration: 520; easing.type: Easing.OutQuint }
+                    }
+                }
                 Rectangle {
                     anchors.fill: parent
                     radius: Theme.radiusM
