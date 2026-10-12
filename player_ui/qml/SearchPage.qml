@@ -94,7 +94,13 @@ Item {
     // ---------------- 结果 ----------------
     // 单个可滚动列:最佳匹配 / 歌手 / 专辑 / 歌曲。键盘焦点始终留在输入框:↑↓ 选择歌曲,回车播放
     property int sel: -1
-    onQChanged: { sel = -1; results.contentY = 0 }
+    onQChanged: { sel = -1; results.contentY = 0; if (q.length) refresh.restart() }
+    // 结果刷新:新结果从略下方轻轻浮上并淡入,而不是整页瞬间替换
+    ParallelAnimation {
+        id: refresh
+        OpacityAnimator { target: col; from: 0.35; to: 1; duration: 260; easing.type: Easing.OutCubic }
+        NumberAnimation { target: colShift; property: "y"; from: 10; to: 0; duration: 380; easing.type: Easing.OutQuint }
+    }
     function moveSel(d) {
         const n = searchModel.count
         if (n === 0) return
@@ -124,6 +130,7 @@ Item {
 
             Column {
             id: col
+            transform: Translate { id: colShift }
             width: results.width
             topPadding: 24
             spacing: 0

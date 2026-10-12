@@ -80,12 +80,19 @@ Item {
             cover: player.cover
             spinning: player.playing
             labelSize: 128
-            visible: player.hasTrack
+            // 第一次开始播放时,唱片从空位上淡入并轻轻放大
+            opacity: player.hasTrack ? 1 : 0
+            scale: player.hasTrack ? 1 : 0.8
+            visible: opacity > 0
+            Behavior on opacity { OpacityAnimator { duration: Theme.slow; easing.type: Easing.OutCubic } }
+            Behavior on scale { ScaleAnimator { duration: Theme.slow; easing.type: Easing.OutBack } }
         }
         Rectangle {
             anchors.fill: parent
             radius: width / 2
-            visible: !player.hasTrack
+            opacity: player.hasTrack ? 0 : 1
+            visible: opacity > 0
+            Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
             color: Theme.hover
             Icon { anchors.centerIn: parent; name: "disc"; size: 24; opacity: 0.45 }
         }
