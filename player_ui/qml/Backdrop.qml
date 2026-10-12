@@ -52,7 +52,8 @@ Item {
             anchors.fill: parent
             layer.enabled: true
             layer.smooth: true
-            layer.textureSize: Qt.size(Math.max(1, Math.round(width / 6)), Math.max(1, Math.round(height / 6)))
+            // 只在换封面时渲染一次;半分辨率足够细腻,再低放大后会出现块状条纹
+            layer.textureSize: Qt.size(Math.max(1, Math.round(width / 2)), Math.max(1, Math.round(height / 2)))
             ShaderEffect {
                 anchors.fill: parent
                 visible: lay.ready

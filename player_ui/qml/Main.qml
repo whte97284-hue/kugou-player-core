@@ -135,8 +135,8 @@ Window {
             Behavior on opacity { NumberAnimation { duration: 900; easing.type: Easing.InOutQuad } }
             source: player.cover
             solid: false
-            spread: 0.035
-            sampleSize: 192
+            spread: 0.05
+            sampleSize: 256
             dim: 0.42
         }
 
