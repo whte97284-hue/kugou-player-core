@@ -68,7 +68,9 @@ static void AssertCheck(const std::string& name, bool cond, const std::string& d
 
 } // namespace
 
-int main() {
+// 用法: test_kugou_bridge_runner.exe [kgm.mask 路径]
+// 不传时用解密器默认位置 (程序目录\tools\kgm\kgm.mask 或当前目录下的 tools\kgm\kgm.mask)
+int wmain(int argc, wchar_t** argv) {
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
 
@@ -82,7 +84,7 @@ int main() {
         logger.Log("================================================================================\n");
 
         KuGouTrackBridge bridge;
-        bridge.SetMaskPath(L"F:\\软件\\酷狗最新版转换器\\KugouConverterWeb\\tools\\kgm\\kgm.mask");
+        if (argc > 1) bridge.SetMaskPath(argv[1]);
         std::wstring testCacheDir = L"player_core\\test\\bridge_cache";
         bridge.SetCacheOutputDir(testCacheDir);
 
@@ -156,8 +158,9 @@ int main() {
         AssertCheck("解码耗时极短 (< 1500ms 冷启动物理读写与解码)", ms < 1500.0,
                     "实际耗时: " + std::to_string(ms) + " ms");
 
-        uintmax_t outBytes = fs::file_size(readyEntry.playable_path);
-        double mbps = (outBytes / 1024.0 / 1024.0) / (ms / 1000.0);
+        std::error_code ecSize;
+        uintmax_t outBytes = prepOk ? fs::file_size(readyEntry.playable_path, ecSize) : 0;
+        double mbps = (ms > 0.0) ? (outBytes / 1024.0 / 1024.0) / (ms / 1000.0) : 0.0;
         logger.Log("    - 产物路径: " + W2U(readyEntry.playable_path));
         logger.Log("    - 吞吐速度: " + std::to_string(mbps) + " MB/s");
 
