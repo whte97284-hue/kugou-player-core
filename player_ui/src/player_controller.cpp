@@ -1,5 +1,6 @@
 #include "player_controller.h"
 
+#include <QCoreApplication>
 #include <QPointer>
 #include <QSettings>
 #include <QThreadPool>
@@ -18,6 +19,7 @@
 #include <random>
 #include "audio_tag_parser.hpp"
 #include "platform_io.hpp"
+#include "lyric_manager.hpp"
 
 #include "cover_provider.h"
 
@@ -716,13 +718,11 @@ QString PlayerController::chainSummary() const {
     return parts.join(QStringLiteral("  ·  "));
 }
 
-// 歌词来源:同名 .lrc (自动识别 UTF-8 / UTF-16 / GBK) 与文件内嵌歌词 (USLT / LYRICS / ©lyr),优先级可在设置中调整
-// 支持一行多时间戳与 [offset:] 标签;没有时间戳的纯文本歌词按静态歌词显示
+// 歌词来源:同名 .lrc (自动识别 UTF-8 / UTF-16 / GBK) 与文件内嵌歌词 (USLT / LYRICS / ©lyr),优先级可在设置中调整;
+// 两者都没有时,在后台到本机酷狗歌词库 (.krc) 里按歌名 / 歌手严格匹配
 void PlayerController::loadLyrics() {
-    lyrics_.clear();
-    lyricTimes_.clear();
-    lyricIndex_ = -1;
-    lyricsSynced_ = false;
+    ++lyricsGen_;
+    QString text;
     if (current_) {
         auto readLrc = [this]() -> QString {
             QFileInfo fi(Q(current_->file_path));
@@ -746,9 +746,41 @@ void PlayerController::loadLyrics() {
             return QString::fromStdWString(m.lyrics);
         };
         const bool embeddedFirst = QSettings().value("player/lyricsSource", 0).toInt() == 1;
-        QString text = embeddedFirst ? readEmbedded() : readLrc();
+        text = embeddedFirst ? readEmbedded() : readLrc();
         if (text.trimmed().isEmpty()) text = embeddedFirst ? readLrc() : readEmbedded();
+        if (text.trimmed().isEmpty()) loadKugouLyrics();
+    }
+    applyLyricsText(text, true);
+}
 
+void PlayerController::loadKugouLyrics() {
+    const quint64 gen = lyricsGen_;
+    const std::wstring path = current_->file_path, title = current_->title, artist = current_->artist;
+    QPointer<PlayerController> self(this);
+    QThreadPool::globalInstance()->start([self, gen, path, title, artist]() {
+        // 首次使用时探测歌词库目录,之后常驻;内部自带锁,可跨线程复用
+        static lyric_core::LyricManager kugou;
+        lyric_core::ParsedLyrics parsed;
+        if (!kugou.LoadLyricsForTrack(path, title, artist, parsed)) return;
+        const QString lrc = QString::fromStdString(parsed.ToStandardLrc());
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, lrc]() {
+            // 期间切了歌或重新加载过,结果作废
+            if (self && self->lyricsGen_ == gen) {
+                self->applyLyricsText(lrc, false);
+                self->updateLyricIndex();
+            }
+        }, Qt::QueuedConnection);
+    });
+}
+
+// 解析 LRC 文本:支持一行多时间戳与 [offset:] 标签;没有时间戳的纯文本歌词按静态歌词显示。
+// wholeFileTimeline:歌词时间轴按整个音频文件计 (CUE 分轨需换算到分轨起点);酷狗歌词按单曲计,不换算
+void PlayerController::applyLyricsText(const QString& text, bool wholeFileTimeline) {
+    lyrics_.clear();
+    lyricTimes_.clear();
+    lyricIndex_ = -1;
+    lyricsSynced_ = false;
+    if (current_ && !text.trimmed().isEmpty()) {
         static const QRegularExpression tagRe(QStringLiteral("\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?\\]"));
         static const QRegularExpression offRe(QStringLiteral("\\[offset:\\s*([+-]?\\d+)\\]"), QRegularExpression::CaseInsensitiveOption);
         static const QRegularExpression metaRe(QStringLiteral("^\\[[a-zA-Z]+:.*\\]$"));
@@ -780,7 +812,7 @@ void PlayerController::loadLyrics() {
             lyricsSynced_ = true;
             std::stable_sort(lines.begin(), lines.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
             // CUE 分轨:歌词时间轴通常按整轨计,换算到分轨起点
-            qint64 shift = current_->is_cue_track ? static_cast<qint64>(current_->cue_start_ms) : 0;
+            qint64 shift = wholeFileTimeline && current_->is_cue_track ? static_cast<qint64>(current_->cue_start_ms) : 0;
             for (const auto& l : lines) {
                 if (l.first - shift < 0 && shift > 0) continue;
                 lyricTimes_.push_back(l.first - shift);

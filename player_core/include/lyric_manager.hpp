@@ -80,31 +80,42 @@ private:
     static const uint8_t KRC_KEY[16];
 };
 
-// 统一歌词管理器 (自动模糊匹配、内存缓存、实时定位、LRC 导出)
+// 统一歌词管理器 (严格匹配、内存缓存、实时定位、LRC 导出)。所有公开方法线程安全。
 class LyricManager {
 public:
     LyricManager();
     ~LyricManager() = default;
 
-    // 刷新并重新探测本地酷狗歌词库
+    // 刷新并重新探测本地酷狗歌词库 (同时清空文件索引)
     void RefreshDirectories();
 
     // 获取当前探测到的所有有效歌词目录
     std::vector<std::wstring> GetLyricDirectories() const;
 
-    // 智能匹配并载入歌曲对应的歌词:
-    // 支持直接传入音频物理文件路径 (如 "ilem - 梦良衣.flac"), 自动提取歌手与歌名做多级模糊匹配
+    // 为歌曲查找并载入酷狗 .krc 歌词:先用标签里的歌名 / 歌手,再用文件名 (「歌手 - 歌名.flac」)。
+    // 歌名须规范化后完全一致;双方都有歌手时歌手也须相符,宁缺毋错。
     bool LoadLyricsForTrack(const std::wstring& audioFilePath, const std::wstring& title, const std::wstring& artist, ParsedLyrics& outLyrics);
 
     // 根据文件路径或标识保存转换后的标准 .lrc 文件到目标位置
     bool ExportLrcFile(const ParsedLyrics& lyrics, const std::wstring& targetLrcPath);
 
-private:
-    // 在已探测的歌词库中搜索最匹配的 .krc 物理文件
+    // 在已探测的歌词库中搜索最匹配的 .krc 文件 (找不到返回空)
     std::wstring FindMatchingKrcFile(const std::wstring& audioFilePath, const std::wstring& title, const std::wstring& artist);
 
+private:
+    struct KrcEntry {
+        std::wstring title;   // 规范化后的歌名
+        std::wstring artist;  // 规范化后的歌手
+        std::wstring path;
+        uint64_t mtime = 0;
+    };
+    void EnsureIndexLocked(bool forceRebuild);
+    std::wstring MatchLocked(const std::wstring& title, const std::wstring& artist) const;
+
     std::vector<std::wstring> search_dirs_;
-    std::unordered_map<std::wstring, ParsedLyrics> cache_; // 内存缓存 (key: 规范化曲目标识)
+    std::vector<KrcEntry> index_;
+    int64_t index_built_at_ = 0;   // 秒 (steady clock),0 表示尚未建立
+    std::unordered_map<std::wstring, ParsedLyrics> cache_; // key: .krc 路径,容量有上限
     mutable std::mutex mutex_;
 };
 

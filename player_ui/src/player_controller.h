@@ -171,6 +171,8 @@ private:
     void rebuildSignalChain();
     void tick();
     void loadLyrics();
+    void loadKugouLyrics();
+    void applyLyricsText(const QString& text, bool wholeFileTimeline);
     void updateLyricIndex();
     void extractAccent();
     void setPlaying(bool p);
@@ -222,4 +224,5 @@ private:
     std::vector<qint64> lyricTimes_; // 毫秒,相对于当前曲目起点
     int lyricIndex_ = -1;
     bool lyricsSynced_ = false;
+    quint64 lyricsGen_ = 0; // 每次重新加载歌词递增,丢弃过期的后台结果
 };
