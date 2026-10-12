@@ -320,6 +320,8 @@ void SearchModel::run() {
         auto hits = snap_->catalog.Search(wq, true);
         for (const TrackItem* t : hits) {
             if (rows_.size() >= 80) break;
+            // 隐藏文件夹里的歌不进任何专辑,搜索里也不出现
+            if (!snap_->trackAlbum.count(t->id)) continue;
             rows_.push_back(t);
         }
         // 最佳匹配:精确歌手 > 精确专辑 > 第一首歌 > 第一张专辑 > 第一位歌手

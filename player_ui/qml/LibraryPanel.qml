@@ -24,7 +24,7 @@ Item {
         id: card
         x: Theme.navWidth + 12
         // 从侧栏底部的文件夹按钮旁弹出
-        y: lp.height - height - 18
+        y: lp.height - height - 76 - 14 // 停在底部播放条上方
         width: 420
         height: body.implicitHeight + 36
         radius: Theme.radiusL
@@ -88,17 +88,53 @@ Item {
                         size: 17
                         opacity: 0.5
                     }
+                    readonly property bool hiddenFolder: library.hiddenFolders.indexOf(modelData) >= 0
                     Text {
                         anchors.left: fIcon.right
                         anchors.leftMargin: 12
-                        anchors.right: rm.left
+                        anchors.right: hideBtn.left
                         anchors.rightMargin: 8
                         anchors.verticalCenter: parent.verticalCenter
                         text: modelData
                         elide: Text.ElideMiddle
                         color: Theme.textSecondary
+                        opacity: parent.hiddenFolder ? 0.45 : 1
+                        Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
                         font.family: Theme.fontFamily
                         font.pixelSize: 13
+                    }
+                    // 隐藏 / 显示:隐藏后此文件夹的歌不出现在专辑、歌手、歌曲和搜索里,
+                    // 收藏与歌单里已有的照常可见。只有一个文件夹时没有意义,不显示
+                    Rectangle {
+                        id: hideBtn
+                        visible: library.folders.length > 1 || parent.hiddenFolder
+                        anchors.right: rm.left
+                        anchors.rightMargin: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: 24
+                        width: visible ? hideText.implicitWidth + 18 : 0
+                        radius: 12
+                        color: parent.hiddenFolder ? Theme.accentAlpha(0.16) : (hideMouse.containsMouse ? Theme.hover : "transparent")
+                        border.width: 1
+                        border.color: parent.hiddenFolder ? Theme.accentAlpha(0.4) : Theme.hairline
+                        opacity: parent.hiddenFolder || rowMouse.containsMouse || hideMouse.containsMouse ? 1 : 0.5
+                        Behavior on color { ColorAnimation { duration: Theme.fast } }
+                        Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+                        Text {
+                            id: hideText
+                            anchors.centerIn: parent
+                            text: parent.parent.hiddenFolder ? qsTr("已隐藏") : qsTr("隐藏")
+                            color: parent.parent.hiddenFolder ? Theme.accent : Theme.textSecondary
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 11
+                        }
+                        MouseArea {
+                            id: hideMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: library.setFolderHidden(modelData, !parent.parent.hiddenFolder)
+                        }
                     }
                     IconButton {
                         id: rm

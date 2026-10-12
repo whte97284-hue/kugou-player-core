@@ -16,14 +16,37 @@ Item {
     readonly property bool compact: width < 900
 
     // ---- 面板 ----
-    Rectangle {
+    // 与背景联动:条内铺一份和窗口背景完全对齐的模糊封面 (同一张图、同一位置),再压一层深色,
+    // 看起来像磨砂玻璃透出了后面的封面;换歌时跟背景一起交叉淡化。页面内容不会透上来
+    property Item window: null
+    Rectangle { anchors.fill: parent; color: Theme.base }
+    Item {
         anchors.fill: parent
-        color: Qt.rgba(0.066, 0.06, 0.055, 0.97)
+        clip: true
+        Backdrop {
+            id: barBackdrop
+            x: 0
+            y: -island.y
+            width: island.width
+            height: island.window ? island.window.height : island.height
+            source: player.cover
+            solid: false
+            opacity: player.hasTrack ? 1 : 0
+            Behavior on opacity { NumberAnimation { duration: 900; easing.type: Easing.InOutQuad } }
+        }
     }
     Rectangle {
         anchors.fill: parent
+        color: Qt.rgba(0.05, 0.045, 0.04, player.hasTrack ? 0.62 : 0.97)
+        Behavior on color { ColorAnimation { duration: 900 } }
+    }
+    // 上沿一道强调色柔光,随低音轻轻呼吸
+    Rectangle {
+        width: parent.width
+        height: 26
+        opacity: 0.55 + 0.45 * player.breath
         gradient: Gradient {
-            GradientStop { position: 0; color: Theme.accentAlpha(0.06) }
+            GradientStop { position: 0; color: Theme.accentAlpha(0.16) }
             GradientStop { position: 1; color: "transparent" }
         }
     }
