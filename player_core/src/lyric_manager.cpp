@@ -558,13 +558,29 @@ std::vector<std::wstring> LyricManager::GetLyricDirectories() const {
     return search_dirs_;
 }
 
-// 歌词库索引:每个 .krc 只解析一次文件名。查不到时最多每分钟重建一次,以便收录酷狗新下载的歌词
-void LyricManager::EnsureIndexLocked(bool forceRebuild) {
+// 目录本身的修改时间:目录里新增 / 删除 / 改名文件时会变,用来发现酷狗新下载的歌词
+std::vector<uint64_t> LyricManager::DirStampsLocked() const {
+    std::vector<uint64_t> stamps;
+    stamps.reserve(search_dirs_.size());
+    for (const auto& dir : search_dirs_) {
+        uint64_t size = 0, mtime = 0;
+        stamps.push_back(platform::GetFileInfo(dir, size, mtime) ? mtime : 0);
+    }
+    return stamps;
+}
+
+// 歌词库索引:每个 .krc 只解析一次文件名。查不到时 (onMiss) 若歌词目录有变化或索引已超过 10 秒就重建,
+// 这样酷狗刚下载的歌词在下一次查找时即可命中
+bool LyricManager::EnsureIndexLocked(bool onMiss) {
     const int64_t now = NowSeconds();
-    if (index_built_at_ != 0 && !(forceRebuild && now - index_built_at_ >= 60)) return;
+    if (index_built_at_ != 0) {
+        if (!onMiss) return false;
+        if (now - index_built_at_ < 10 && DirStampsLocked() == dir_stamps_) return false;
+    }
 
     index_.clear();
     index_built_at_ = now;
+    dir_stamps_ = DirStampsLocked();
     for (const auto& dir : search_dirs_) {
         platform::EnumerateFilesRecursive(dir, [this](const std::wstring&, const std::vector<platform::DirEntry>& files) {
             for (const auto& e : files) {
@@ -586,6 +602,7 @@ void LyricManager::EnsureIndexLocked(bool forceRebuild) {
             return true;
         });
     }
+    return true;
 }
 
 std::wstring LyricManager::MatchLocked(const std::wstring& title, const std::wstring& artist) const {
@@ -624,12 +641,13 @@ std::wstring LyricManager::FindMatchingKrcFile(const std::wstring& audioFilePath
 
     std::lock_guard<std::mutex> lock(mutex_);
     for (int pass = 0; pass < 2; ++pass) {
-        EnsureIndexLocked(pass == 1);
+        const bool rebuilt = EnsureIndexLocked(pass == 1);
+        if (pass == 1 && !rebuilt) break;
         for (const auto& q : queries) {
             std::wstring hit = MatchLocked(q.first, q.second);
             if (!hit.empty()) return hit;
         }
-        if (NowSeconds() - index_built_at_ < 1) break; // 索引刚刚建立,无需再建一次
+        if (rebuilt) break; // 索引刚刚建立,无需再建一次
     }
     return {};
 }

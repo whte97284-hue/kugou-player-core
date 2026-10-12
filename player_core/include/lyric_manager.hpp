@@ -109,11 +109,13 @@ private:
         std::wstring path;
         uint64_t mtime = 0;
     };
-    void EnsureIndexLocked(bool forceRebuild);
+    bool EnsureIndexLocked(bool onMiss); // 返回是否重建了索引
+    std::vector<uint64_t> DirStampsLocked() const;
     std::wstring MatchLocked(const std::wstring& title, const std::wstring& artist) const;
 
     std::vector<std::wstring> search_dirs_;
     std::vector<KrcEntry> index_;
+    std::vector<uint64_t> dir_stamps_; // 建索引时各歌词目录的修改时间
     int64_t index_built_at_ = 0;   // 秒 (steady clock),0 表示尚未建立
     std::unordered_map<std::wstring, ParsedLyrics> cache_; // key: .krc 路径,容量有上限
     mutable std::mutex mutex_;

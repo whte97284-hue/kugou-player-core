@@ -116,6 +116,8 @@ int main(int argc, char** argv) {
     Check("多歌手任一相符", load("/music/x.flac", "千里之外", "费玉清") == "千里之外");
     Check("标签不符时回退到文件名", load("/music/ilem - 梦良衣.flac", "梦良衣 (Live)", "ilem") == "梦良衣");
     Check("损坏的 krc 安全失败", load("/music/broken - song.flac", "", "").empty());
+    mk("ilem - 未收录", "[0,1000]<0,1000,0>新下载\n");
+    Check("酷狗刚下载的歌词立即可见", load("/music/ilem - 未收录.flac", "未收录", "ilem") == "新下载");
 
     std::printf("[5] 变异模糊测试 (ASan)\n");
     std::mt19937 rng(7);
