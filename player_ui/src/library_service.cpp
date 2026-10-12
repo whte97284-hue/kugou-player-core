@@ -1,11 +1,15 @@
 #include "library_service.h"
 
+#include <QClipboard>
 #include <QCoreApplication>
 #include <QDate>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QDesktopServices>
+#include <QGuiApplication>
+#include <QProcess>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QUrl>
@@ -558,6 +562,59 @@ int LibraryService::albumOfTrack(double trackId) const {
     auto s = snapshot();
     auto it = s->trackAlbum.find(static_cast<uint64_t>(trackId));
     return it == s->trackAlbum.end() ? -1 : it->second;
+}
+
+QVariantMap LibraryService::trackInfo(double trackId) const {
+    QVariantMap m;
+    auto s = snapshot();
+    const TrackItem* t = s->catalog.FindById(static_cast<uint64_t>(trackId));
+    if (!t) return m;
+    const QString path = Q(t->file_path);
+    m["title"] = Q(t->title.empty() ? t->file_name : t->title);
+    m["artist"] = Q(t->artist.empty() ? t->album_artist : t->artist);
+    m["album"] = Q(t->album);
+    m["albumArtist"] = Q(t->album_artist);
+    m["year"] = Q(t->year);
+    m["genre"] = Q(t->genre);
+    m["trackNo"] = t->track_no;
+    m["discNo"] = t->disc_no;
+    m["path"] = QDir::toNativeSeparators(path);
+    m["folder"] = QDir::toNativeSeparators(QFileInfo(path).absolutePath());
+    m["format"] = Q(t->format);
+    m["codec"] = Q(t->codec);
+    m["duration"] = formatDuration(t->duration_ms);
+    m["bitrate"] = static_cast<int>(t->bitrate_kbps);
+    m["sampleRate"] = static_cast<int>(t->sample_rate);
+    m["bits"] = static_cast<int>(t->bits_per_sample);
+    m["channels"] = static_cast<int>(t->channels);
+    m["size"] = static_cast<double>(t->file_size);
+    m["quality"] = trackQuality(*t);
+    m["isCue"] = t->is_cue_track;
+    m["exists"] = QFileInfo::exists(path);
+    return m;
+}
+
+bool LibraryService::revealTrack(double trackId) const {
+    auto s = snapshot();
+    const TrackItem* t = s->catalog.FindById(static_cast<uint64_t>(trackId));
+    if (!t) return false;
+    const QFileInfo fi(Q(t->file_path));
+    if (fi.exists()) {
+#ifdef Q_OS_WIN
+        // explorer 只认 /select,"路径" 这种写法;QProcess 默认会把整个参数加引号,路径带空格时会失效
+        QProcess p;
+        p.setProgram(QStringLiteral("explorer.exe"));
+        p.setNativeArguments(QStringLiteral("/select,\"%1\"").arg(QDir::toNativeSeparators(fi.absoluteFilePath())));
+        return p.startDetached();
+#endif
+    }
+    const QDir dir = fi.absoluteDir();
+    if (!dir.exists()) return false;
+    return QDesktopServices::openUrl(QUrl::fromLocalFile(dir.absolutePath()));
+}
+
+void LibraryService::copyToClipboard(const QString& text) const {
+    if (auto* cb = QGuiApplication::clipboard()) cb->setText(text);
 }
 
 int LibraryService::artistOfTrack(double trackId) const {

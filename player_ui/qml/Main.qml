@@ -592,6 +592,11 @@ Window {
     TrackMenu {
         id: trackMenu
         z: 45
+        onInfoRequested: (id) => trackInfo.open(id)
+    }
+    TrackInfo {
+        id: trackInfo
+        z: 44
     }
 
     Toast {
@@ -663,6 +668,7 @@ Window {
         enabled: !root.typing
         onActivated: {
             if (trackMenu.shown) trackMenu.close()
+            else if (trackInfo.shown) trackInfo.close()
             else if (libraryPanel.shown) libraryPanel.close()
             else if (chain.shown) chain.shown = false
             else if (queuePanel.shown) queuePanel.shown = false
@@ -732,5 +738,6 @@ Window {
     function automationGo(sec) { root.go(String(sec)) }
     function automationOpenArtist(name) { root.openArtist(library.artistIndexOf(String(name))) }
     function automationOpenPlaylist(id) { root.openPlaylist(String(id)) }
+    function automationTrackInfo(show) { trackMenu.close(); if (show) trackInfo.open(player.trackId); else trackInfo.close() }
     function automationTrackMenu(x, y) { trackMenu.open(player.trackId, Number(x), Number(y), {}) }
 }

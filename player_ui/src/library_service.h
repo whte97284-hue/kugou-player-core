@@ -120,6 +120,11 @@ public:
     Q_INVOKABLE int artistIndexOf(const QString& name) const;
     Q_INVOKABLE int albumOfTrack(double trackId) const;
     Q_INVOKABLE int artistOfTrack(double trackId) const;
+    // 曲目详情 (右键「歌曲信息」):标签、文件路径、格式、采样率、码率、大小等;找不到返回空表
+    Q_INVOKABLE QVariantMap trackInfo(double trackId) const;
+    // 在资源管理器中打开曲目所在文件夹并选中该文件 (非 Windows 只打开文件夹)
+    Q_INVOKABLE bool revealTrack(double trackId) const;
+    Q_INVOKABLE void copyToClipboard(const QString& text) const;
 
     static QString formatDuration(uint64_t ms);
     static QString trackQuality(const TrackItem& t);

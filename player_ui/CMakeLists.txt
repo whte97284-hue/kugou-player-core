@@ -50,6 +50,7 @@ qt_add_qml_module(KugouPlayer
         qml/PlayingBars.qml
         qml/SmoothScroll.qml
         qml/TrackMenu.qml
+        qml/TrackInfo.qml
         qml/Toast.qml
         qml/LetterRail.qml
         qml/SongsPage.qml

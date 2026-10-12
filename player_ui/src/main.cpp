@@ -66,7 +66,9 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
     steps->push_back({"04_menu", [window] {
         QMetaObject::invokeMethod(window, "automationTrackMenu", Q_ARG(QVariant, 760), Q_ARG(QVariant, 420));
     }, 900});
+    steps->push_back({"04b_track_info", [call] { call("automationTrackInfo", true); }, 900});
     steps->push_back({"05_artists", [window, call] {
+        QMetaObject::invokeMethod(window, "automationTrackInfo", Q_ARG(QVariant, false));
         QMetaObject::invokeMethod(window, "automationBack");
         call("automationGo", QStringLiteral("artists"));
     }, 1600});
