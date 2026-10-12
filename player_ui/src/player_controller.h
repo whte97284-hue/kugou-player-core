@@ -151,6 +151,8 @@ public:
     Q_INVOKABLE void playNext(double trackId);
     Q_INVOKABLE void enqueue(const QVariantList& trackIds);
     Q_INVOKABLE void removeFromQueue(int index);
+    // 清空播放列表:只保留正在播放的这一首,播放不中断
+    Q_INVOKABLE void clearQueue();
 
 signals:
     void trackChanged();

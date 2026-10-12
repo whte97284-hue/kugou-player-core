@@ -254,6 +254,22 @@ void PlayerController::removeFromQueue(int index) {
     emit queueIndexChanged();
 }
 
+void PlayerController::clearQueue() {
+    if (queue_.size() <= 1) return;
+    if (queueIndex_ < 0 || queueIndex_ >= static_cast<int>(queue_.size())) {
+        queue_.clear();
+        unshuffled_.clear();
+        queueIndex_ = -1;
+    } else {
+        const uint64_t cur = queue_[queueIndex_];
+        queue_.assign(1, cur);
+        unshuffled_.clear();
+        queueIndex_ = 0;
+    }
+    queueContentChanged();
+    emit queueIndexChanged();
+}
+
 void PlayerController::setShuffle(bool on) {
     if (on == shuffle_) return;
     shuffle_ = on;

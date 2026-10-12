@@ -62,6 +62,7 @@ qt_add_qml_module(KugouPlayer
         qml/ToolsPage.qml
         qml/CrossfadeCover.qml
         qml/Backdrop.qml
+        qml/QueuePanel.qml
         qml/Capsule.qml
         qml/SettingsPage.qml
         qml/DecryptPrompt.qml

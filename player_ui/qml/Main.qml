@@ -136,7 +136,7 @@ Window {
             source: player.cover
             solid: false
             spread: 0.05
-            sampleSize: 256
+            sampleSize: 96
             dim: 0.42
         }
 
@@ -145,7 +145,7 @@ Window {
             anchors.fill: parent
             visible: !nowPlaying.covering
             anchors.leftMargin: Theme.navWidth
-            readonly property int inset: Theme.islandHeight + 60
+            readonly property int inset: island.height + 28
             readonly property bool libraryEmpty: library.albumCount === 0
 
             AlbumWall {
@@ -228,13 +228,14 @@ Window {
             z: 5
             onCloseRequested: shown = false
             onChainClicked: chain.shown = !chain.shown
-            onShownChanged: Qt.callLater(root.flyNowPlaying, shown)
+            onShownChanged: { if (shown) queuePanel.shown = false; Qt.callLater(root.flyNowPlaying, shown) }
         }
 
         SideNav {
             id: nav
             anchors.top: parent.top
             anchors.bottom: parent.bottom
+            anchors.bottomMargin: island.height
             current: root.section
             onNavigate: (target) => {
                 if (target === "folder") library.folders.length ? libraryPanel.open() : folderDialog.open()
@@ -483,13 +484,28 @@ Window {
         z: 10
     }
 
-    // ======================= 悬浮播放岛 =======================
+    // ======================= 播放列表抽屉 =======================
+    QueuePanel {
+        id: queuePanel
+        z: 19
+        width: Math.min(400, Math.max(320, root.width * 0.34))
+        x: root.width - width
+        // 从窗口按钮下方开始,不挡最小化 / 关闭
+        y: 46
+        height: island.y - y
+        shown: false
+        onCloseRequested: shown = false
+    }
+
+    // ======================= 底部播放条 =======================
     PlayIsland {
         id: island
-        width: Math.min(980, root.width - Theme.navWidth - 96)
-        x: Theme.navWidth + (root.width - Theme.navWidth - width) / 2
-        y: root.height - height - 24
+        width: root.width
+        x: 0
+        y: root.height - height
         z: 20
+        queueOpen: queuePanel.shown
+        onQueueClicked: queuePanel.shown = !queuePanel.shown
         // 沉浸页有自己的控制区,岛下沉隐去
         readonly property bool away: nowPlaying.shown || (library.albumCount === 0 && !player.hasTrack)
         opacity: away ? 0 : 1
@@ -500,7 +516,7 @@ Window {
             NumberAnimation { duration: island.away ? 180 : 420; easing.type: Easing.OutCubic } } }
         transform: Translate {
             id: islandShift
-            y: island.away ? 36 : 0
+            y: island.away ? island.height + 12 : 0
             Behavior on y { SequentialAnimation {
                 PauseAnimation { duration: island.away ? 0 : 140 }
                 NumberAnimation { duration: island.away ? 200 : 620; easing.type: Easing.OutQuint } } }
@@ -649,6 +665,7 @@ Window {
             if (trackMenu.shown) trackMenu.close()
             else if (libraryPanel.shown) libraryPanel.close()
             else if (chain.shown) chain.shown = false
+            else if (queuePanel.shown) queuePanel.shown = false
             else if (nowPlaying.shown) nowPlaying.shown = false
             else root.back()
         }
