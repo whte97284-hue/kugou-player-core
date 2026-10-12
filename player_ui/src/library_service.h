@@ -67,6 +67,8 @@ class LibraryService : public QObject {
     Q_PROPERTY(int albumCount READ albumCount NOTIFY libraryChanged)
     Q_PROPERTY(int generation READ generation NOTIFY libraryChanged)
     Q_PROPERTY(QStringList folders READ folders NOTIFY foldersChanged)
+    // 隐藏的文件夹:其中的歌曲不出现在专辑 / 歌手 / 歌曲 / 搜索里,但收藏与歌单里已有的照常可见可播
+    Q_PROPERTY(QStringList hiddenFolders READ hiddenFolders NOTIFY foldersChanged)
     // 导入进度 (扫描期间实时刷新):已处理 / 总数 / 当前文件
     Q_PROPERTY(int scanDone READ scanDone NOTIFY progressChanged)
     Q_PROPERTY(int scanTotal READ scanTotal NOTIFY progressChanged)
@@ -87,6 +89,7 @@ public:
     int albumCount() const;
     int generation() const { return generation_; }
     QStringList folders() const { return folders_; }
+    QStringList hiddenFolders() const { return hiddenFolders_; }
     int scanDone() const { return scanDone_; }
     int scanTotal() const { return scanTotal_; }
     QString scanFile() const { return scanFile_; }
@@ -105,6 +108,7 @@ public:
     // 接受文件对话框 / 拖放给出的 file:// URL (或本地路径),返回实际添加的文件夹数
     Q_INVOKABLE int addFolderUrls(const QVariantList& urls);
     Q_INVOKABLE void removeFolder(const QString& path);
+    Q_INVOKABLE void setFolderHidden(const QString& path, bool hidden);
     Q_INVOKABLE void rescan();
     Q_INVOKABLE void cancelScan();
     Q_INVOKABLE QString qualityBadge(int albumIndex) const;
@@ -140,12 +144,13 @@ private:
     void startScan();
     void finishScan(std::shared_ptr<LibrarySnapshot> snap, const IngestionSummary& sum);
     void saveFolders();
-    static std::shared_ptr<LibrarySnapshot> BuildAlbums(std::unique_ptr<MusicCatalog> catalog);
+    static std::shared_ptr<LibrarySnapshot> BuildAlbums(std::unique_ptr<MusicCatalog> catalog, const QStringList& hidden = {});
     static void ReleaseFreeHeap();
 
     mutable std::mutex snap_mutex_;
     std::shared_ptr<const LibrarySnapshot> snap_;
     QStringList folders_;
+    QStringList hiddenFolders_;
     bool scanning_ = false;
     double progress_ = 0.0;
     QString status_;

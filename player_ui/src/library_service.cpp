@@ -118,6 +118,7 @@ public:
     std::unique_ptr<MusicCatalog> catalog = std::make_unique<MusicCatalog>();
     std::atomic<qint64> lastPost{0};
     QElapsedTimer clock;
+    QStringList hidden; // 本次聚合时要隐藏的文件夹
 };
 
 QString LibraryService::dataDir() {
@@ -132,6 +133,7 @@ LibraryService::LibraryService(QObject* parent) : QObject(parent) {
     snap_ = std::make_shared<LibrarySnapshot>();
     QSettings s;
     folders_ = s.value("library/folders").toStringList();
+    hiddenFolders_ = s.value("library/hiddenFolders").toStringList();
 }
 
 LibraryService::~LibraryService() {
@@ -142,7 +144,7 @@ LibraryService::~LibraryService() {
 
 LibraryService* LibraryService::instance() { return g_instance; }
 
-int LibraryService::trackCount() const { return static_cast<int>(snapshot()->catalog.GetAllTracks().size()); }
+int LibraryService::trackCount() const { return static_cast<int>(snapshot()->songs.size()); } // 不含隐藏文件夹
 int LibraryService::albumCount() const { return static_cast<int>(snapshot()->albums.size()); }
 
 std::shared_ptr<const LibrarySnapshot> LibraryService::snapshot() const {
@@ -152,7 +154,17 @@ std::shared_ptr<const LibrarySnapshot> LibraryService::snapshot() const {
 
 void LibraryService::saveFolders() {
     QSettings().setValue("library/folders", folders_);
+    QSettings().setValue("library/hiddenFolders", hiddenFolders_);
     emit foldersChanged();
+}
+
+void LibraryService::setFolderHidden(const QString& path, bool hidden) {
+    if (!folders_.contains(path) || hiddenFolders_.contains(path) == hidden) return;
+    if (hidden) hiddenFolders_.append(path);
+    else hiddenFolders_.removeOne(path);
+    saveFolders();
+    // 增量扫描几乎全部命中缓存,只是按新的隐藏列表重新聚合专辑 / 歌手 / 歌曲
+    rescan();
 }
 
 void LibraryService::addFolder(const QString& path) {
@@ -194,6 +206,7 @@ int LibraryService::addFolderUrls(const QVariantList& urls) {
 
 void LibraryService::removeFolder(const QString& path) {
     if (!folders_.removeOne(path)) return;
+    hiddenFolders_.removeOne(path);
     saveFolders();
     if (scanning_) {
         rescanPending_ = true;
@@ -239,6 +252,7 @@ void LibraryService::startScan() {
     job->pipeline.SetDecryptPolicy(autoDecrypt_ ? DecryptPolicy::Auto : DecryptPolicy::Ask);
     job->pipeline.SetDecryptIndexFile((dataDir + "/decrypt.index").toStdWString());
     for (const QString& f : folders_) job->pipeline.AddInputPath(f.toStdWString());
+    job->hidden = hiddenFolders_;
     job->clock.start();
 
     scanning_ = true;
@@ -272,7 +286,7 @@ void LibraryService::startScan() {
         },
         [this, job](const IngestionSummary& sum) {
             // 专辑聚合同样在后台线程完成,界面线程只做指针交换
-            auto snap = BuildAlbums(std::move(job->catalog));
+            auto snap = BuildAlbums(std::move(job->catalog), job->hidden);
             QMetaObject::invokeMethod(this, [this, snap, sum]() { finishScan(snap, sum); }, Qt::QueuedConnection);
         });
 }
@@ -340,13 +354,31 @@ void LibraryService::ReleaseFreeHeap() {
 #endif
 }
 
-std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<MusicCatalog> catalog) {
+std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<MusicCatalog> catalog, const QStringList& hidden) {
     auto snap = std::make_shared<LibrarySnapshot>();
     snap->catalog = std::move(*catalog);
     const auto& tracks = snap->catalog.GetAllTracks();
+    // 隐藏文件夹:曲目仍留在 catalog 里 (收藏 / 歌单按曲目查找时还能找到),只是不进入下面的专辑、歌手、歌曲列表
+    std::vector<std::wstring> hiddenPrefixes;
+    for (const QString& h : hidden) {
+        std::wstring p = QDir::cleanPath(h).toLower().toStdWString();
+        for (wchar_t& c : p) if (c == L'\\') c = L'/';
+        if (!p.empty() && p.back() != L'/') p += L'/';
+        hiddenPrefixes.push_back(p);
+    }
+    auto isHidden = [&](const TrackItem& t) {
+        if (hiddenPrefixes.empty()) return false;
+        std::wstring p;
+        p.reserve(t.file_path.size());
+        for (wchar_t c : t.file_path) p += c == L'\\' ? L'/' : static_cast<wchar_t>(towlower(c));
+        for (const auto& h : hiddenPrefixes)
+            if (p.compare(0, h.size(), h) == 0) return true;
+        return false;
+    };
 
     std::map<std::wstring, int> index;
     for (const auto& t : tracks) {
+        if (isHidden(t)) continue;
         std::wstring albumLower;
         for (wchar_t c : t.album) albumLower += static_cast<wchar_t>(towlower(c));
         std::wstring key = albumLower + L"\x1F" + AlbumDirKey(t.file_path);
@@ -452,7 +484,8 @@ std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<Mus
     // ---- 全部歌曲 (按标题拼音) ----
     std::vector<std::pair<QString, const TrackItem*>> keyed;
     keyed.reserve(tracks.size());
-    for (const auto& t : tracks) keyed.emplace_back(SortKeyOf(t.title), &t);
+    for (const auto& t : tracks)
+        if (!isHidden(t)) keyed.emplace_back(SortKeyOf(t.title), &t);
     std::sort(keyed.begin(), keyed.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
     snap->songs.reserve(keyed.size());
     snap->songLetters.reserve(keyed.size());

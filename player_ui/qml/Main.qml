@@ -512,6 +512,7 @@ Window {
         y: root.height - height
         z: 20
         queueOpen: queuePanel.shown
+        window: root.contentItem
         onQueueClicked: queuePanel.shown = !queuePanel.shown
         // 沉浸页有自己的控制区,岛下沉隐去
         readonly property bool away: nowPlaying.shown || (library.albumCount === 0 && !player.hasTrack)
