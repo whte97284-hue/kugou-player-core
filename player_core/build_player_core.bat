@@ -31,7 +31,7 @@ cl.exe %CFLAGS% tests\library_audit.cpp %PARSER_SRC% /Fe:test\library_audit.exe 
 if errorlevel 1 goto :fail_build4
 
 echo [5/5] Building test_lyric_runner.exe ...
-cl.exe %CFLAGS% test\test_lyric_runner.cpp src\lyric_manager.cpp src\tinf.cpp %PARSER_SRC% /Fe:test\test_lyric_runner.exe /link /OPT:REF shell32.lib advapi32.lib ole32.lib
+cl.exe %CFLAGS% test\test_lyric_runner.cpp src\lyric_manager.cpp src\tinf.cpp %PARSER_SRC% /Fe:test\test_lyric_runner.exe /link /OPT:REF shell32.lib advapi32.lib ole32.lib winhttp.lib
 if errorlevel 1 goto :fail_build5
 
 del /q *.obj test\*.obj 2>nul
