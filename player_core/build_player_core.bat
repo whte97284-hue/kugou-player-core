@@ -30,9 +30,13 @@ echo [4/5] Building library_audit.exe ...
 cl.exe %CFLAGS% tests\library_audit.cpp %PARSER_SRC% /Fe:test\library_audit.exe /link /OPT:REF
 if errorlevel 1 goto :fail_build4
 
-echo [5/5] Building test_lyric_runner.exe ...
+echo [5/6] Building test_lyric_runner.exe ...
 cl.exe %CFLAGS% test\test_lyric_runner.cpp src\lyric_manager.cpp src\tinf.cpp /Fe:test\test_lyric_runner.exe /link /OPT:REF shell32.lib advapi32.lib ole32.lib
 if errorlevel 1 goto :fail_build5
+
+echo [6/6] Building test_kugou_bridge_runner.exe ...
+cl.exe %CFLAGS% test\test_kugou_bridge_runner.cpp src\kugou_track_bridge.cpp src\lyric_manager.cpp src\tinf.cpp src\decryptor.cpp %PARSER_SRC% /Fe:test\test_kugou_bridge_runner.exe /link /OPT:REF shell32.lib advapi32.lib ole32.lib
+if errorlevel 1 goto :fail_build6
 
 del /q *.obj test\*.obj 2>nul
 echo.
@@ -65,6 +69,10 @@ exit /b 1
 
 :fail_build5
 echo [ERROR] Failed to build test_lyric_runner.exe
+exit /b 1
+
+:fail_build6
+echo [ERROR] Failed to build test_kugou_bridge_runner.exe
 exit /b 1
 
 :end

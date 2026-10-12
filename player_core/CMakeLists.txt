@@ -20,6 +20,7 @@ add_library(player_core STATIC
     src/audio_playback_engine.cpp
     src/lyric_manager.cpp
     src/tinf.cpp
+    src/kugou_track_bridge.cpp
 )
 target_include_directories(player_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(player_core PUBLIC cxx_std_17)

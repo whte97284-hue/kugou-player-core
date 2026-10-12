@@ -96,13 +96,13 @@ public:
     // 支持直接传入音频物理文件路径 (如 "ilem - 梦良衣.flac"), 自动提取歌手与歌名做多级模糊匹配
     bool LoadLyricsForTrack(const std::wstring& audioFilePath, const std::wstring& title, const std::wstring& artist, ParsedLyrics& outLyrics);
 
+    // 在已探测的歌词库中搜索最匹配的 .krc 物理文件
+    std::wstring FindMatchingKrcFile(const std::wstring& audioFilePath, const std::wstring& title, const std::wstring& artist);
+
     // 根据文件路径或标识保存转换后的标准 .lrc 文件到目标位置
     bool ExportLrcFile(const ParsedLyrics& lyrics, const std::wstring& targetLrcPath);
 
 private:
-    // 在已探测的歌词库中搜索最匹配的 .krc 物理文件
-    std::wstring FindMatchingKrcFile(const std::wstring& audioFilePath, const std::wstring& title, const std::wstring& artist);
-
     std::vector<std::wstring> search_dirs_;
     std::unordered_map<std::wstring, ParsedLyrics> cache_; // 内存缓存 (key: 规范化曲目标识)
     mutable std::mutex mutex_;
