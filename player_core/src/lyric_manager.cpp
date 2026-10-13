@@ -122,6 +122,25 @@ std::wstring StripDecorations(std::wstring s) {
     return s;
 }
 
+// 去掉文件名 / 标签里的曲目序号:「01东风破」「01. 东风破」「1、东风破」「03 - 东风破」-> 「东风破」。
+// 只认 1~3 位数字后跟分隔符,或以 0 开头的两位数字 (01~09) 直接接歌名;
+// 「2002年的第一场雪」「1983」这类以数字开头的歌名不受影响
+std::wstring StripTrackNumber(const std::wstring& s) {
+    size_t i = 0;
+    while (i < s.size() && i < 4 && std::iswdigit(s[i])) ++i;
+    if (i == 0 || i > 3 || i == s.size()) return s;
+    size_t j = i;
+    bool sep = false;
+    while (j < s.size() && (s[j] == L'.' || s[j] == L'\x3001' || s[j] == L'\xFF0E' || s[j] == L'-' || s[j] == L'_' ||
+                            s[j] == L')' || std::iswspace(s[j]))) {
+        sep = true;
+        ++j;
+    }
+    if (!sep && !(i == 2 && s[0] == L'0')) return s;
+    if (j >= s.size()) return s;
+    return s.substr(j);
+}
+
 // 「歌手 - 歌名」拆分 (只认带空格的分隔符,避免 A-ha、K-ON 这类名字被拆开)
 void SplitArtistTitle(const std::wstring& stem, std::wstring& artist, std::wstring& title) {
     size_t sep = stem.find(L" - ");
@@ -1187,6 +1206,11 @@ std::wstring LyricManager::FindMatchingKrcFile(const std::wstring& audioFilePath
         SplitArtistTitle(stem, fArtist, fTitle);
         queries.emplace_back(fTitle, fArtist);
     }
+    // 再试去掉曲目序号的歌名 (「01东风破」)
+    for (size_t i = 0, n = queries.size(); i < n; ++i) {
+        std::wstring t = StripTrackNumber(queries[i].first);
+        if (t != queries[i].first) queries.emplace_back(t, queries[i].second);
+    }
 
     std::lock_guard<std::mutex> lock(mutex_);
     for (int pass = 0; pass < 2; ++pass) {
@@ -1246,6 +1270,7 @@ bool LyricManager::FetchOnline(const std::wstring& audioFilePath, const std::wst
     // 搜索词:标签里的歌名 / 歌手,没有标签时用文件名「歌手 - 歌名」(去掉转换器后缀)
     std::wstring qTitle = title, qArtist = artist;
     if (qTitle.empty() && !audioFilePath.empty()) SplitArtistTitle(StripDecorations(FileStem(audioFilePath)), qArtist, qTitle);
+    qTitle = StripTrackNumber(qTitle); // 「01东风破」按「东风破」搜索
     Trim(qTitle);
     Trim(qArtist);
     if (qTitle.empty()) return false;

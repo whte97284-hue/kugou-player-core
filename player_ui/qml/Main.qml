@@ -671,6 +671,19 @@ Window {
     Shortcut { sequence: "Ctrl+Right"; onActivated: player.next() }
     Shortcut { sequence: "Ctrl+Left"; onActivated: player.previous() }
     Shortcut { sequence: "Alt+Left"; onActivated: root.back() }
+    // 方向键:快进快退 5 秒;Ctrl+上下:音量 ±5%;键盘多媒体键 (窗口在前台时)
+    Shortcut { sequence: "Right"; enabled: !root.typing; onActivated: player.seekBy(5) }
+    Shortcut { sequence: "Left"; enabled: !root.typing; onActivated: player.seekBy(-5) }
+    Shortcut { sequence: "Ctrl+Up"; onActivated: player.changeVolume(0.05) }
+    Shortcut { sequence: "Ctrl+Down"; onActivated: player.changeVolume(-0.05) }
+    Shortcut { sequence: "Media Play"; onActivated: player.toggle() }
+    Shortcut { sequence: "Toggle Media Play/Pause"; onActivated: player.toggle() }
+    Shortcut { sequence: "Media Next"; onActivated: player.next() }
+    Shortcut { sequence: "Media Previous"; onActivated: player.previous() }
+    Connections {
+        target: player
+        function onSleepFired() { Nav.toast("check", qsTr("定时关闭:已暂停播放")) }
+    }
     Shortcut {
         sequence: "Escape"
         enabled: !root.typing

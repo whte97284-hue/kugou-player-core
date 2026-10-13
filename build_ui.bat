@@ -23,11 +23,7 @@ cmake --build build-ui --config Release || exit /b 1
 
 rem 部署 Qt 运行库与 QML 模块到 exe 旁边
 "%QT_DIR%\bin\windeployqt.exe" --release --qmldir player_ui\qml build-ui\player_ui\KugouPlayer.exe || exit /b 1
-rem 解密工具:KGM 掩码表、KGG 外部解码器 (kgg-dec.exe + infra.dll)
-if exist tools\kgm\kgm.mask (
-    if not exist build-ui\player_ui\tools\kgm mkdir build-ui\player_ui\tools\kgm
-    copy /y tools\kgm\kgm.mask build-ui\player_ui\tools\kgm\ >nul
-)
+rem 解密工具:KGG 外部解码器 (KGM 掩码已内置) (kgg-dec.exe + infra.dll)
 if exist tools\kgg\kgg-dec.exe (
     if not exist build-ui\player_ui\tools\kgg mkdir build-ui\player_ui\tools\kgg
     copy /y tools\kgg\kgg-dec.exe build-ui\player_ui\tools\kgg\ >nul

@@ -132,6 +132,19 @@ int main(int argc, char** argv) {
         before = calls;
         CHECK(!mgr.FetchOnline(L"/music/d.flac", L"梦良衣", L"ilem", 60000, none));
         CHECK(calls == before);
+
+        // 没有标签、文件名带曲目序号:按去掉序号的歌名搜索;以数字开头的歌名保持原样
+        krcFails = false;
+        ParsedLyrics numbered;
+        mgr.FetchOnline(L"/music/01梦良衣.flac", L"", L"", 184600, numbered);
+        CHECK(lastSearch.find("keyword=%E6%A2%A6%E8%89%AF%E8%A1%A3&") != std::string::npos);
+        mgr.FetchOnline(L"/music/03. 梦良衣 (2).flac", L"", L"", 184000, numbered);
+        CHECK(lastSearch.find("keyword=%E6%A2%A6%E8%89%AF%E8%A1%A3&") != std::string::npos);
+        mgr.FetchOnline(L"/music/2002年的第一场雪.flac", L"", L"", 184000, numbered);
+        CHECK(lastSearch.find("keyword=2002%E5%B9%B4") != std::string::npos);
+        // 本地 .krc 匹配同样忽略序号 (上面缓存了「ilem - 梦良衣.krc」)
+        ParsedLyrics local;
+        CHECK(mgr.LoadLyricsForTrack(L"/music/x.flac", L"07 梦良衣", L"ilem", local));
     }
 
     std::printf("[4] 候选挑选\n");

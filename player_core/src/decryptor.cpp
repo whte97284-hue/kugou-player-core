@@ -355,19 +355,16 @@ public:
     std::vector<std::wstring> Extensions() const override { return {L".kgm", L".kgma", L".vpr"}; }
     bool Native() const override { return true; }
 
-    bool IsAvailable(std::wstring* reason) const override {
-        if (platform::PathExists(DecryptorRegistry::Instance().KgmMaskPath())) return true;
-        if (reason) *reason = L"缺少 kgm.mask 掩码表"; // 缺少 kgm.mask 掩码表
-        return false;
-    }
+    // 掩码已内置 (见 KgmDecryptBlockBuiltin),外部 kgm.mask 只是可选覆盖
+    bool IsAvailable(std::wstring*) const override { return true; }
     bool Probe(const uint8_t* h, size_t n) const override {
         return n >= 16 && (!std::memcmp(h, kKgmMagic, 16) || !std::memcmp(h, kVprMagic, 16));
     }
 
     DecryptResult Decrypt(const std::wstring& src, const DecryptOptions& opt) const override {
         DecryptResult r;
+        // 显式提供了 kgm.mask 时用它,否则用内置算法生成的掩码 (两者逐字节一致)
         auto mask = MaskFor(DecryptorRegistry::Instance().KgmMaskPath());
-        if (!mask) return Fail(r, L"缺少 kgm.mask 掩码表");
         platform::ReadOnlyFile in;
         if (!in.Open(src, false)) return Fail(r, L"无法打开源文件"); // 无法打开源文件
         KgmHeaderRaw header;
@@ -377,12 +374,16 @@ public:
         uint8_t key[17];
         std::memcpy(key, header.file_key, 16);
         key[16] = 0;
+        auto decryptBlock = [&](uint8_t* p, size_t n, uint64_t at) {
+            if (mask) KgmDecryptBlock(p, n, at, key, mask->Data(), mask->Size());
+            else KgmDecryptBlockBuiltin(p, n, at, key);
+        };
 
         std::vector<uint8_t> buf(kChunk);
         const uint64_t payload = in.Size() - header.header_len;
         size_t first = in.ReadAt(header.header_len, buf.data(), size_t(std::min<uint64_t>(kChunk, payload)));
         if (first == 0) return Fail(r, L"KGM 负载为空");
-        KgmDecryptBlock(buf.data(), first, 0, key, mask->Data(), mask->Size());
+        decryptBlock(buf.data(), first, 0);
         std::wstring ext = SniffExt(buf.data(), first);
         if (ext.empty()) return Fail(r, L"解密结果不是音频 (掩码表不匹配?)"); // 解密结果不是音频 (掩码表不匹配?)
 
@@ -395,7 +396,7 @@ public:
         while (off < payload && !Cancelled(opt)) {
             size_t n = in.ReadAt(header.header_len + off, buf.data(), size_t(std::min<uint64_t>(kChunk, payload - off)));
             if (n == 0) break;
-            KgmDecryptBlock(buf.data(), n, off, key, mask->Data(), mask->Size());
+            decryptBlock(buf.data(), n, off);
             if (!out.Write(buf.data(), n)) break;
             off += n;
             if (opt.progress) opt.progress(off, payload);
@@ -717,6 +718,38 @@ void KgmDecryptBlock(uint8_t* data, size_t len, uint64_t fileOffset, const uint8
         data[i] = static_cast<uint8_t>(x ^ (x << 4));
         if (++ki == 17) ki = 0;
         if (++mi == maskLen) mi = 0;
+    }
+}
+
+// 内置 KGM 掩码:原 kgm.mask (81,979,072 字节) 的每个字节都满足
+//   mask[i] = f(slot[i % 16] ^ pad[i % 17] ^ collapse(i)),  f(y) = y ^ (y << 4)
+// slot 为酷狗 v3 槽位密钥 {0x6C,0x2C,0x2F,0x27} 的 MD5 (每 2 字节倒序,同 unlock-music),
+// pad 为 17 字节固定序列,collapse(i) 为偏移 4 个字节的异或。f 是线性的对合变换,所以
+//   f(c ^ k ^ mask) = f(c ^ k) ^ slot ^ pad ^ collapse(i)
+// 不再需要 80MB 的掩码文件,且偏移超过原文件长度时也正确 (原文件会回绕)
+namespace {
+const uint8_t kKgmSlotBox[16] = {0x14, 0xE3, 0x10, 0xB1, 0x0D, 0x3B, 0x6F, 0x41, 0x85, 0x6B, 0x79, 0x27, 0x8B, 0xFD, 0x61, 0x85};
+const uint8_t kKgmPad[17] = {0x2C, 0x67, 0xFF, 0x20, 0x70, 0x61, 0x91, 0x0A, 0x3E,
+                             0x61, 0x12, 0x6D, 0x91, 0x50, 0x72, 0xCD, 0xDB};
+struct KgmBuiltinTable {
+    uint8_t t[272]; // 16 × 17
+    KgmBuiltinTable() {
+        for (int i = 0; i < 272; ++i) t[i] = static_cast<uint8_t>(kKgmSlotBox[i % 16] ^ kKgmPad[i % 17]);
+    }
+};
+} // namespace
+
+void KgmDecryptBlockBuiltin(uint8_t* data, size_t len, uint64_t fileOffset, const uint8_t key17[17]) {
+    static const KgmBuiltinTable table;
+    size_t ki = static_cast<size_t>(fileOffset % 17);
+    size_t ti = static_cast<size_t>(fileOffset % 272);
+    for (size_t i = 0; i < len; ++i) {
+        const uint32_t pos = static_cast<uint32_t>(fileOffset + i);
+        const uint8_t collapse = static_cast<uint8_t>(pos ^ (pos >> 8) ^ (pos >> 16) ^ (pos >> 24));
+        const uint8_t x = static_cast<uint8_t>(data[i] ^ key17[ki]);
+        data[i] = static_cast<uint8_t>(x ^ (x << 4) ^ table.t[ti] ^ collapse);
+        if (++ki == 17) ki = 0;
+        if (++ti == 272) ti = 0;
     }
 }
 
