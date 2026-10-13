@@ -328,6 +328,16 @@ Item {
                     onPicked: (v) => settings.fade = v
                 }
                 OptionRow {
+                    label: qsTr("定时关闭")
+                    options: [{ t: qsTr("关闭"), v: 0 }, { t: qsTr("15 分钟"), v: 15 }, { t: qsTr("30 分钟"), v: 30 },
+                              { t: qsTr("60 分钟"), v: 60 }, { t: qsTr("播完本首"), v: -1 }]
+                    value: player.sleepMinutes
+                    hint: player.sleepMinutes > 0
+                          ? qsTr("%1 后暂停").arg(Math.floor(player.sleepRemaining / 60) + ":" + String(player.sleepRemaining % 60).padStart(2, "0"))
+                          : player.sleepMinutes === -1 ? qsTr("当前歌曲播完后停止") : qsTr("到点后淡出暂停")
+                    onPicked: (v) => player.setSleepTimer(v)
+                }
+                OptionRow {
                     label: qsTr("启动时")
                     options: [{ t: qsTr("恢复上次播放"), v: true }, { t: qsTr("从头开始"), v: false }]
                     value: settings.resume

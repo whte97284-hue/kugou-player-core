@@ -27,6 +27,54 @@ void WindowHelper::applyNativeFrame(QWindow* window) {
 #endif
 }
 
+namespace {
+// 热键 id,只需在本进程内唯一
+enum { kHotPlayPause = 0xB701, kHotNext = 0xB702, kHotPrev = 0xB703 };
+}
+
+void WindowHelper::registerMediaKeys(QWindow* window) {
+#ifdef Q_OS_WIN
+    if (!window || hwnd_) return;
+    HWND hwnd = reinterpret_cast<HWND>(window->winId());
+    hwnd_ = reinterpret_cast<quintptr>(hwnd);
+    if (RegisterHotKey(hwnd, kHotPlayPause, 0, VK_MEDIA_PLAY_PAUSE)) registered_ |= 1;
+    if (RegisterHotKey(hwnd, kHotNext, 0, VK_MEDIA_NEXT_TRACK)) registered_ |= 2;
+    if (RegisterHotKey(hwnd, kHotPrev, 0, VK_MEDIA_PREV_TRACK)) registered_ |= 4;
+#else
+    Q_UNUSED(window);
+#endif
+}
+
+WindowHelper::~WindowHelper() {
+#ifdef Q_OS_WIN
+    HWND hwnd = reinterpret_cast<HWND>(hwnd_);
+    if (registered_ & 1) UnregisterHotKey(hwnd, kHotPlayPause);
+    if (registered_ & 2) UnregisterHotKey(hwnd, kHotNext);
+    if (registered_ & 4) UnregisterHotKey(hwnd, kHotPrev);
+#endif
+}
+
+bool WindowHelper::nativeEventFilter(const QByteArray& eventType, void* message, qintptr* result) {
+#ifdef Q_OS_WIN
+    if (eventType != "windows_generic_MSG") return false;
+    const MSG* msg = static_cast<const MSG*>(message);
+    if (msg->message != WM_HOTKEY || reinterpret_cast<quintptr>(msg->hwnd) != hwnd_) return false;
+    switch (msg->wParam) {
+    case kHotPlayPause: emit mediaPlayPause(); break;
+    case kHotNext: emit mediaNext(); break;
+    case kHotPrev: emit mediaPrevious(); break;
+    default: return false;
+    }
+    if (result) *result = 0;
+    return true;
+#else
+    Q_UNUSED(eventType);
+    Q_UNUSED(message);
+    Q_UNUSED(result);
+    return false;
+#endif
+}
+
 bool WindowHelper::isWindows() const {
 #ifdef Q_OS_WIN
     return true;

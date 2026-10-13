@@ -60,6 +60,17 @@ PlayerController::PlayerController(LibraryService* lib, QObject* parent) : QObje
     connect(&timer_, &QTimer::timeout, this, &PlayerController::onFrameTimer);
     frameClock_.start();
 
+    sleepTimer_.setInterval(1000);
+    connect(&sleepTimer_, &QTimer::timeout, this, [this]() {
+        if (sleepMinutes_ > 0 && QDateTime::currentMSecsSinceEpoch() >= sleepDeadline_) {
+            setSleepTimer(0);
+            if (playing_) toggle();
+            emit sleepFired();
+            return;
+        }
+        emit sleepChanged();
+    });
+
     fade_.setEasingCurve(QEasingCurve::OutCubic);
     connect(&fade_, &QVariantAnimation::valueChanged, this, [this](const QVariant& v) {
         gain_ = v.toDouble();
@@ -396,7 +407,7 @@ void PlayerController::scheduleGapless() {
 void PlayerController::queueGapless() {
     if (!engine_ || !current_ || !snap_ || queue_.empty()) return;
     int idx = -1;
-    if (gapless_) {
+    if (gapless_ && sleepMinutes_ != -1) {
         if (repeat_ == 2) idx = queueIndex_;
         else if (queueIndex_ + 1 < static_cast<int>(queue_.size())) idx = queueIndex_ + 1;
         else if (repeat_ == 1) idx = 0;
@@ -440,7 +451,36 @@ void PlayerController::setRepeatMode(int m) {
     scheduleGapless();
 }
 
+void PlayerController::setSleepTimer(int minutes) {
+    minutes = std::max(-1, minutes);
+    sleepMinutes_ = minutes;
+    if (minutes > 0) {
+        sleepDeadline_ = QDateTime::currentMSecsSinceEpoch() + qint64(minutes) * 60000;
+        sleepTimer_.start();
+    } else {
+        sleepDeadline_ = 0;
+        sleepTimer_.stop();
+    }
+    emit sleepChanged();
+    // 「播完本首」时不预加载下一首,让当前曲目自然结束并触发 onEnded
+    scheduleGapless();
+}
+
+int PlayerController::sleepRemaining() const {
+    if (sleepMinutes_ <= 0) return 0;
+    return static_cast<int>(std::max<qint64>(0, (sleepDeadline_ - QDateTime::currentMSecsSinceEpoch() + 999) / 1000));
+}
+
 void PlayerController::onEnded() {
+    if (sleepMinutes_ == -1) {
+        // 播完本首后停止:停在下一首的开头,按播放即可继续
+        setSleepTimer(0);
+        if (queueIndex_ + 1 < static_cast<int>(queue_.size())) openIndex(queueIndex_ + 1, false);
+        else if (engine_) engine_->Stop();
+        setPlaying(false);
+        emit sleepFired();
+        return;
+    }
     if (repeat_ == 2 && current_) {
         openIndex(queueIndex_, true);
         return;

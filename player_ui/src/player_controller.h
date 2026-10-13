@@ -82,6 +82,9 @@ class PlayerController : public QObject {
     Q_PROPERTY(bool lyricsSynced READ lyricsSynced NOTIFY lyricsChanged)
     Q_PROPERTY(QString chainSummary READ chainSummary NOTIFY signalChainChanged)
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorChanged)
+    // 定时关闭:0 = 关闭,-1 = 播完当前歌曲后停止,N = N 分钟后暂停;sleepRemaining 为剩余秒数
+    Q_PROPERTY(int sleepMinutes READ sleepMinutes NOTIFY sleepChanged)
+    Q_PROPERTY(int sleepRemaining READ sleepRemaining NOTIFY sleepChanged)
 
 public:
     explicit PlayerController(LibraryService* lib, QObject* parent = nullptr);
@@ -112,6 +115,8 @@ public:
     int queueLength() const { return static_cast<int>(queue_.size()); }
     int queuePosition() const { return queueIndex_; }
     QString errorText() const { return error_; }
+    int sleepMinutes() const { return sleepMinutes_; }
+    int sleepRemaining() const;
     QObject* queueModel() { return &queueModel_; }
     bool exclusive() const { return exclusive_; }
     void setExclusive(bool on);
@@ -153,6 +158,10 @@ public:
     Q_INVOKABLE void removeFromQueue(int index);
     // 清空播放列表:只保留正在播放的这一首,播放不中断
     Q_INVOKABLE void clearQueue();
+    Q_INVOKABLE void setSleepTimer(int minutes);
+    // 键盘快捷键:相对跳转 (秒) / 音量增减
+    Q_INVOKABLE void seekBy(double seconds) { seek(position_ + seconds); }
+    Q_INVOKABLE void changeVolume(double delta) { setVolume(volume_ + delta); }
 
 signals:
     void trackChanged();
@@ -169,6 +178,9 @@ signals:
     void lyricsChanged();
     void lyricIndexChanged();
     void devicesChanged();
+    void sleepChanged();
+    // 定时关闭到点并已暂停 (界面据此提示)
+    void sleepFired();
 
 private:
     bool openIndex(int index, bool autoPlay);
@@ -241,4 +253,7 @@ private:
     int lyricIndex_ = -1;
     bool lyricsSynced_ = false;
     quint64 lyricsGen_ = 0; // 每次重新加载歌词递增,丢弃过期的后台结果
+    int sleepMinutes_ = 0;
+    qint64 sleepDeadline_ = 0; // QDateTime 毫秒;按分钟定时时有效
+    QTimer sleepTimer_;        // 每秒刷新剩余时间
 };

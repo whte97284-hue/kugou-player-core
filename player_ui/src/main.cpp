@@ -208,6 +208,12 @@ int main(int argc, char* argv[]) {
     engine.load(QUrl(QStringLiteral("qrc:/qt/qml/PlayerUi/qml/Main.qml")));
     if (engine.rootObjects().isEmpty()) return 1;
     player.attachWindow(qobject_cast<QQuickWindow*>(engine.rootObjects().value(0)));
+    // 全局多媒体键
+    app.installNativeEventFilter(&windowHelper);
+    windowHelper.registerMediaKeys(qobject_cast<QWindow*>(engine.rootObjects().value(0)));
+    QObject::connect(&windowHelper, &WindowHelper::mediaPlayPause, &player, &PlayerController::toggle);
+    QObject::connect(&windowHelper, &WindowHelper::mediaNext, &player, &PlayerController::next);
+    QObject::connect(&windowHelper, &WindowHelper::mediaPrevious, &player, &PlayerController::previous);
 
     if (!libraryArg.isEmpty()) library.addFolder(libraryArg);
     else library.rescan();
