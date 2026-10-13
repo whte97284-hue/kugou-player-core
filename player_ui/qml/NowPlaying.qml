@@ -328,15 +328,16 @@ Item {
                 Row {
                     anchors.centerIn: parent
                     spacing: Math.max(14, Math.min(30, np.coverSize * 0.06))
-                    IconButton { icon: "prev"; iconSize: 21; width: 46; height: 46; anchors.verticalCenter: parent.verticalCenter; onClicked: player.previous() }
+                    IconButton { icon: "prev"; nudge: -1; iconSize: 21; width: 46; height: 46; anchors.verticalCenter: parent.verticalCenter; onClicked: player.previous() }
                     IconButton {
                         icon: player.playing ? "pause" : "play"
+                        morphOnChange: true
                         iconSize: 24
                         width: 60; height: 60
                         filled: true
                         onClicked: player.toggle()
                     }
-                    IconButton { icon: "next"; iconSize: 21; width: 46; height: 46; anchors.verticalCenter: parent.verticalCenter; onClicked: player.next() }
+                    IconButton { icon: "next"; nudge: 1; iconSize: 21; width: 46; height: 46; anchors.verticalCenter: parent.verticalCenter; onClicked: player.next() }
                 }
             }
             }}

@@ -84,10 +84,15 @@ Item {
             Icon { anchors.centerIn: parent; name: "disc"; size: 22; opacity: 0.45 }
         }
         MouseArea {
+            id: discMouse
             anchors.fill: parent
+            hoverEnabled: true
             cursorShape: player.hasTrack ? Qt.PointingHandCursor : Qt.ArrowCursor
             onClicked: if (player.hasTrack) island.expandRequested()
         }
+        // 悬停唱片:轻轻放大,提示可以点开播放页
+        scale: discMouse.containsMouse && player.hasTrack ? 1.08 : 1
+        Behavior on scale { ScaleAnimator { duration: 380; easing.type: Easing.OutBack; easing.overshoot: 1.6 } }
     }
     // 切歌:旧歌名向左淡出,新歌名从右侧滑入
     property string shownTitle
@@ -194,7 +199,7 @@ Item {
                 else { player.repeatMode = 1; player.shuffle = true }
             }
         }
-        IconButton { icon: "prev"; iconSize: 18; width: 40; height: 40; anchors.verticalCenter: parent.verticalCenter; onClicked: player.previous() }
+        IconButton { icon: "prev"; nudge: -1; iconSize: 18; width: 40; height: 40; anchors.verticalCenter: parent.verticalCenter; onClicked: player.previous() }
         Item {
             width: 50
             height: 50
@@ -209,13 +214,14 @@ Item {
             IconButton {
                 anchors.centerIn: parent
                 icon: player.playing ? "pause" : "play"
+                morphOnChange: true
                 iconSize: 19
                 width: 48; height: 48
                 filled: true
                 onClicked: player.toggle()
             }
         }
-        IconButton { icon: "next"; iconSize: 18; width: 40; height: 40; anchors.verticalCenter: parent.verticalCenter; onClicked: player.next() }
+        IconButton { icon: "next"; nudge: 1; iconSize: 18; width: 40; height: 40; anchors.verticalCenter: parent.verticalCenter; onClicked: player.next() }
         IconButton {
             anchors.verticalCenter: parent.verticalCenter
             width: 36; height: 36
