@@ -15,8 +15,11 @@ Item {
     readonly property bool empty: q.length > 0 && !hasTop && searchModel.count === 0
 
     function focusWith(t) {
-        input.text = t
-        searchModel.query = t
+        // 从侧栏 / 快捷键回到搜索页时保留上次的搜索,只有带着新词进来才替换
+        if (t.length) {
+            input.text = t
+            searchModel.query = t
+        }
         input.forceActiveFocus()
         input.cursorPosition = input.text.length
     }
@@ -124,8 +127,11 @@ Item {
         anchors.top: field.bottom
         anchors.topMargin: 8
         anchors.bottom: parent.bottom
-        x: page.sidePadding
-        width: page.width - page.sidePadding * 2
+        // 列表铺满整页宽度 (两侧留白用边距),鼠标停在左右空白处也能滚动
+        width: page.width
+        leftMargin: page.sidePadding
+        rightMargin: page.sidePadding
+        readonly property real innerWidth: width - page.sidePadding * 2
         clip: true
         footer: Item { width: 1; height: page.bottomInset }
         boundsBehavior: Flickable.StopAtBounds
@@ -135,7 +141,7 @@ Item {
 
         header: Column {
             id: col
-            width: results.width
+            width: results.innerWidth
             topPadding: 24
             spacing: 0
 
@@ -333,7 +339,7 @@ Item {
             Item { width: 1; height: 6 }
         }
         delegate: TrackRow {
-            width: results.width
+            width: results.innerWidth
             trackId: model.trackId
             number: index + 1
             title: model.title

@@ -11,6 +11,8 @@ WheelHandler {
     signal scrolled()
     target: null
     acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+    // 横向条内容不够滚时不拦截滚轮,交给外层页面纵向滚动
+    enabled: !horizontal || maxPos > minPos + 1
 
     readonly property real minPos: horizontal ? flickable.originX - flickable.leftMargin : flickable.originY - flickable.topMargin
     readonly property real maxPos: Math.max(minPos, horizontal
