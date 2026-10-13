@@ -1265,6 +1265,44 @@ void LyricManager::SetHttpGetter(KuGouOnlineLyrics::HttpGetFn http) {
     http_ = std::move(http);
 }
 
+namespace {
+// 曲库在标签缺失时填的占位歌手,不能拿去搜索 (「未知艺术家 - 东风破」搜不到任何结果)
+bool IsPlaceholderArtist(const std::wstring& a) {
+    std::wstring l;
+    for (wchar_t c : a) l += static_cast<wchar_t>(towlower(c));
+    return l.empty() || l == L"未知艺术家" || l == L"未知歌手" || l == L"未知" || l == L"unknown" ||
+           l == L"unknown artist" || l == L"<unknown>" || l == L"various artists";
+}
+
+// 没有歌手时用酷狗歌曲搜索按歌名查出歌手与 hash (只取时长相差 8 秒以内的)
+bool GuessSingerOnline(const KuGouOnlineLyrics::HttpGetFn& http, const std::wstring& title, uint32_t durationMs,
+                       std::wstring& singer, std::string& hash) {
+    std::string body;
+    const std::string url = "http://mobilecdn.kugou.com/api/v3/search/song?format=json&page=1&pagesize=10&keyword=" +
+                            UrlEncode(WideToUtf8(title));
+    if (!http(url, body)) return false;
+    JsonValue root;
+    if (!ParseJson(body, root)) return false;
+    const JsonValue* data = root.Get("data");
+    const JsonValue* info = data ? data->Get("info") : nullptr;
+    if (!info || info->type != JsonValue::Array) return false;
+    const std::wstring want = Normalize(title);
+    for (const auto& it : info->arr) {
+        const JsonValue* song = it.Get("songname");
+        const JsonValue* name = it.Get("singername");
+        const JsonValue* dur = it.Get("duration");
+        if (!song || !name) continue;
+        if (Normalize(Utf8ToWide(song->AsString())) != want) continue;
+        const int64_t d = dur ? static_cast<int64_t>(dur->AsNumber()) * 1000 : 0;
+        if (durationMs && d && std::llabs(d - static_cast<int64_t>(durationMs)) > 8000) continue;
+        singer = Utf8ToWide(name->AsString());
+        if (const JsonValue* h = it.Get("hash")) hash = h->AsString();
+        return !singer.empty();
+    }
+    return false;
+}
+} // namespace
+
 bool LyricManager::FetchOnline(const std::wstring& audioFilePath, const std::wstring& title, const std::wstring& artist,
                                uint32_t durationMs, ParsedLyrics& outLyrics) {
     // 搜索词:标签里的歌名 / 歌手,没有标签时用文件名「歌手 - 歌名」(去掉转换器后缀)
@@ -1273,6 +1311,7 @@ bool LyricManager::FetchOnline(const std::wstring& audioFilePath, const std::wst
     qTitle = StripTrackNumber(qTitle); // 「01东风破」按「东风破」搜索
     Trim(qTitle);
     Trim(qArtist);
+    if (IsPlaceholderArtist(qArtist)) qArtist.clear();
     if (qTitle.empty()) return false;
 
     const std::wstring key = Normalize(qArtist) + L"\n" + Normalize(qTitle) + L"\n" + std::to_wstring(durationMs / 1000);
@@ -1286,10 +1325,44 @@ bool LyricManager::FetchOnline(const std::wstring& audioFilePath, const std::wst
     }
 
     KuGouOnlineLyrics api(http);
-    const std::wstring keyword = qArtist.empty() ? qTitle : qArtist + L" - " + qTitle;
     std::vector<KuGouLyricCandidate> candidates;
-    if (!api.Search(keyword, durationMs, std::string(), candidates) && !qArtist.empty())
-        api.Search(qTitle, durationMs, std::string(), candidates); // 歌手名写法不同时退回只搜歌名
+    if (!qArtist.empty()) {
+        if (!api.Search(qArtist + L" - " + qTitle, durationMs, std::string(), candidates))
+            api.Search(qTitle, durationMs, std::string(), candidates); // 歌手名写法不同时退回只搜歌名
+    } else {
+        // 没有歌手:只搜歌名常常一个候选都没有。先按歌名查出歌手 (时长对得上),
+        // 再试所在文件夹名 (「周杰伦 叶惠美」里的「周杰伦」),最后才只搜歌名
+        std::vector<std::wstring> guesses;
+        std::wstring singer;
+        std::string hash;
+        if (GuessSingerOnline(http ? http : KuGouOnlineLyrics::HttpGetFn(&KuGouOnlineLyrics::DefaultHttpGet), qTitle,
+                              durationMs, singer, hash)) {
+            if (api.Search(singer + L" - " + qTitle, durationMs, hash, candidates)) qArtist = singer;
+        }
+        if (candidates.empty() && !audioFilePath.empty()) {
+            std::wstring dir = audioFilePath;
+            size_t cut = dir.find_last_of(L"\\/");
+            dir = cut == std::wstring::npos ? std::wstring() : dir.substr(0, cut);
+            cut = dir.find_last_of(L"\\/");
+            std::wstring folder = cut == std::wstring::npos ? dir : dir.substr(cut + 1);
+            size_t sp = folder.find_first_of(L" -_\u3000");
+            if (sp != std::wstring::npos && sp > 0) guesses.push_back(folder.substr(0, sp));
+            if (!folder.empty()) guesses.push_back(folder);
+            for (const auto& g : guesses) {
+                // 文件夹名只是猜测:选中的候选歌手必须真的出现在文件夹名里,才算猜对
+                if (api.Search(g + L" - " + qTitle, durationMs, std::string(), candidates)) {
+                    const int p = KuGouOnlineLyrics::PickCandidate(candidates, durationMs);
+                    const std::wstring who = p >= 0 ? Normalize(candidates[static_cast<size_t>(p)].singer) : std::wstring();
+                    if (!who.empty() && Normalize(g).find(who) != std::wstring::npos) {
+                        qArtist = candidates[static_cast<size_t>(p)].singer;
+                        break;
+                    }
+                }
+                candidates.clear();
+            }
+        }
+        if (candidates.empty()) api.Search(qTitle, durationMs, std::string(), candidates);
+    }
     const int pick = KuGouOnlineLyrics::PickCandidate(candidates, durationMs);
     if (pick < 0) {
         // 有候选但时长都对不上才记为查不到;没有候选可能是断网,下次播放再试

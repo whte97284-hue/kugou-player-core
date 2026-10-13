@@ -147,6 +147,48 @@ int main(int argc, char** argv) {
         CHECK(mgr.LoadLyricsForTrack(L"/music/x.flac", L"07 梦良衣", L"ilem", local));
     }
 
+    std::printf("[3b] 歌手是占位符「未知艺术家」:先按歌名查歌手,再用文件夹名\n");
+    {
+        std::vector<std::string> searches;
+        bool songApi = true;
+        auto http = [&](const std::string& url, std::string& body) -> bool {
+            if (url.find("mobilecdn.kugou.com/api/v3/search/song") != std::string::npos) {
+                if (!songApi) return false;
+                body = R"({"status":1,"data":{"info":[{"songname":"东风破","singername":"周杰伦","duration":315,"hash":"B24AB4"}]}})";
+                return true;
+            }
+            if (url.find("http://krcs.kugou.com/search?") == 0) {
+                searches.push_back(url);
+                // 只有带上真实歌手才有候选 (与线上一致:「未知艺术家 - 东风破」「东风破」都是 0 个)
+                if (url.find("%E5%91%A8%E6%9D%B0%E4%BC%A6%20-%20") == std::string::npos) {
+                    body = R"({"status":200,"candidates":[]})";
+                    return true;
+                }
+                body = R"({"status":200,"candidates":[{"id":"351585921","accesskey":"172C","song":"东风破","singer":"周杰伦","duration":315376}]})";
+                return true;
+            }
+            if (url.find("http://krcs.kugou.com/download?") == 0) {
+                body = std::string(R"({"status":200,"fmt":"lrc","content":")") + Base64("[00:01.00]一盏离愁\n") + "\"}";
+                return url.find("fmt=lrc") != std::string::npos;
+            }
+            return false;
+        };
+        LyricManager mgr;
+        mgr.SetHttpGetter(http);
+        ParsedLyrics l;
+        CHECK(mgr.FetchOnline(L"/m/周杰伦 叶惠美/05东风破.wav", L"05东风破", L"未知艺术家", 315308, l));
+        CHECK(!searches.empty() && searches.back().find("hash=B24AB4") != std::string::npos);
+        for (const auto& u : searches) CHECK(u.find("%E6%9C%AA%E7%9F%A5") == std::string::npos); // 不再搜「未知…」
+        // 歌曲搜索不可用时,用文件夹名「周杰伦 叶惠美」里的「周杰伦」
+        songApi = false;
+        searches.clear();
+        LyricManager mgr2;
+        mgr2.SetHttpGetter(http);
+        ParsedLyrics l2;
+        CHECK(mgr2.FetchOnline(L"/m/周杰伦 叶惠美/05东风破.wav", L"05东风破", L"未知艺术家", 315308, l2));
+        CHECK(l2.artist == L"周杰伦" || l2.lines.size() == 1);
+    }
+
     std::printf("[4] 候选挑选\n");
     {
         std::vector<KuGouLyricCandidate> c(3);
