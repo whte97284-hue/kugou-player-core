@@ -493,8 +493,8 @@ std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<Mus
     }
     auto isHidden = [&](const TrackItem& t) {
         if (hiddenPrefixes.empty()) return false;
-        // 解密产物跟着加密源走:源文件所在文件夹被隐藏,产物也隐藏
-        const std::wstring& path = t.source_path.empty() ? t.file_path : t.source_path;
+        // 解密产物按它自己的落盘位置归类/隐藏 (转换输出目录就是用户可见的曲库)
+        const std::wstring& path = t.file_path;
         std::wstring p;
         p.reserve(path.size());
         for (wchar_t c : path) p += c == L'\\' ? L'/' : static_cast<wchar_t>(towlower(c));
@@ -508,7 +508,7 @@ std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<Mus
         if (isHidden(t)) continue;
         std::wstring albumLower;
         for (wchar_t c : t.album) albumLower += static_cast<wchar_t>(towlower(c));
-        std::wstring key = albumLower + L"\x1F" + AlbumDirKey(t.source_path.empty() ? t.file_path : t.source_path);
+        std::wstring key = albumLower + L"\x1F" + AlbumDirKey(t.file_path);
         auto it = index.find(key);
         int ai;
         if (it == index.end()) {

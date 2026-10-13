@@ -52,7 +52,10 @@ WheelHandler {
             const k = 1 - Math.exp(-frameTime / h.tau)
             h.pos += (g - h.pos) * k
             if (Math.abs(g - h.pos) < 0.25) { h.pos = g; stop() }
-            const dpr = h.flickable.Window.window ? h.flickable.Window.window.devicePixelRatio : 1
+            // 注意: QQuickWindow / QWindow 在 QML 里 **没有** devicePixelRatio 属性,
+            // 用 Window.window.devicePixelRatio 会取到 undefined -> contentY = NaN -> 完全滚不动。
+            // 用附加属性 Screen.devicePixelRatio (QtQuick 自带, 无需额外 import)。
+            const dpr = h.flickable.Screen.devicePixelRatio > 0 ? h.flickable.Screen.devicePixelRatio : 1
             h.apply(Math.round(h.pos * dpr) / dpr)
         }
     }

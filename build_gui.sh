@@ -43,9 +43,11 @@ for p in "$CMAKE_BIN/cmake.exe" "$NINJA_BIN/ninja.exe" "$QT_ROOT/bin/windeployqt
 done
 
 # ---- 关掉正在运行的实例(否则链接报 LNK1104) --------------------------------
-if tasklist //FI "IMAGENAME eq KugouPlayer.exe" 2>/dev/null | grep -qi KugouPlayer; then
+# 注意: tasklist //FI 的双斜杠会被 MSYS 转义坏 (tasklist 报"无效参数 - '//FI'"), 且 stderr 被
+# 2>/dev/null 吞掉 -> 判断恒为假 -> 旧实例没被杀掉 -> 链接报 LNK1104。改用 MSYS_NO_PATHCONV=1 + 单斜杠。
+if MSYS_NO_PATHCONV=1 tasklist /FI "IMAGENAME eq KugouPlayer.exe" 2>/dev/null | grep -qi KugouPlayer; then
     echo "[1/6] 结束正在运行的 KugouPlayer.exe ..."
-    taskkill //F //IM KugouPlayer.exe >/dev/null 2>&1 || true
+    MSYS_NO_PATHCONV=1 taskkill /F /IM KugouPlayer.exe >/dev/null 2>&1 || true
     sleep 2
 else
     echo "[1/6] 没有运行中的实例"
