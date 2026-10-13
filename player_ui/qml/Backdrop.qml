@@ -26,11 +26,16 @@ Item {
         if (front === layer || layer.src !== source) return
         if (front) front.z = 0
         layer.z = 1
+        front = layer
+        // 看不见时 (例如播放页收起时切了歌) 直接换上,不做淡入:
+        // 隐藏期间动画不会推进,等页面再打开时新背景会从全透明开始淡入,中间露出一大片黑底
+        if (!root.visible) { fadeIn.stop(); layer.opacity = 1; return }
         layer.opacity = 0
         fadeIn.target = layer
         fadeIn.restart()
-        front = layer
     }
+    // 重新显示时若还有没走完的淡入,直接到位
+    onVisibleChanged: if (visible && fadeIn.running) { fadeIn.stop(); if (front) front.opacity = 1 }
     OpacityAnimator { id: fadeIn; from: 0; to: 1; duration: 900; easing.type: Easing.InOutQuad }
 
     component Layer: Item {
