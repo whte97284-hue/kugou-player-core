@@ -5,14 +5,13 @@
   ### 酷狗音频解码终端
 
   <p align="center">
-    <b>现代化、高性能的音频解密工具，基于 Electron 与 Flask 构建。</b>
+    <b>现代化、高性能的音频解密工具，基于 Flask 构建。</b>
   </p>
 
   <p>
     <img src="https://img.shields.io/badge/version-2.2.0-blue.svg?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License">
     <img src="https://img.shields.io/badge/platform-Windows-lightgrey.svg?style=flat-square" alt="Platform">
-    <img src="https://img.shields.io/badge/build-Electron-9cf.svg?style=flat-square" alt="Electron">
     <img src="https://img.shields.io/badge/backend-Python-yellow.svg?style=flat-square" alt="Python">
   </p>
 </div>
@@ -36,7 +35,7 @@
 
 **酷狗音频解码终端** 是一款专为 Windows 平台设计的音频格式转换工具。它能够将酷狗音乐特有的加密格式（KGM/KGG）高效转换为通用的 MP3 或 FLAC 格式，方便用户在不同设备上进行本地播放与归档。
 
-本项目采用了 **Electron** 前端与 **Flask** 后端分离的架构，在保证底层解码高效稳定的同时，提供了极具现代感和交互性的图形用户界面。
+本项目采用 **Flask** 后端加网页前端的架构，在保证底层解码高效稳定的同时，提供了极具现代感和交互性的图形用户界面。
 
 ---
 
@@ -53,16 +52,7 @@
 
 ## 安装与部署
 
-本项目提供两种分发形式，请根据需求选择。
-
-### 1. 完整安装版 (推荐)
-
-适用于需要长期使用并希望固定在任务栏的用户。
-
-- **路径**: `dist-electron/win-unpacked/酷狗音频解码终端.exe`
-- **说明**: 这是一个解压即用的完整应用包。建议将 `win-unpacked` 文件夹重命名并移动到您的软件安装目录（如 `C:\Program Files`），然后创建快捷方式或固定到任务栏。
-
-### 2. 便携版
+### 便携版
 
 适用于临时使用或通过 USB 设备携带。
 
@@ -114,11 +104,10 @@
 
 | 模块 | 技术栈 | 职责 |
 | :--- | :--- | :--- |
-| **前端容器** | Electron (Chromium) | 提供跨平台 GUI 容器，负责系统级交互（文件拖拽、剪贴板、任务栏等）。 |
 | **用户界面** | HTML5 / CSS3 / ES6 | 构建响应式界面，处理用户交互逻辑与状态管理。 |
 | **后端服务** | Python Flask | 提供 RESTful API，处理业务逻辑，如文件系统操作、配置管理等。 |
 | **解码核心** | CLI Tools (kgg-dec, kgm-dec, ncmdump) | 底层二进制工具，负责实际的音频解密与转码工作。 |
-| **构建工具** | Electron-Builder / PyInstaller | 负责将前后端及依赖环境打包为可分发的 Windows 可执行文件。 |
+| **构建工具** | PyInstaller | 负责将前后端及依赖环境打包为可分发的 Windows 可执行文件。 |
 
 ---
 
@@ -130,22 +119,18 @@
 
 ```
 KugouConverterWeb/
-├── electron/           # Electron 主进程与预加载脚本
 ├── static/             # 前端静态资源 (CSS, JS, Images)
 ├── templates/          # HTML 模板
 ├── tools/              # 解码核心工具集
 ├── app.py              # Flask 后端入口
-├── build-electron.bat  # 自动化构建脚本
+├── build.bat           # 打包脚本 (PyInstaller)
 └── requirements.txt    # Python 依赖清单
 ```
 
 ### 构建流程
 
-1. 安装依赖：`pip install -r requirements.txt` 和 `npm install`。
-2. 运行 `build-electron.bat` 脚本，它将自动执行：
-   - 使用 PyInstaller 打包 Flask 后端。
-   - 使用 Electron-Builder 打包前端并整合后端资源。
-3. 构建产物将生成在 `dist-electron` 目录。
+1. 安装依赖：`pip install -r requirements.txt`。
+2. 运行 `build.bat`，使用 PyInstaller 打包。
 
 ---
 

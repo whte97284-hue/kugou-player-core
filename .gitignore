@@ -29,9 +29,6 @@ uploads/
 output/
 config.json
 
-# Electron
-node_modules/
-dist-electron/
 flask-dist/
 
 # IDE
