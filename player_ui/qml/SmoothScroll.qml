@@ -35,18 +35,26 @@ WheelHandler {
             return
         }
         if (angle === 0) return
-        const base = anim.running ? goal : current()
-        goal = clamp(base - angle / 120 * step)
-        anim.from = current()
-        anim.to = goal
-        anim.restart()
+        if (!anim.running) { pos = current(); goal = pos }
+        goal = clamp(goal - angle / 120 * step)
+        anim.start()
     }
 
-    property NumberAnimation anim: NumberAnimation {
-        target: h.flickable
-        property: h.horizontal ? "contentX" : "contentY"
-        duration: h.duration
-        easing.type: Easing.OutCubic
+    // 逐帧指数追随目标 (和浏览器的平滑滚动同一思路):
+    //  · 连续滚动时只是把目标往前推,当前速度不会被打断重来,没有一格一格的顿挫;
+    //  · 按真实帧间隔计算,60 / 144Hz 下速度一致;
+    //  · 内部用浮点位置,写回时对齐到物理像素,文字和封面不会在亚像素间抖动
+    property real pos: 0
+    readonly property real tau: duration / 4600   // 时间常数 (秒):340ms 约等于 74ms,约 0.3s 基本停稳
+    property FrameAnimation anim: FrameAnimation {
+        onTriggered: {
+            const g = h.clamp(h.goal)
+            const k = 1 - Math.exp(-frameTime / h.tau)
+            h.pos += (g - h.pos) * k
+            if (Math.abs(g - h.pos) < 0.25) { h.pos = g; stop() }
+            const dpr = h.flickable.Window.window ? h.flickable.Window.window.devicePixelRatio : 1
+            h.apply(Math.round(h.pos * dpr) / dpr)
+        }
     }
     // 用户拖动或代码跳转时停止动画
     property Connections stopOnDrag: Connections {
