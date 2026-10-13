@@ -761,4 +761,49 @@ Window {
     function automationOpenPlaylist(id) { root.openPlaylist(String(id)) }
     function automationTrackInfo(show) { trackMenu.close(); if (show) trackInfo.open(player.trackId); else trackInfo.close() }
     function automationTrackMenu(x, y) { trackMenu.open(player.trackId, Number(x), Number(y), {}) }
+
+    // ======================= 帧率计 (Ctrl+Shift+P 开关) =======================
+    // 只统计真正出帧的时刻:静止时不出帧是正常的,滚动 / 播放时看 fps 与最慢一帧
+    Shortcut { sequence: "Ctrl+Shift+P"; onActivated: fpsMeter.visible = !fpsMeter.visible }
+    Rectangle {
+        id: fpsMeter
+        visible: false
+        z: 10000
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: 52
+        width: fpsText.implicitWidth + 20
+        height: 28
+        radius: 8
+        color: Qt.rgba(0, 0, 0, 0.7)
+        property int frames: 0
+        property real last: 0
+        property real worst: 0
+        property int fps: 0
+        property real worstShown: 0
+        Connections {
+            target: fpsMeter.visible ? root : null
+            function onFrameSwapped() {
+                const now = Date.now()
+                if (fpsMeter.last > 0) fpsMeter.worst = Math.max(fpsMeter.worst, now - fpsMeter.last)
+                fpsMeter.last = now
+                fpsMeter.frames++
+            }
+        }
+        Timer {
+            interval: 1000; repeat: true; running: fpsMeter.visible
+            onTriggered: {
+                fpsMeter.fps = fpsMeter.frames; fpsMeter.worstShown = fpsMeter.worst
+                fpsMeter.frames = 0; fpsMeter.worst = 0
+            }
+        }
+        Text {
+            id: fpsText
+            anchors.centerIn: parent
+            text: fpsMeter.fps + " fps · 最慢 " + Math.round(fpsMeter.worstShown) + " ms" + (Screen.refreshRate > 0 ? " · " + Math.round(Screen.refreshRate) + " Hz" : "")
+            color: "white"
+            font.family: Theme.fontFamily
+            font.pixelSize: 12
+        }
+    }
 }
