@@ -75,6 +75,10 @@ class LibraryService : public QObject {
     Q_PROPERTY(QString scanFile READ scanFile NOTIFY progressChanged)
     // 上次扫描结果:tracks / albums / failed / skipped / seconds / incremental / cancelled
     Q_PROPERTY(QVariantMap lastScan READ lastScan NOTIFY scanningChanged)
+    // 单独加入曲库的歌曲 (转换页「加入曲库」、拖入的加密文件转换结果),不属于任何音乐文件夹
+    Q_PROPERTY(int extraFileCount READ extraFileCount NOTIFY foldersChanged)
+    // 实时监控音乐文件夹:有新歌、删除、改名时自动重扫 (增量,几乎不读盘)
+    Q_PROPERTY(bool watchFolders READ watchFolders WRITE setWatchFolders NOTIFY watchFoldersChanged)
 
 public:
     explicit LibraryService(QObject* parent = nullptr);
@@ -96,9 +100,13 @@ public:
     QVariantMap lastScan() const { return lastScan_; }
     // 上次扫描发现、尚未解密的加密源 (扫描结束时更新)
     const std::vector<EncryptedFileInfo>& pendingEncrypted() const { return *pending_; }
-    // 0 = 询问 / 1 = 自动解密 / 2 = 不解密;由 DecryptService 设置,扫描时传给流水线
-    void setAutoDecrypt(bool on) { autoDecrypt_ = on; }
+    int extraFileCount() const { return static_cast<int>(extraFiles_.size()); }
+    const QStringList& extraFiles() const { return extraFiles_; }
+    bool watchFolders() const { return watch_; }
+    void setWatchFolders(bool on);
     static QString dataDir();
+    // 全部转换产物的唯一输出目录 (设置项 decrypt/outputDir,默认 我的音乐\Decrypted)
+    static QString decryptOutputDir();
 
     // 线程安全:获取当前快照 (持有 shared_ptr 期间快照不会被释放)
     std::shared_ptr<const LibrarySnapshot> snapshot() const;
@@ -108,6 +116,14 @@ public:
     // 接受文件对话框 / 拖放给出的 file:// URL (或本地路径),返回实际添加的文件夹数
     Q_INVOKABLE int addFolderUrls(const QVariantList& urls);
     Q_INVOKABLE void removeFolder(const QString& path);
+    // 单独加入曲库的文件 (已在曲库里的不重复加),返回新加入的数量
+    Q_INVOKABLE int addFiles(const QStringList& paths);
+    Q_INVOKABLE void clearExtraFiles();
+    // 酷狗音乐的下载目录 (读酷狗配置 + 各磁盘下的 KuGou 目录),已加入或用户忽略过的不再列出
+    Q_INVOKABLE QStringList kugouCandidates() const;
+    Q_INVOKABLE int addKugouFolders(const QStringList& paths);
+    Q_INVOKABLE void dismissKugouCandidates(const QStringList& paths);
+    Q_INVOKABLE bool isKugouFolder(const QString& path) const;
     Q_INVOKABLE void setFolderHidden(const QString& path, bool hidden);
     Q_INVOKABLE void rescan();
     Q_INVOKABLE void cancelScan();
@@ -139,6 +155,7 @@ signals:
     void libraryChanged();
     void foldersChanged();
     void pendingEncryptedChanged();
+    void watchFoldersChanged();
 
 private:
     void startScan();
@@ -160,7 +177,12 @@ private:
     QString scanFile_;
     QVariantMap lastScan_;
     bool rescanPending_ = false;
-    bool autoDecrypt_ = false;
+    QStringList extraFiles_;
+    QStringList kugouFolders_;
+    bool watch_ = true;
+    class FolderWatcher* watcher_ = nullptr;
+    class QTimer* watchDebounce_ = nullptr;
+    void updateWatcher();
     std::shared_ptr<std::vector<EncryptedFileInfo>> pending_;
     std::unique_ptr<class ScanJob> job_;
 };

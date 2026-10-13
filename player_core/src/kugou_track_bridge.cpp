@@ -117,6 +117,36 @@ void KuGouTrackBridge::SetCacheOutputDir(const std::wstring& cacheDir) {
     fs::create_directories(cache_dir_, ec);
 }
 
+void KuGouTrackBridge::SetDecryptIndexFile(const std::wstring& indexPath) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    index_path_ = indexPath;
+}
+
+std::wstring KuGouTrackBridge::SharedProduct(const std::wstring& sourcePath) const {
+    std::wstring path;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        path = index_path_;
+    }
+    if (path.empty()) return L"";
+    uint64_t size = 0, mtime = 0;
+    if (!platform::GetFileInfo(sourcePath, size, mtime)) return L"";
+    DecryptIndex index;
+    index.Load(path);
+    return index.Lookup(sourcePath, size, mtime);
+}
+
+void KuGouTrackBridge::RecordProduct(const std::wstring& sourcePath, const std::wstring& product) {
+    std::lock_guard<std::mutex> lock(mutex_); // 同时也串行化对记录文件的读改写
+    if (index_path_.empty()) return;
+    uint64_t size = 0, mtime = 0;
+    if (!platform::GetFileInfo(sourcePath, size, mtime)) return;
+    DecryptIndex index;
+    index.Load(index_path_);
+    index.Put(sourcePath, size, mtime, product, DecryptIndex::Fingerprint(sourcePath, size));
+    index.Save(index_path_);
+}
+
 std::wstring KuGouTrackBridge::CacheDir() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return cache_dir_;
@@ -248,8 +278,9 @@ std::vector<KuGouTrackEntry> KuGouTrackBridge::ScanKuGouLibrary(const std::wstri
                     te.is_ready_to_play = true;
                     ParseMetadata(te);
                 } else {
-                    // 已解密过且源文件没变时直接用缓存产物
-                    std::wstring cached = FindCachedOutput(CacheSlotFor(te.source_path));
+                    // 已解密过且源文件没变时直接用产物 (先看播放器的共用记录,再看本地缓存)
+                    std::wstring cached = SharedProduct(te.source_path);
+                    if (cached.empty()) cached = FindCachedOutput(CacheSlotFor(te.source_path));
                     if (!cached.empty()) {
                         te.playable_path = cached;
                         te.is_ready_to_play = true;
@@ -273,6 +304,14 @@ bool KuGouTrackBridge::PreparePlayableTrack(const std::wstring& sourcePath, KuGo
     FillPlainEntry(sourcePath, outEntry);
     if (!outEntry.is_encrypted) {
         outEntry.playable_path = sourcePath;
+        outEntry.is_ready_to_play = true;
+        ParseMetadata(outEntry);
+        return true;
+    }
+
+    const std::wstring shared = SharedProduct(sourcePath);
+    if (!shared.empty()) {
+        outEntry.playable_path = shared;
         outEntry.is_ready_to_play = true;
         ParseMetadata(outEntry);
         return true;
@@ -317,6 +356,7 @@ bool KuGouTrackBridge::PreparePlayableTrack(const std::wstring& sourcePath, KuGo
         return false;
     }
 
+    RecordProduct(sourcePath, dr.output);
     outEntry.playable_path = dr.output;
     outEntry.is_ready_to_play = true;
     ParseMetadata(outEntry);

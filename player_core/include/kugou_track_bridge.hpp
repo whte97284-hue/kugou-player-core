@@ -43,6 +43,10 @@ public:
     // 每首源文件对应其中一个子目录,目录名由源文件路径、大小和修改时间算出,源文件变了会重新解密
     void SetCacheOutputDir(const std::wstring& cacheDir);
 
+    // 与播放器共用的解密记录 (数据目录\decrypt.index)。设置后先查这里:播放器已经转换过的歌直接用它的产物,
+    // 桥接新解密的结果也记进去,两边不会各转一份
+    void SetDecryptIndexFile(const std::wstring& indexPath);
+
     // 扫描酷狗音乐库目录，枚举所有歌曲 (自动区分加密音轨与非加密音轨，自动关联歌词)
     std::vector<KuGouTrackEntry> ScanKuGouLibrary(const std::wstring& customDir = L"");
 
@@ -63,6 +67,9 @@ private:
 
     std::wstring mask_path_;
     std::wstring cache_dir_;
+    std::wstring index_path_;
+    std::wstring SharedProduct(const std::wstring& sourcePath) const; // 共用记录里的产物
+    void RecordProduct(const std::wstring& sourcePath, const std::wstring& product);
     LyricManager lyric_manager_;           // 自带锁,可并发调用
     mutable std::mutex mutex_;             // 只保护 mask_path_ / cache_dir_ / inflight_,解密时不持有
     std::condition_variable inflight_cv_;

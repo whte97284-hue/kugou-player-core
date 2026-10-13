@@ -70,7 +70,8 @@ private:
 
 // 解密服务:把三个解密内核 (KGM / NCM / KGG) 以「工具」的形式提供给界面
 //  · 扫描结束发现未解密文件时,按策略询问 (默认) / 自动解密 / 不打扰
-//  · 工具页:拖入或选择文件 / 文件夹,解密到指定目录,可一键把产物目录加入曲库
+//  · 工具页:拖入或选择文件 / 文件夹,解密到输出目录;默认不进曲库,转换完可一键「加入曲库」
+//  · 其他页面拖入的加密文件:转换后自动加入曲库
 //  · 后台单线程依次处理 (机械盘上顺序读写最快),可随时取消;产物写入索引,下次扫描直接入库
 class DecryptService : public QObject {
     Q_OBJECT
@@ -93,6 +94,8 @@ class DecryptService : public QObject {
     Q_PROPERTY(QObject* queue READ queue CONSTANT)
     // 队列统计:all / kgm / ncm / kgg / waiting / done / failed
     Q_PROPERTY(QVariantMap stats READ stats NOTIFY statsChanged)
+    // 已转换、但还没进曲库的结果数 (工具页「加入曲库」按钮)
+    Q_PROPERTY(int addableCount READ addableCount NOTIFY statsChanged)
 
 public:
     explicit DecryptService(LibraryService* lib, QObject* parent = nullptr);
@@ -114,6 +117,7 @@ public:
     int failCount() const { return fail_; }
     QObject* queue() { return &queue_; }
     QVariantMap stats() const { return queue_.counts(); }
+    int addableCount() const { return static_cast<int>(addableOutputs().size()); }
 
     // 导入文件 / 文件夹到待解密队列 (不立即解密),返回新增数量
     Q_INVOKABLE int addUrls(const QVariantList& urls);
@@ -131,7 +135,8 @@ public:
     // 工具页:文件或文件夹 (递归查找加密文件)
     Q_INVOKABLE int decryptUrls(const QVariantList& urls);
     Q_INVOKABLE void cancel();
-    Q_INVOKABLE void addOutputToLibrary();
+    // 把已转换、还不在曲库里的结果加入曲库,返回加入的数量
+    Q_INVOKABLE int addResultsToLibrary();
     Q_INVOKABLE void openOutputFolder();
     Q_INVOKABLE void clearResults();
     Q_INVOKABLE void setOutputUrl(const QVariant& url);
@@ -155,6 +160,7 @@ private:
         uint64_t mtime = 0;
     };
     void onPendingChanged();
+    QStringList addableOutputs() const;
     void start(std::vector<Item> items, bool rescanAfter);
     // 已经答复过 (拒绝或已尝试解密) 的源文件:只有出现新文件时才再次询问
     void markSeen();
@@ -166,6 +172,9 @@ private:
     int policy_ = 0;
     QString outputDir_;
     QSet<uint> seen_;
+    QSet<QString> toLibrary_; // 转换完自动加入曲库的源文件 (其他页面拖入的)
+    QStringList autoAdd_;     // 本次任务里要自动加入曲库的产物
+    bool recheck_ = false;    // 自动模式下等文件写完的复查已排队
     bool busy_ = false;
     double progress_ = 0;
     int done_ = 0;

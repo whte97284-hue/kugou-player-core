@@ -43,7 +43,8 @@ Item {
             { k: qsTr("音频"), v: audio.join("  ·  ") },
             { k: qsTr("品质"), v: t.quality },
             { k: qsTr("文件大小"), v: t.size > 0 ? Theme.formatBytes(t.size) : "" },
-            { k: qsTr("文件位置"), v: t.path + (t.isCue ? qsTr("  (CUE 分轨)") : "") + (t.exists ? "" : qsTr("  (文件已不存在)")), path: true }
+            { k: qsTr("文件位置"), v: t.path + (t.isCue ? qsTr("  (CUE 分轨)") : "") + (t.exists ? "" : qsTr("  (文件已不存在)")), path: true },
+            { k: qsTr("加密原文件"), v: t.source || "", path: true }
         ].filter(r => r.v !== undefined && String(r.v).length > 0)
     }
 

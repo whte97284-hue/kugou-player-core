@@ -10,6 +10,7 @@ qt_add_executable(KugouPlayer
     src/window_helper.h src/window_helper.cpp
     src/playlist_service.h src/playlist_service.cpp
     src/decrypt_service.h src/decrypt_service.cpp
+    src/folder_watcher.h src/folder_watcher.cpp
     src/settings_service.h src/settings_service.cpp
 )
 

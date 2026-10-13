@@ -128,6 +128,18 @@ Item {
         }
     }
 
+    // 识别到酷狗的下载目录:圆下方一枚小胶囊,点一下直接加入 (唯一的文字,只在找到时出现)
+    readonly property var kgCands: { library.folders; return library.kugouCandidates() }
+    Capsule {
+        anchors.horizontalCenter: dial.horizontalCenter
+        anchors.top: dial.bottom
+        anchors.topMargin: 36
+        visible: ob.kgCands.length > 0 && !ob.importing
+        accent: true
+        text: qsTr("发现酷狗音乐文件夹 · 加入")
+        onClicked: library.addKugouFolders(ob.kgCands)
+    }
+
     // 扫完没有找到音乐:摇头示意
     SequentialAnimation {
         id: shake

@@ -638,7 +638,7 @@ Window {
         enabled: root.view !== "tools"
         onDropped: (d) => {
             if (!d.hasUrls) return
-            // 加密音频交给解密工具,其余 (文件夹 / 普通音频) 加入曲库
+            // 文件夹 = 加入音乐文件夹;普通音频 = 单独加入曲库;加密音频 = 转换后加入曲库
             const enc = [], other = []
             for (let i = 0; i < d.urls.length; ++i) {
                 const u = String(d.urls[i])

@@ -19,6 +19,9 @@ Item {
     FontMetrics { id: optFont; font.family: Theme.fontFamily; font.pixelSize: 13; font.weight: Font.DemiBold }
     readonly property int optH: 32
     readonly property int optGap: 6
+    // 识别到、还没加入的酷狗下载目录 (加入 / 忽略后刷新)
+    property int kgTick: 0
+    readonly property var kgCands: { library.folders; kgTick; return library.kugouCandidates() }
 
     component OptionRow: Item {
         id: orow
@@ -359,15 +362,27 @@ Item {
                         Repeater {
                             model: library.folders
                             Rectangle {
+                                readonly property bool kg: library.isKugouFolder(modelData)
                                 height: 32
                                 radius: 16
-                                width: Math.min(320, fname.implicitWidth + (fm.containsMouse ? 52 : 28))
+                                width: Math.min(360, fname.x + fname.width + (fm.containsMouse ? 52 : 14))
                                 Behavior on width { NumberAnimation { duration: Theme.fast } }
                                 color: Qt.rgba(1, 0.96, 0.9, fm.containsMouse ? 0.09 : 0.05)
                                 clip: true
                                 Text {
-                                    id: fname
+                                    id: kgTag
                                     x: 14
+                                    visible: parent.kg
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: qsTr("酷狗")
+                                    color: Theme.accent
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: 12
+                                    font.weight: Font.DemiBold
+                                }
+                                Text {
+                                    id: fname
+                                    x: parent.kg ? kgTag.x + kgTag.implicitWidth + 8 : 14
                                     anchors.verticalCenter: parent.verticalCenter
                                     width: Math.min(implicitWidth, 270)
                                     text: modelData
@@ -398,6 +413,57 @@ Item {
                         }
                         Capsule { accent: true; text: qsTr("添加"); onClicked: addFolder.open() }
                     }
+                }
+                CustomRow {
+                    label: qsTr("酷狗音乐")
+                    visible: page.kgCands.length > 0
+                    height: visible ? 54 : 0
+                    Row {
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 8
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Math.min(implicitWidth, 360)
+                            elide: Text.ElideMiddle
+                            text: qsTr("发现酷狗下载目录 %1").arg(page.kgCands.join("、"))
+                            color: Theme.textSecondary
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 13
+                        }
+                        Capsule {
+                            accent: true
+                            text: qsTr("加入")
+                            onClicked: { library.addKugouFolders(page.kgCands); page.kgTick++ }
+                        }
+                        Capsule {
+                            text: qsTr("忽略")
+                            onClicked: { library.dismissKugouCandidates(page.kgCands); page.kgTick++ }
+                        }
+                    }
+                }
+                CustomRow {
+                    label: qsTr("单独加入")
+                    visible: library.extraFileCount > 0
+                    height: visible ? 54 : 0
+                    Row {
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 12
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: qsTr("%1 首不在音乐文件夹里的歌 (拖入或从转换页加入)").arg(library.extraFileCount)
+                            color: Theme.textSecondary
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 13
+                        }
+                        Capsule { text: qsTr("全部移出曲库"); onClicked: library.clearExtraFiles() }
+                    }
+                }
+                OptionRow {
+                    label: qsTr("实时监控")
+                    options: [{ t: qsTr("开启"), v: true }, { t: qsTr("关闭"), v: false }]
+                    value: library.watchFolders
+                    hint: qsTr("文件夹里有新歌、删除或改名时自动更新")
+                    onPicked: (v) => library.watchFolders = v
                 }
                 OptionRow {
                     label: qsTr("扫描线程")
@@ -456,10 +522,10 @@ Item {
             Panel {
                 order: 3
                 OptionRow {
-                    label: qsTr("扫描时")
+                    label: qsTr("加密歌曲")
                     options: [{ t: qsTr("询问"), v: 0 }, { t: qsTr("自动转换"), v: 1 }, { t: qsTr("不转换"), v: 2 }]
                     value: decrypt.policy
-                    hint: qsTr("发现 KGM / NCM / KGG 时")
+                    hint: qsTr("音乐文件夹里的 KGM / NCM / KGG")
                     onPicked: (v) => decrypt.policy = v
                 }
                 CustomRow {
@@ -467,9 +533,10 @@ Item {
                     Row {
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 8
+                        // 路径太长时只留开头盘符和结尾几级,避免压到左边的标题
                         Capsule {
-                            text: decrypt.outputDir
-                            width: Math.min(implicitWidth, 420)
+                            readonly property string full: decrypt.outputDir
+                            text: full.length > 46 ? full.slice(0, 3) + "…" + full.slice(full.length - 40) : full
                             onClicked: outPicker.open()
                         }
                         Capsule { text: qsTr("打开"); onClicked: decrypt.openOutputFolder() }

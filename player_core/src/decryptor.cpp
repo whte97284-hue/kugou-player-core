@@ -5,6 +5,7 @@
 #include "tag_internal.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <cctype>
 #include <cwctype>
@@ -825,35 +826,44 @@ std::wstring DecryptorRegistry::KgmMaskPath() const {
 bool DecryptIndex::Load(const std::wstring& file) {
     std::lock_guard<std::mutex> lock(mtx_);
     map_.clear();
+    byPrint_.clear();
     platform::ReadOnlyFile f;
     if (!f.Open(file, false) || f.Size() > (256u << 20)) return false;
     std::string data(size_t(f.Size()), '\0');
     if (f.ReadAt(0, data.data(), data.size()) != data.size()) return false;
     std::istringstream in(data);
     std::string line;
-    if (!std::getline(in, line) || line != "KPDI1") return false;
+    // KPDI1:大小 \t 修改时间 \t 源 \t 产物;KPDI2 在末尾多一列十六进制指纹
+    if (!std::getline(in, line) || (line != "KPDI1" && line != "KPDI2")) return false;
+    const bool v2 = line == "KPDI2";
     while (std::getline(in, line)) {
         std::istringstream ss(line);
-        std::string size, mtime, src, product;
+        std::string size, mtime, src, product, print;
         if (!std::getline(ss, size, '\t') || !std::getline(ss, mtime, '\t') || !std::getline(ss, src, '\t') ||
-            !std::getline(ss, product))
+            !std::getline(ss, product, v2 ? '\t' : '\n'))
             continue;
+        if (v2) std::getline(ss, print);
         Entry e;
         e.size = std::strtoull(size.c_str(), nullptr, 10);
         e.mtime = std::strtoull(mtime.c_str(), nullptr, 10);
         e.product = AudioTagParser::Utf8ToWide(product);
+        e.fingerprint = std::strtoull(print.c_str(), nullptr, 16);
+        if (e.fingerprint) byPrint_[e.fingerprint] = e.product;
         map_[AudioTagParser::Utf8ToWide(src)] = std::move(e);
     }
     return true;
 }
 
 bool DecryptIndex::Save(const std::wstring& file) const {
-    std::string data = "KPDI1\n";
+    std::string data = "KPDI2\n";
     {
         std::lock_guard<std::mutex> lock(mtx_);
+        char hex[17];
         for (const auto& kv : map_) {
+            std::snprintf(hex, sizeof hex, "%llx", static_cast<unsigned long long>(kv.second.fingerprint));
             data += std::to_string(kv.second.size) + '\t' + std::to_string(kv.second.mtime) + '\t' +
-                    AudioTagParser::WideToUtf8(kv.first) + '\t' + AudioTagParser::WideToUtf8(kv.second.product) + '\n';
+                    AudioTagParser::WideToUtf8(kv.first) + '\t' + AudioTagParser::WideToUtf8(kv.second.product) + '\t' +
+                    hex + '\n';
         }
     }
     std::wstring tmp = file + L".tmp";
@@ -875,9 +885,53 @@ std::wstring DecryptIndex::Find(const std::wstring& src, uint64_t size, uint64_t
     return platform::PathExists(product) ? product : L"";
 }
 
-void DecryptIndex::Put(const std::wstring& src, uint64_t size, uint64_t mtime, const std::wstring& product) {
+std::wstring DecryptIndex::FindByFingerprint(uint64_t fingerprint) const {
+    if (!fingerprint) return L"";
+    std::wstring product;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        auto it = byPrint_.find(fingerprint);
+        if (it == byPrint_.end()) return L"";
+        product = it->second;
+    }
+    return platform::PathExists(product) ? product : L"";
+}
+
+std::wstring DecryptIndex::Lookup(const std::wstring& src, uint64_t size, uint64_t mtime, bool* changed) {
+    if (changed) *changed = false;
+    std::wstring product = Find(src, size, mtime);
+    if (!product.empty()) return product;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (byPrint_.empty()) return L""; // 没有任何指纹记录 (旧索引):不必读文件
+    }
+    const uint64_t fp = Fingerprint(src, size);
+    product = FindByFingerprint(fp);
+    if (!product.empty()) {
+        Put(src, size, mtime, product, fp);
+        if (changed) *changed = true;
+    }
+    return product;
+}
+
+void DecryptIndex::Put(const std::wstring& src, uint64_t size, uint64_t mtime, const std::wstring& product, uint64_t fingerprint) {
     std::lock_guard<std::mutex> lock(mtx_);
-    map_[src] = Entry{size, mtime, product};
+    map_[src] = Entry{size, mtime, product, fingerprint};
+    if (fingerprint) byPrint_[fingerprint] = product;
+}
+
+uint64_t DecryptIndex::Fingerprint(const std::wstring& src, uint64_t size) {
+    platform::ReadOnlyFile f;
+    if (!f.Open(src, false)) return 0;
+    uint8_t buf[16384];
+    size_t n = f.ReadAt(0, buf, sizeof buf);
+    if (n == 0) return 0;
+    uint64_t h = 1469598103934665603ULL ^ size;
+    for (size_t i = 0; i < n; ++i) {
+        h ^= buf[i];
+        h *= 1099511628211ULL;
+    }
+    return h ? h : 1;
 }
 
 size_t DecryptIndex::Size() const {

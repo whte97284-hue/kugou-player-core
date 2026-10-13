@@ -131,7 +131,7 @@ Item {
                 x: 29; y: 9
                 width: 6; height: 6; radius: 3
                 color: Theme.accent
-                visible: modelData.key === "tools" && (decrypt.pending.total || 0) > 0 && nav.current !== "tools"
+                visible: modelData.key === "tools" && decrypt.policy !== 2 && (decrypt.pending.total || 0) > 0 && nav.current !== "tools"
                 SequentialAnimation on opacity {
                     running: parent.visible && !Theme.reduced
                     loops: Animation.Infinite
