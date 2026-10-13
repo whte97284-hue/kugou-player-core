@@ -35,13 +35,9 @@ Item {
     Timer { id: coverDelay; interval: Theme.normal + 40; onTriggered: np.covering = true }
 
     // ---------------- 背景 ----------------
-    Backdrop { anchors.fill: parent; source: player.cover }
-    ShaderEffect {
-        anchors.fill: parent
-        property size size: Qt.size(width, height)
-        property real strength: 0.022
-        fragmentShader: "qrc:/shaders/grain.frag.qsb"
-    }
+    // 背景直接沿用首页那层模糊封面 (同一张图、同一参数,就在播放页下面),播放页自己不再画一份:
+    // 打开 / 收起时背景纹丝不动,只有内容淡入淡出;也不会因为自己的图层还没渲染好而闪黑
+    Rectangle { anchors.fill: parent; color: Theme.base; visible: !player.hasTrack }
     MouseArea { anchors.fill: parent; hoverEnabled: true; onWheel: (w) => w.accepted = true }
 
     // ---------------- 版面 ----------------

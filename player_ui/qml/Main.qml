@@ -132,7 +132,8 @@ Window {
         Backdrop {
             id: homeBackdrop
             anchors.fill: parent
-            visible: opacity > 0 && !nowPlaying.covering
+            // 播放页也用这层作背景,盖住时不能停
+            visible: opacity > 0
             opacity: player.hasTrack ? 1 : 0
             Behavior on opacity { NumberAnimation { duration: 900; easing.type: Easing.InOutQuad } }
             source: player.cover
@@ -151,6 +152,9 @@ Window {
             id: pages
             anchors.fill: parent
             visible: !nowPlaying.covering
+            // 打开播放页时首页内容跟着淡出 (背景不动),收起时再淡回来
+            opacity: nowPlaying.shown ? 0 : 1
+            Behavior on opacity { OpacityAnimator { duration: nowPlaying.shown ? Theme.normal : 420; easing.type: Easing.OutCubic } }
             anchors.leftMargin: Theme.navWidth
             readonly property int inset: island.height + 28
             readonly property bool libraryEmpty: library.albumCount === 0
@@ -240,6 +244,10 @@ Window {
 
         SideNav {
             id: nav
+            visible: !nowPlaying.covering
+            // 打开播放页时首页内容跟着淡出 (背景不动),收起时再淡回来
+            opacity: nowPlaying.shown ? 0 : 1
+            Behavior on opacity { OpacityAnimator { duration: nowPlaying.shown ? Theme.normal : 420; easing.type: Easing.OutCubic } }
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             anchors.bottomMargin: island.height

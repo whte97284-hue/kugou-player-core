@@ -29,14 +29,17 @@ Item {
         front = layer
         // 看不见时 (例如播放页收起时切了歌) 直接换上,不做淡入:
         // 隐藏期间动画不会推进,等页面再打开时新背景会从全透明开始淡入,中间露出一大片黑底
-        if (!root.visible) { fadeIn.stop(); layer.opacity = 1; return }
+        if (!root.visible) { fadeIn.stop(); layer.opacity = 1; hideBack(); return }
         layer.opacity = 0
         fadeIn.target = layer
         fadeIn.restart()
     }
     // 重新显示时若还有没走完的淡入,直接到位
-    onVisibleChanged: if (visible && fadeIn.running) { fadeIn.stop(); if (front) front.opacity = 1 }
-    OpacityAnimator { id: fadeIn; from: 0; to: 1; duration: 900; easing.type: Easing.InOutQuad }
+    onVisibleChanged: if (visible && fadeIn.running) { fadeIn.stop(); if (front) front.opacity = 1; hideBack() }
+    OpacityAnimator { id: fadeIn; from: 0; to: 1; duration: 900; easing.type: Easing.InOutQuad; onFinished: root.hideBack() }
+    // 淡入结束后把下面的旧图层隐藏,任何时候只有一张不透明的图在画;
+    // 否则整页淡入淡出时两张图各自半透明叠加,中途会变暗
+    function hideBack() { const back = front === a ? b : a; back.opacity = 0 }
 
     component Layer: Item {
         id: lay
@@ -53,7 +56,11 @@ Item {
             visible: false
             smooth: true
         }
+        // 所在页面隐藏后,图层纹理会被回收;重新显示时立刻重建一次,
+        // 否则重新打开播放页的前几帧只有空纹理,画面会闪黑
+        onVisibleChanged: if (visible) { blur.layer.enabled = false; blur.layer.enabled = true }
         Item {
+            id: blur
             anchors.fill: parent
             layer.enabled: true
             layer.smooth: true
