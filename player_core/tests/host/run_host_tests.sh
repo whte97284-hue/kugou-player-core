@@ -24,6 +24,7 @@ g++ -std=c++17 $SAN -pthread -DMA_ENABLE_ONLY_SPECIFIC_BACKENDS -DMA_ENABLE_NULL
 g++ -std=c++17 $SAN -pthread tests/host/test_lyric_host.cpp src/lyric_manager.cpp src/tinf.cpp $CORE -o "$OUT/lyric_host"
 g++ -std=c++17 $SAN -pthread tests/host/test_lyric_online_host.cpp src/lyric_manager.cpp src/tinf.cpp $CORE -o "$OUT/lyric_online_host"
 g++ -std=c++17 $SAN -pthread tests/host/test_kugou_bridge_host.cpp src/kugou_track_bridge.cpp src/lyric_manager.cpp src/tinf.cpp $CORE -o "$OUT/kugou_bridge_host"
+g++ -std=c++17 $SAN -pthread tests/host/test_organizer_host.cpp src/library_organizer.cpp $CORE -o "$OUT/organizer_host"
 
 echo "== 1. 解析对照 (ffprobe 为基准)"
 python3 tests/host/check_fixtures.py "$OUT/tag_probe" "$OUT/fx"
@@ -38,5 +39,7 @@ echo "== 5. 歌词内核 (KRC 解密 / 匹配 / 模糊测试)"
 "$OUT/lyric_online_host" "$OUT/lyric_online_work"
 echo "== 5b. 酷狗桥接 (缓存 / 同名 / 并发解密)"
 "$OUT/kugou_bridge_host" "$OUT/kugou_bridge_work"
+echo "== 5c. 整理曲库 (模板 / 冲突 / 交换改名 / 撤销)"
+"$OUT/organizer_host" "$OUT/organizer_work"
 echo "== 6. 变异模糊测试"
 "$OUT/fuzz" "${FUZZ_ITERS:-500}" $(ls "$OUT"/fx/* | grep -v manifest)

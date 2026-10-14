@@ -14,6 +14,7 @@ add_library(player_core STATIC
     src/playlist_manager.cpp
     src/play_queue_controller.cpp
     src/scan_cache.cpp
+    src/library_organizer.cpp
     src/decryptor.cpp
     src/audio_ingestion_pipeline.cpp
     src/fft_visualizer.cpp
