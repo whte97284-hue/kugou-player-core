@@ -129,6 +129,7 @@ void PlayerController::applyPendingRemap() {
     snap_ = snap;
     if (current_) {
         current_ = snap_->catalog.FindById(curNew);
+        currentSnap_ = snap_;
         auto it = std::find(queue_.begin(), queue_.end(), curNew);
         queueIndex_ = it == queue_.end() ? -1 : static_cast<int>(it - queue_.begin());
     }
@@ -592,8 +593,9 @@ bool PlayerController::openIndex(int index, bool autoPlay) {
         gain_ = 1.0;
         applyVolume();
         if (autoPlay) engine_->Play();
-        setPlaying(autoPlay);
+        // 先换 current_ 再发 playingChanged:监听者 (播放记录等) 读到的是新歌,而不是上一首
         onTrackOpened(t, i);
+        setPlaying(autoPlay);
         return true;
     }
     return false;
@@ -601,6 +603,7 @@ bool PlayerController::openIndex(int index, bool autoPlay) {
 
 void PlayerController::onTrackOpened(const TrackItem* t, int index) {
     current_ = t;
+    currentSnap_ = snap_;
     queueIndex_ = index;
     position_ = 0;
     timer_.start();

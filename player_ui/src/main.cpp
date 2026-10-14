@@ -67,6 +67,10 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
     } else if (qEnvironmentVariableIsSet("KP_TEST_FINDPLAY")) {
         // 回归:只查找重复、只预览整理 (不动文件),然后点播放
         auto tools = [&engine]() { return qobject_cast<LibraryTools*>(engine.rootContext()->contextProperty("libtools").value<QObject*>()); };
+        // 用户报告的崩溃:暂停状态下重新扫描 (曲库换了新快照),再点一首别的歌
+        steps->push_back({"p0_play", [&player] { player.playAlbum(1, 0); }, 1200});
+        steps->push_back({"p0_pause_rescan", [&player, &lib] { if (player.playing()) player.toggle(); lib.rescan(); }, 6000});
+        steps->push_back({"p0_play_after_scan", [&player] { player.playAlbum(2, 0); }, 1500});
         steps->push_back({"p1_dedupe", [tools, call] { call("automationGo", QStringLiteral("dedupe")); tools()->findDuplicates(); }, 8000});
         steps->push_back({"p2_organize", [tools, call, outDir] {
             call("automationGo", QStringLiteral("organize"));

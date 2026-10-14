@@ -629,8 +629,8 @@ void LibraryTools::findDuplicates() {
             auto res = dedupe::FindDuplicates(*tracks, opt, [&](const dedupe::FindProgress& p) {
                 if (clock.elapsed() - last < 80) return;
                 last = clock.elapsed();
-                const double v = p.bytes_total ? double(p.bytes_done) / double(p.bytes_total) : 0;
-                const QString text = tr("正在比对内容 %1 / %2").arg(p.done).arg(p.total);
+                const double v = p.total ? std::min(1.0, double(p.done) / double(p.total)) : 0;
+                const QString text = tr("正在比对内容 %1%").arg(qRound(v * 100));
                 QMetaObject::invokeMethod(this, [this, v, text]() { setProgress(v, text); }, Qt::QueuedConnection);
             }, &cancel_);
             return std::make_shared<std::pair<std::vector<dedupe::DupTrack>, dedupe::FindResult>>(*tracks, std::move(res));

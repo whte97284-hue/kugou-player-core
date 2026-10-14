@@ -202,17 +202,6 @@ bool HashOpen(const platform::ReadOnlyFile& f, uint64_t begin, uint64_t end, kp:
     return true;
 }
 
-// 对 [begin, end) 范围求哈希;cancel 时返回 false
-bool HashRange(const std::wstring& path, uint64_t begin, uint64_t end, uint64_t& out, const std::atomic<bool>* cancel,
-               const std::function<void(uint64_t)>& onBytes) {
-    platform::ReadOnlyFile f;
-    if (!f.Open(path, false)) return false;
-    kp::Xxh64 h;
-    if (!HashOpen(f, begin, end, h, cancel, onBytes)) return false;
-    out = h.Digest();
-    return true;
-}
-
 // 快速指纹:范围的头尾各 64KB (只打开一次文件)。范围小于 128KB 时就是整段
 bool QuickHash(const std::wstring& path, uint64_t begin, uint64_t end, uint64_t& out) {
     platform::ReadOnlyFile f;
@@ -223,6 +212,28 @@ bool QuickHash(const std::wstring& path, uint64_t begin, uint64_t end, uint64_t&
         if (!HashOpen(f, begin, end, h, nullptr, nullptr)) return false;
     } else if (!HashOpen(f, begin, begin + q, h, nullptr, nullptr) || !HashOpen(f, end - q, end, h, nullptr, nullptr)) {
         return false;
+    }
+    out = h.Digest();
+    return true;
+}
+
+// 抽样指纹:头尾之间再均匀取 5 段 64KB (加上 QuickHash 的头尾共 7 段,约 448KB)。
+// 范围不大于 7 段时直接哈希整段。查找阶段用它代替整文件哈希:同样大小、7 处内容都一样的不同文件
+// 在音乐库里几乎不可能出现;永久删除 / 换硬链接前还会逐字节确认
+constexpr int kInteriorSamples = 5;
+bool SampleHash(const std::wstring& path, uint64_t begin, uint64_t end, uint64_t& out, bool& whole) {
+    platform::ReadOnlyFile f;
+    if (!f.Open(path, true) || end > f.Size() || end < begin) return false;
+    const uint64_t q = 64 << 10, len = end - begin;
+    kp::Xxh64 h(0xC2B2AE3D27D4EB4Full);
+    whole = len <= (kInteriorSamples + 2) * q;
+    if (whole) {
+        if (!HashOpen(f, begin, end, h, nullptr, nullptr)) return false;
+    } else {
+        for (int j = 1; j <= kInteriorSamples; ++j) {
+            const uint64_t off = begin + (len - q) * j / (kInteriorSamples + 1);
+            if (!HashOpen(f, off, off + q, h, nullptr, nullptr)) return false;
+        }
     }
     out = h.Digest();
     return true;
@@ -531,10 +542,8 @@ FindResult FindDuplicates(const std::vector<DupTrack>& tracks, const FindOptions
     FindProgress prog;
     // 并行阶段的计数 (工作线程累加,调用线程汇报)
     std::atomic<size_t> doneCount{0};
-    std::atomic<uint64_t> bytesCount{0};
     auto tick = [&]() {
         prog.done = doneCount.load();
-        prog.bytes_done = bytesCount.load();
         if (onProgress) onProgress(prog);
     };
 
@@ -610,60 +619,58 @@ FindResult FindDuplicates(const std::vector<DupTrack>& tracks, const FindOptions
         return true;
     };
 
-    // 范围 [b, e) 的内容指纹:先比头尾 64KB,相同的再比整段 XXH64 (64 位,配合大小相同,误判概率可忽略;
-    // 永久删除前还会逐字节确认)。返回按整段哈希分好的组
+    // 范围 [b, e) 的内容指纹:先比头尾 64KB,相同的再比中间 5 处抽样 (都是小块随机读,不再整文件读取:
+    // 曲库里真重复很多时,整文件哈希要把几十 GB 读一遍)。分组键里带上范围长度。
+    // 指纹判定的「完全相同」在永久删除 / 换硬链接前会逐字节再确认。
+    // 进度:每个候选文件算 2 步 (头尾、抽样),头尾不同的直接算完
     struct Range {
         size_t i;
         uint64_t b, e;
     };
     auto groupByContent = [&](std::vector<Range> cand) {
         std::vector<std::vector<size_t>> out;
-        if (cand.size() < 2) return out;
+        if (cand.size() < 2) {
+            doneCount += 2 * cand.size();
+            return out;
+        }
         std::vector<uint64_t> quick(cand.size(), 0);
         std::vector<char> qok(cand.size(), 0);
         ParallelFor(cand.size(), IoThreads(), [&](size_t k) {
             qok[k] = QuickHash(tracks[cand[k].i].path, cand[k].b, cand[k].e, quick[k]);
-        }, nullptr, cancel);
-        std::map<uint64_t, std::vector<size_t>> byQuick;
+            ++doneCount;
+        }, tick, cancel);
+        std::map<std::pair<uint64_t, uint64_t>, std::vector<size_t>> byQuick;
         for (size_t k = 0; k < cand.size(); ++k)
-            if (qok[k]) byQuick[quick[k]].push_back(k);
-        std::vector<size_t> needFull;
+            if (qok[k]) byQuick[{cand[k].e - cand[k].b, quick[k]}].push_back(k);
+        std::vector<size_t> needSample;
         for (auto& q : byQuick)
-            if (q.second.size() >= 2) needFull.insert(needFull.end(), q.second.begin(), q.second.end());
-        std::vector<uint64_t> full(cand.size(), 0);
-        std::vector<char> fok(cand.size(), 0);
-        for (auto& q : byQuick)
-            if (q.second.size() < 2) {
-                doneCount += q.second.size();
-                for (size_t k : q.second) bytesCount += cand[k].e - cand[k].b;
-            }
-        // 整段读取:两个线程 (再多会让机械硬盘来回寻道)
-        ParallelFor(needFull.size(), 2, [&](size_t n) {
-            const size_t k = needFull[n];
+            if (q.second.size() >= 2) needSample.insert(needSample.end(), q.second.begin(), q.second.end());
+        doneCount += cand.size() - needSample.size();
+        std::vector<uint64_t> sample(cand.size(), 0);
+        std::vector<char> sok(cand.size(), 0);
+        ParallelFor(needSample.size(), IoThreads(), [&](size_t n) {
+            const size_t k = needSample[n];
             const Range& r = cand[k];
             if (r.e - r.b <= 2 * (64 << 10)) {
-                full[k] = quick[k]; // 头尾指纹已经覆盖整段
-                fok[k] = 1;
-                bytesCount += r.e - r.b;
+                sok[k] = 1; // 头尾指纹已经覆盖整段
             } else {
-                fok[k] = HashRange(tracks[r.i].path, r.b, r.e, full[k], cancel, [&](uint64_t bytes) { bytesCount += bytes; });
+                bool whole = false;
+                sok[k] = SampleHash(tracks[r.i].path, r.b, r.e, sample[k], whole);
             }
             ++doneCount;
         }, tick, cancel);
-        for (size_t k : needFull) {
-            if (!fok[k]) continue;
+        std::map<std::tuple<uint64_t, uint64_t, uint64_t>, std::vector<size_t>> bySample;
+        for (size_t k : needSample) {
+            if (!sok[k]) continue;
             ++res.files_hashed;
-            res.bytes_hashed += cand[k].e - cand[k].b;
+            bySample[{cand[k].e - cand[k].b, quick[k], sample[k]}].push_back(cand[k].i);
         }
-        std::map<std::tuple<uint64_t, uint64_t, uint64_t>, std::vector<size_t>> byFull;
-        for (size_t k : needFull)
-            if (fok[k]) byFull[{cand[k].e - cand[k].b, quick[k], full[k]}].push_back(cand[k].i);
-        for (auto& f : byFull)
+        for (auto& f : bySample)
             if (f.second.size() >= 2) out.push_back(std::move(f.second));
         return out;
     };
 
-    // ---- 1. Identical:大小相同 → 头尾指纹 → 整文件指纹
+    // ---- 1. Identical:大小相同 → 头尾指纹 → 中间抽样指纹
     if (opt.identical) {
         std::map<uint64_t, std::vector<size_t>> bySize;
         for (size_t i : live) bySize[info[i].size].push_back(i);
@@ -672,8 +679,7 @@ FindResult FindDuplicates(const std::vector<DupTrack>& tracks, const FindOptions
             if (kv.second.size() >= 2)
                 for (size_t i : kv.second) {
                     cand.push_back({i, 0, kv.first});
-                    ++prog.total;
-                    prog.bytes_total += kv.first;
+                    prog.total += 2;
                 }
         tick();
         // 不同大小的文件哈希值碰巧相同也不会混到一组:分组键里再带上大小
@@ -741,8 +747,8 @@ FindResult FindDuplicates(const std::vector<DupTrack>& tracks, const FindOptions
         std::vector<Range> cand;
         for (auto& kv : byPayloadSize)
             if (kv.second.size() >= 2) cand.insert(cand.end(), kv.second.begin(), kv.second.end());
-        prog.total += cand.size();
-        for (const Range& r : cand) prog.bytes_total += r.e - r.b;
+        prog.total += 2 * cand.size();
+        tick();
         for (auto& grp : groupByContent(cand)) {
             if (cancelled()) break;
             std::vector<size_t> distinct;

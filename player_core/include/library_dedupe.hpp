@@ -87,8 +87,7 @@ struct FindProgress {
 
 struct FindResult {
     std::vector<DupGroup> groups;
-    size_t files_hashed = 0;
-    uint64_t bytes_hashed = 0;
+    size_t files_hashed = 0; // 头尾指纹相同、又做了中间抽样的文件数
     bool cancelled = false;
 };
 

@@ -247,6 +247,9 @@ private:
     bool restored_ = false;
     qint64 lastSessionSave_ = 0;
     const TrackItem* current_ = nullptr;
+    // current_ 指向的曲目所在的快照。扫描后点歌会先把 snap_ 换成新快照,
+    // 若没人再持有旧快照,current_ 就悬空了 (暂停 → 重新扫描 → 点播放时崩溃)
+    std::shared_ptr<const LibrarySnapshot> currentSnap_;
     QVariantList chain_;
     bool bitPerfect_ = false;
     bool playing_ = false;

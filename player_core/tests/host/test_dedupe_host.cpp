@@ -317,6 +317,26 @@ static void TestApply(const fs::path& work) {
     ApplyResult ud = UndoDedupe(W(work / "dedupe8.log"));
     CHECK(ud.skipped == 1 && !fs::exists(dl / "album" / "东风破.mp3"));  // 永久删除无法撤销,歌词改名可以
     CHECK(!fs::exists(lib / "c" / "东风破.lrc") && fs::exists(dl / "album" / "东风破.lrc"));
+
+    // 查找只比头尾 + 中间抽样:只差一个未抽到的字节时会归为「完全相同」,
+    // 但永久删除 / 换硬链接前逐字节确认,不会动它
+    const std::string big = Random(2 << 20);
+    std::string bigDiff = big;
+    bigDiff[100000] ^= 0x5A;
+    Put(lib / "s" / "x.flac", big);
+    Put(dl / "s" / "x.flac", bigDiff);
+    std::vector<DupTrack> tr3 = {T(lib / "s" / "x.flac", L"A", L"X", 200000, true), T(dl / "s" / "x.flac", L"A", L"X", 200000, true)};
+    FindResult sr = FindDuplicates(tr3, fo);
+    CHECK(sr.groups.size() == 1 && sr.groups[0].kind == MatchKind::Identical);
+    a = ApplySelection(sr.groups, tr3, del, W(work / "dedupe9.log"));
+    CHECK(a.done == 0 && a.failed == 1 && fs::exists(dl / "s" / "x.flac"));
+    a = ApplySelection(sr.groups, tr3, link, W(work / "dedupe10.log"));
+    CHECK(a.done == 0 && a.failed == 1 && Get(dl / "s" / "x.flac") == bigDiff);
+    // 抽样到的位置不同 → 不归为完全相同
+    bigDiff = big;
+    bigDiff[(2 << 20) / 2] ^= 0x5A;
+    Put(dl / "s" / "x.flac", bigDiff);
+    CHECK(FindDuplicates(tr3, fo).groups.empty() || FindDuplicates(tr3, fo).groups[0].kind != MatchKind::Identical);
 }
 
 int main(int argc, char** argv) {
