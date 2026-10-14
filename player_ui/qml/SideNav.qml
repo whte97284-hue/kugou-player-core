@@ -3,7 +3,7 @@ import PlayerUi
 
 // 侧边导航:不再是一条深色竖栏,而是两枚悬浮的竖向胶囊 (与播放岛、设置页同一套胶囊语言)
 //  · 上:五个主分区;选中项是一枚柔和的强调色圆底,切换时像液滴一样先伸长、再收拢到新位置
-//  · 下:转换 · 音乐文件夹 · 设置
+//  · 主分区之后紧跟:转换 · 音乐文件夹 · 设置 (合并为一枚胶囊)
 //  · 悬停只提亮图标并给一层极淡的圆底;停留片刻在右侧浮出名称
 Item {
     id: nav
@@ -16,9 +16,7 @@ Item {
         { key: "artists", icon: "artist", tip: qsTr("歌手") },
         { key: "songs", icon: "note", tip: qsTr("歌曲") },
         { key: "playlists", icon: "playlist", tip: qsTr("歌单") },
-        { key: "search", icon: "search", tip: qsTr("搜索  Ctrl K") }
-    ]
-    readonly property var tools: [
+        { key: "search", icon: "search", tip: qsTr("搜索  Ctrl K") },
         { key: "tools", icon: "tools", tip: qsTr("转换") },
         { key: "folder", icon: "folder", tip: qsTr("音乐文件夹") },
         { key: "settings", icon: "settings", tip: qsTr("设置") }
@@ -32,7 +30,6 @@ Item {
         return -1
     }
     readonly property int currentIndex: indexIn(items)
-    readonly property int toolIndex: indexIn(tools)
 
     // 一枚竖向胶囊:极淡暖色底 + 发丝描边,内含若干图标与滑动的选中圆底
     component Dock: Rectangle {
@@ -104,14 +101,6 @@ Item {
         sel: nav.currentIndex
     }
 
-    Dock {
-        id: toolDock
-        x: (nav.width - width) / 2
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: 20
-        model: nav.tools
-        sel: nav.toolIndex
-    }
 
     Component {
         id: navButton
@@ -142,7 +131,7 @@ Item {
                 x: 29; y: 9
                 width: 6; height: 6; radius: 3
                 color: Theme.accent
-                visible: modelData.key === "tools" && (decrypt.pending.total || 0) > 0 && nav.current !== "tools"
+                visible: modelData.key === "tools" && decrypt.policy !== 2 && (decrypt.pending.total || 0) > 0 && nav.current !== "tools"
                 SequentialAnimation on opacity {
                     running: parent.visible && !Theme.reduced
                     loops: Animation.Infinite

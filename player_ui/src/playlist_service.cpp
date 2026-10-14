@@ -230,6 +230,9 @@ void PlaylistService::load() {
             for (const QJsonValue& k : o.value("tracks").toArray()) l.keys.push_back(k.toString());
             if (!l.id.isEmpty() && !find(l.id)) lists_.push_back(std::move(l));
         }
+        f.seek(0);
+        for (const QJsonValue& k : QJsonDocument::fromJson(f.readAll()).object().value("history").toArray())
+            history_.push_back(k.toString());
     }
     if (!find(kFav)) {
         List fav;
@@ -257,11 +260,40 @@ void PlaylistService::save() const {
     QJsonObject root;
     root["version"] = 1;
     root["playlists"] = arr;
+    QJsonArray hist;
+    for (const QString& k : history_) hist.append(k);
+    root["history"] = hist;
     QSaveFile f(file_);
     if (f.open(QIODevice::WriteOnly)) {
         f.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
         f.commit();
     }
+}
+
+void PlaylistService::recordPlay(double trackId) {
+    QString k = keyOf(trackId);
+    if (k.isEmpty() || (!history_.empty() && history_.front() == k)) return;
+    auto it = std::find(history_.begin(), history_.end(), k);
+    if (it != history_.end()) history_.erase(it);
+    history_.insert(history_.begin(), k);
+    if (static_cast<int>(history_.size()) > kHistoryMax) history_.resize(kHistoryMax);
+    saveTimer_.start();
+    emit historyChanged();
+}
+
+void PlaylistService::clearHistory() {
+    if (history_.empty()) return;
+    history_.clear();
+    saveTimer_.start();
+    emit historyChanged();
+}
+
+std::vector<const TrackItem*> PlaylistService::historyTracks() const {
+    std::vector<const TrackItem*> out;
+    out.reserve(history_.size());
+    for (const QString& k : history_)
+        if (const TrackItem* t = resolve(k)) out.push_back(t);
+    return out;
 }
 
 QVariantList PlaylistService::trackIdsOf(const QString& id) const {

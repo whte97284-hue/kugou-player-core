@@ -21,6 +21,9 @@ g++ -std=c++17 -O2 -pthread tests/host/test_core_host.cpp $CORE -o "$OUT/core_ho
 # 播放引擎:miniaudio 只启用 null 虚拟声卡后端 (无需真实音频设备)
 g++ -std=c++17 $SAN -pthread -DMA_ENABLE_ONLY_SPECIFIC_BACKENDS -DMA_ENABLE_NULL tests/host/test_engine_host.cpp \
     src/audio_playback_engine.cpp src/fft_visualizer.cpp $CORE -o "$OUT/engine_host" -ldl -lm
+g++ -std=c++17 $SAN -pthread tests/host/test_lyric_host.cpp src/lyric_manager.cpp src/tinf.cpp $CORE -o "$OUT/lyric_host"
+g++ -std=c++17 $SAN -pthread tests/host/test_lyric_online_host.cpp src/lyric_manager.cpp src/tinf.cpp $CORE -o "$OUT/lyric_online_host"
+g++ -std=c++17 $SAN -pthread tests/host/test_kugou_bridge_host.cpp src/kugou_track_bridge.cpp src/lyric_manager.cpp src/tinf.cpp $CORE -o "$OUT/kugou_bridge_host"
 
 echo "== 1. 解析对照 (ffprobe 为基准)"
 python3 tests/host/check_fixtures.py "$OUT/tag_probe" "$OUT/fx"
@@ -30,5 +33,10 @@ echo "== 3. 吞吐压测 (O2)"
 "$OUT/core_host_o2" "$OUT/fx" "$OUT/work" 165 | sed -n '/\[5\]/,$p'
 echo "== 4. 播放引擎 (null 虚拟声卡)"
 "$OUT/engine_host" "$OUT/fx"
-echo "== 5. 变异模糊测试"
+echo "== 5. 歌词内核 (KRC 解密 / 匹配 / 模糊测试)"
+"$OUT/lyric_host" "$OUT/lyric_work"
+"$OUT/lyric_online_host" "$OUT/lyric_online_work"
+echo "== 5b. 酷狗桥接 (缓存 / 同名 / 并发解密)"
+"$OUT/kugou_bridge_host" "$OUT/kugou_bridge_work"
+echo "== 6. 变异模糊测试"
 "$OUT/fuzz" "${FUZZ_ITERS:-500}" $(ls "$OUT"/fx/* | grep -v manifest)

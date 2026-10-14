@@ -5,10 +5,10 @@ import PlayerUi
 
 Window {
     id: root
-    width: 1320
-    height: 860
-    minimumWidth: 960
-    minimumHeight: 620
+    width: 1110
+    height: 780
+    minimumWidth: 900
+    minimumHeight: 600
     visible: true
     title: player.hasTrack ? player.title + " — " + player.artist : "Hi-Fi Player"
     color: Theme.base
@@ -100,31 +100,10 @@ Window {
     function openArtist(i, fromItem) {
         if (i < 0) return
         openDetail("artist", i)
-        if (fromItem) flyBetween(fromItem, function() { return artistLoader.item ? artistLoader.item.heroAvatar : null }, "")
-    }
-    // 共享元素飞行:from 是来源图块,targetFn 在目标页布局完成后返回落点
-    function flyBetween(fromItem, targetFn, src) {
+        if (!fromItem) return
         Qt.callLater(function() {
-            const hero = targetFn()
-            if (!hero || !fromItem) return
-            const from = fromItem.mapToItem(root.contentItem, 0, 0)
-            const to = hero.mapToItem(root.contentItem, 0, 0)
-            flying.source = src.length ? src : hero.source
-            flying.radius = hero.radius
-            flying.width = hero.width
-            flying.height = hero.height
-            flying.x = from.x
-            flying.y = from.y
-            flying.scale = fromItem.width / hero.width
-            flying.radius = (fromItem.radius !== undefined ? fromItem.radius : hero.radius) / flying.scale
-            flight.landing = hero
-            hero.opacity = 0
-            flying.visible = true
-            flight.toX = to.x
-            flight.toY = to.y
-            flight.toScale = 1
-            flight.toRadius = hero.radius
-            flight.restart()
+            const hero = artistLoader.item ? artistLoader.item.heroAvatar : null
+            if (hero) fly(fromItem, null, hero, artistLoader)
         })
     }
     function openPlaylist(id) { if (id && id.length) openDetail("playlist", id) }
@@ -146,13 +125,38 @@ Window {
 
         Aurora {
             anchors.fill: parent
+            // 封面背景完全盖住时停止绘制 (省 GPU)
+            visible: !nowPlaying.covering && homeBackdrop.opacity < 1
+        }
+        // 播放时首页背景与播放页同一套:当前封面模糊铺满、压暗,换歌时交叉淡化;再叠一层颗粒防色带
+        Backdrop {
+            id: homeBackdrop
+            anchors.fill: parent
+            // 播放页也用这层作背景,盖住时不能停
+            visible: opacity > 0
+            opacity: player.hasTrack ? 1 : 0
+            Behavior on opacity { NumberAnimation { duration: 900; easing.type: Easing.InOutQuad } }
+            source: player.cover
+            solid: false
+        }
+        ShaderEffect {
+            anchors.fill: parent
+            visible: homeBackdrop.visible
+            opacity: homeBackdrop.opacity
+            property size size: Qt.size(width, height)
+            property real strength: 0.022
+            fragmentShader: "qrc:/shaders/grain.frag.qsb"
         }
 
         Item {
             id: pages
             anchors.fill: parent
+            visible: !nowPlaying.covering
+            // 打开播放页时首页内容跟着淡出 (背景不动),收起时再淡回来
+            opacity: nowPlaying.shown ? 0 : 1
+            Behavior on opacity { OpacityAnimator { duration: nowPlaying.shown ? Theme.normal : 420; easing.type: Easing.OutCubic } }
             anchors.leftMargin: Theme.navWidth
-            readonly property int inset: Theme.islandHeight + 60
+            readonly property int inset: island.height + 28
             readonly property bool libraryEmpty: library.albumCount === 0
 
             AlbumWall {
@@ -235,12 +239,18 @@ Window {
             z: 5
             onCloseRequested: shown = false
             onChainClicked: chain.shown = !chain.shown
+            onShownChanged: { if (shown) queuePanel.shown = false; Qt.callLater(root.flyNowPlaying, shown) }
         }
 
         SideNav {
             id: nav
+            visible: !nowPlaying.covering
+            // 打开播放页时首页内容跟着淡出 (背景不动),收起时再淡回来
+            opacity: nowPlaying.shown ? 0 : 1
+            Behavior on opacity { OpacityAnimator { duration: nowPlaying.shown ? Theme.normal : 420; easing.type: Easing.OutCubic } }
             anchors.top: parent.top
             anchors.bottom: parent.bottom
+            anchors.bottomMargin: island.height
             current: root.section
             onNavigate: (target) => {
                 if (target === "folder") library.folders.length ? libraryPanel.open() : folderDialog.open()
@@ -251,14 +261,41 @@ Window {
     }
 
     // ======================= 共享元素:飞行的封面 =======================
-    RoundedImage {
+    // 两层:底层用来源图块已解码好的那张 (缓存命中,首帧就有画面),上层是落点尺寸的清晰版,就绪后直接盖上 (同一张图,只是更清晰)
+    Item {
         id: flying
         visible: false
         transformOrigin: Item.TopLeft
-        radius: 16
-        decodeSize: 640
-        fadeIn: false
         z: 50
+        property real radius: 16
+        property string loSource
+        property int loDecode: 640
+        property string hiSource
+        property int hiDecode: 640
+
+        // 起落点是旋转中的黑胶标签时,副本带着标签此刻的角度起飞 / 落地,不会一下子摆正
+        Item {
+            id: flyingSpin
+            anchors.fill: parent
+            RoundedImage {
+                anchors.fill: parent
+                radius: flying.radius
+                source: flying.loSource
+                decodeSize: flying.loDecode
+                fadeIn: false
+                placeholder: false
+                outline: false
+            }
+            RoundedImage {
+                id: flyingHi
+                anchors.fill: parent
+                radius: flying.radius
+                source: flying.hiSource
+                decodeSize: flying.hiDecode
+                fadeIn: false
+                placeholder: false
+            }
+        }
 
         ParallelAnimation {
             id: flight
@@ -266,106 +303,177 @@ Window {
             property real toY
             property real toScale: 1
             property real toRadius: 10
-            property bool reverse: false
-            property Item landing: null
-            XAnimator { target: flying; to: flight.toX; duration: 460; easing.type: Easing.OutQuint }
-            YAnimator { target: flying; to: flight.toY; duration: 460; easing.type: Easing.OutQuint }
-            ScaleAnimator { target: flying; to: flight.toScale; duration: 460; easing.type: Easing.OutQuint }
+            property real toAngle: 0
+            property Item landing: null // 落点:飞行期间隐藏,落地后显示
+            property Item origin: null  // 起点:飞行期间隐藏,避免同一张封面出现两份
+            property Item waitFor: null // 落地前要等它解码完成的图片
+            property int duration: 460
+            XAnimator { target: flying; to: flight.toX; duration: flight.duration; easing.type: Easing.OutQuint }
+            YAnimator { target: flying; to: flight.toY; duration: flight.duration; easing.type: Easing.OutQuint }
+            ScaleAnimator { target: flying; to: flight.toScale; duration: flight.duration; easing.type: Easing.OutQuint }
             // 缩放会连带缩小圆角:同步补偿,让屏幕上的圆角从起点平滑过渡到落点
-            NumberAnimation { target: flying; property: "radius"; to: flight.toRadius; duration: 460; easing.type: Easing.OutQuint }
-            onFinished: {
-                flying.visible = false
+            NumberAnimation { target: flying; property: "radius"; to: flight.toRadius; duration: flight.duration; easing.type: Easing.OutQuint }
+            RotationAnimator { target: flyingSpin; to: flight.toAngle; duration: flight.duration; easing.type: Easing.OutQuint }
+            onFinished: handoff.start()
+        }
+        // 落地交接:等落点图片解码完成再显示它,随后再撤掉飞行副本 (落点自己的淡入在副本下面完成,看不出切换)
+        Timer {
+            id: handoff
+            interval: 16
+            repeat: true
+            property int waited: 0
+            onRunningChanged: if (running) waited = 0
+            onTriggered: {
+                waited += interval
+                const img = flight.waitFor
+                if (img && img.status !== Image.Ready && img.status !== Image.Error && waited < 1500) return
+                stop()
+                const hidden = flight.landing
+                if (flight.landing) flight.landing.opacity = 1
+                if (flight.origin) flight.origin.opacity = 1
                 if (detail.heroCover) detail.heroCover.opacity = 1
                 detail.heroAway = false
-                if (flight.landing) { flight.landing.opacity = 1; flight.landing = null }
+                flight.landing = null
+                flight.origin = null
+                flight.waitFor = null
+                // 落点一直可见 (飞回黑胶标签):副本在它正上方,立即撤掉;否则等落点自己的淡入完成
+                if (hidden) reveal.restart()
+                else flying.visible = false
             }
+        }
+        Timer { id: reveal; interval: Theme.normal + 40; onTriggered: flying.visible = false }
+    }
+
+    // 图块里真正显示封面的 RoundedImage (来源可能是卡片容器或交叉淡化封面)
+    function imageIn(item) {
+        if (!item) return null
+        if (item.status !== undefined && item.decodeSize !== undefined) return item
+        let best = null
+        for (let k = 0; k < item.children.length; ++k) {
+            const c = imageIn(item.children[k])
+            if (c && (!best || (c.opacity > best.opacity) || (c.status === Image.Ready && best.status !== Image.Ready))) best = c
+        }
+        return best
+    }
+    // 图块在屏幕上的矩形。page 正处于切页缩放 (0.985 / 1.015 → 1) 时,按它的缩放中心换算成停稳后的位置与尺寸,
+    // 否则飞行落在缩放中途的位置,页面停稳后封面会再跳一下
+    function settledRect(item, page) {
+        const p = item.mapToItem(root.contentItem, 0, 0)
+        const q = item.mapToItem(root.contentItem, item.width, item.height)
+        const s = page && page.scale > 0 ? page.scale : 1
+        if (s === 1) return Qt.rect(p.x, p.y, q.x - p.x, q.y - p.y)
+        const c = page.mapToItem(root.contentItem, page.width / 2, page.height / 2)
+        return Qt.rect(c.x + (p.x - c.x) / s, c.y + (p.y - c.y) / s, (q.x - p.x) / s, (q.y - p.y) / s)
+    }
+    // opts (可选):fromRect / toRect 覆盖屏幕矩形,fromRadius / toRadius 覆盖屏幕圆角,
+    // hideFrom / hideTo = false 时飞行期间不隐藏起点 / 落点,duration 飞行时长
+    function fly(fromItem, fromPage, toItem, toPage, opts) {
+        opts = opts || {}
+        // 上一段飞行还没收尾:先把它藏起的图块还原
+        flight.stop()
+        handoff.stop()
+        reveal.stop()
+        if (flight.landing) flight.landing.opacity = 1
+        if (flight.origin) flight.origin.opacity = 1
+        flight.landing = null
+        flight.origin = null
+
+        const fromImg = imageIn(fromItem), toImg = imageIn(toItem)
+        if (!fromImg || !toImg || fromItem.width <= 0 || toItem.width <= 0) return false
+        const a = opts.fromRect || settledRect(fromItem, fromPage)
+        const b = opts.toRect || settledRect(toItem, toPage)
+        if (a.width <= 0 || b.width <= 0) return false
+        const fromRadius = opts.fromRadius !== undefined ? opts.fromRadius
+                         : (fromItem.radius !== undefined ? fromItem.radius : fromImg.radius) * a.width / fromItem.width
+        const toRadius = opts.toRadius !== undefined ? opts.toRadius
+                       : (toItem.radius !== undefined ? toItem.radius : toImg.radius) * b.width / toItem.width
+
+        const fromReady = fromImg.status === Image.Ready
+        flying.loSource = fromReady ? fromImg.source : toImg.source
+        flying.loDecode = fromReady ? fromImg.decodeSize : toImg.decodeSize
+        // 落点更清晰时才叠加上层 (飞向小图时不要用低分辨率版本盖住清晰的起点图)
+        flying.hiSource = toImg.decodeSize > flying.loDecode ? toImg.source : ""
+        flying.hiDecode = toImg.decodeSize
+        flying.width = b.width
+        flying.height = b.height
+        flying.x = a.x
+        flying.y = a.y
+        flying.scale = a.width / b.width
+        flying.radius = fromRadius / flying.scale
+        // 角度取最近的等价值,免得多转一圈
+        const norm = (d) => { d = d % 360; return d > 180 ? d - 360 : (d < -180 ? d + 360 : d) }
+        const fromAngle = norm(opts.fromAngle || 0)
+        flyingSpin.rotation = fromAngle
+        flight.toAngle = fromAngle + norm((opts.toAngle || 0) - fromAngle)
+        flight.duration = opts.duration || 460
+        flight.waitFor = toImg
+        flight.landing = opts.hideTo === false ? null : toItem
+        flight.origin = opts.hideFrom === false ? null : fromItem
+        if (flight.landing) flight.landing.opacity = 0
+        if (flight.origin) flight.origin.opacity = 0
+        flying.visible = true
+        flight.toX = b.x
+        flight.toY = b.y
+        flight.toScale = 1
+        flight.toRadius = toRadius
+        flight.restart()
+        return true
+    }
+    // 播放岛迷你黑胶的中心标签 (封面所在的小圆) 在屏幕上的矩形
+    function discLabelRect() {
+        const disc = island.disc
+        const r = settledRect(disc, null)
+        r.y -= islandShift.y // 岛正在进出场位移时,按停稳后的位置算
+        const s = r.width * disc.labelRatio
+        return Qt.rect(r.x + (r.width - s) / 2, r.y + (r.height - s) / 2, s, s)
+    }
+    // 展开沉浸页:封面从黑胶标签里「升起」放大成大封面;收起时缩回标签
+    function flyNowPlaying(open) {
+        if (!player.hasTrack || Theme.reduced) return
+        const big = nowPlaying.coverItem
+        if (!big) return
+        const disc = island.disc
+        if (open) {
+            const label = discLabelRect()
+            fly(disc, null, big, null, { fromRect: label, fromRadius: label.width / 2, fromAngle: disc.angleAfter(0),
+                                         hideFrom: false, duration: 620 })
+        } else {
+            const label = discLabelRect()
+            fly(big, null, disc, null, { toRect: label, toRadius: label.width / 2, toAngle: disc.angleAfter(520 + 16),
+                                         hideTo: false, duration: 520 })
         }
     }
 
+    // 打开专辑时点的那张封面 (卡片或顶部横幅);关闭时若它仍在视野里就飞回它
+    property Item albumFrom: null
     function openAlbum(index, coverItem) {
         if (index < 0) return
         albumTracks.albumIndex = index
         detail.resetScroll()
         const fromItem = coverItem
+        albumFrom = coverItem || null
         openDetail("album", index)
         // 从专辑墙打开时封面飞入详情页;其他入口直接淡入
         if (!fromItem) return
         Qt.callLater(function() {
-            const hero = detail.heroCover
-            if (!hero) return
-            const from = fromItem.mapToItem(root.contentItem, 0, 0)
-            const to = hero.mapToItem(root.contentItem, 0, 0)
-            flying.source = albumTracks.cover
-            flying.width = hero.width
-            flying.height = hero.height
-            flying.x = from.x
-            flying.y = from.y
-            flying.scale = fromItem.width * wall.scale / hero.width
-            flying.radius = 10 / flying.scale
-            flight.landing = null
-            hero.opacity = 0
-            flying.visible = true
-            flight.toX = to.x
-            flight.toY = to.y
-            flight.toScale = 1
-            flight.toRadius = hero.radius
-            flight.restart()
+            if (detail.heroCover) fly(fromItem, null, detail.heroCover, detail)
         })
     }
 
-    // 返回专辑墙时封面飞回对应卡片
-    // 此刻专辑墙仍处于离场状态 (缩小 0.985、透明),量到的位置会随它回弹而漂移:
-    // 按缩放中心换算出回弹后的最终位置;落点卡片在飞行期间隐藏,避免同一张封面出现两份
+    // 返回专辑墙时封面飞回对应卡片 (专辑墙此刻仍在回弹缩放,落点按停稳后的位置算)
     function closeAlbumFlight() {
         if (detailKind !== "album" || section !== "albums") return
         const hero = detail.heroCover
-        const card = wall.coverOf(albumTracks.albumIndex)
+        const card = wall.coverOf(albumTracks.albumIndex, albumFrom)
         if (!hero || !card) return
-        const from = hero.mapToItem(root.contentItem, 0, 0)
-        const p = card.mapToItem(root.contentItem, 0, 0)
-        const c = wall.mapToItem(root.contentItem, wall.width / 2, wall.height / 2)
-        const s = wall.scale > 0 ? wall.scale : 1
-        flying.source = albumTracks.cover
-        flying.width = hero.width
-        flying.height = hero.height
-        flying.x = from.x
-        flying.y = from.y
-        flying.scale = 1
-        flying.radius = hero.radius
-        flying.visible = true
-        hero.opacity = 0
-        detail.heroAway = true
-        if (flight.landing) flight.landing.opacity = 1
-        flight.landing = card
-        card.opacity = 0
-        flight.toX = c.x + (p.x - c.x) / s
-        flight.toY = c.y + (p.y - c.y) / s
-        flight.toScale = card.width / hero.width
-        flight.toRadius = 10 / flight.toScale
-        flight.restart()
+        if (fly(hero, null, card, wall)) detail.heroAway = true
     }
     function closeArtistFlight() {
         const page = artistLoader.item, grid = artistsLoader.item
         if (!page || !grid) return
         const hero = page.heroAvatar
         const cell = grid.avatarOf(root.lastArtist)
-        if (!hero || !cell) return
-        const from = hero.mapToItem(root.contentItem, 0, 0)
-        const to = cell.mapToItem(root.contentItem, 0, 0)
-        flying.source = hero.source
-        flying.radius = hero.radius
-        flying.width = hero.width
-        flying.height = hero.height
-        flying.x = from.x
-        flying.y = from.y
-        flying.scale = 1
-        flight.landing = cell
-        cell.opacity = 0
-        flying.visible = true
-        flight.toX = to.x
-        flight.toY = to.y
-        flight.toScale = cell.width / hero.width
-        flight.restart()
+        if (hero && cell) fly(hero, null, cell, artistsLoader)
     }
     function closeAlbum() { if (detailKind === "album") back() }
 
@@ -391,17 +499,44 @@ Window {
         z: 10
     }
 
-    // ======================= 悬浮播放岛 =======================
+    // ======================= 播放列表抽屉 =======================
+    QueuePanel {
+        id: queuePanel
+        z: 19
+        width: Math.min(400, Math.max(320, root.width * 0.34))
+        x: root.width - width
+        // 从窗口按钮下方开始,不挡最小化 / 关闭
+        y: 46
+        height: island.y - y
+        shown: false
+        onCloseRequested: shown = false
+    }
+
+    // ======================= 底部播放条 =======================
     PlayIsland {
         id: island
-        width: Math.min(920, root.width - Theme.navWidth - 96)
-        x: Theme.navWidth + (root.width - Theme.navWidth - width) / 2
-        y: root.height - height - 24
+        width: root.width
+        x: 0
+        y: root.height - height
         z: 20
+        queueOpen: queuePanel.shown
+        window: root.contentItem
+        onQueueClicked: queuePanel.shown = !queuePanel.shown
         // 沉浸页有自己的控制区,岛下沉隐去
-        opacity: nowPlaying.shown || (library.albumCount === 0 && !player.hasTrack) ? 0 : 1
+        readonly property bool away: nowPlaying.shown || (library.albumCount === 0 && !player.hasTrack)
+        opacity: away ? 0 : 1
         visible: opacity > 0
-        Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+        // 进出场:淡出时下沉,回来时等沉浸页淡出一点后再从下方浮上来
+        Behavior on opacity { SequentialAnimation {
+            PauseAnimation { duration: island.away ? 0 : 140 }
+            NumberAnimation { duration: island.away ? 180 : 420; easing.type: Easing.OutCubic } } }
+        transform: Translate {
+            id: islandShift
+            y: island.away ? island.height + 12 : 0
+            Behavior on y { SequentialAnimation {
+                PauseAnimation { duration: island.away ? 0 : 140 }
+                NumberAnimation { duration: island.away ? 200 : 620; easing.type: Easing.OutQuint } } }
+        }
         onChainClicked: chain.shown = !chain.shown
         onExpandRequested: nowPlaying.shown = true
     }
@@ -473,6 +608,11 @@ Window {
     TrackMenu {
         id: trackMenu
         z: 45
+        onInfoRequested: (id) => trackInfo.open(id)
+    }
+    TrackInfo {
+        id: trackInfo
+        z: 44
     }
 
     Toast {
@@ -506,7 +646,7 @@ Window {
         enabled: root.view !== "tools"
         onDropped: (d) => {
             if (!d.hasUrls) return
-            // 加密音频交给解密工具,其余 (文件夹 / 普通音频) 加入曲库
+            // 文件夹 = 加入音乐文件夹;普通音频 = 单独加入曲库;加密音频 = 转换后加入曲库
             const enc = [], other = []
             for (let i = 0; i < d.urls.length; ++i) {
                 const u = String(d.urls[i])
@@ -539,13 +679,28 @@ Window {
     Shortcut { sequence: "Ctrl+Right"; onActivated: player.next() }
     Shortcut { sequence: "Ctrl+Left"; onActivated: player.previous() }
     Shortcut { sequence: "Alt+Left"; onActivated: root.back() }
+    // 方向键:快进快退 5 秒;Ctrl+上下:音量 ±5%;键盘多媒体键 (窗口在前台时)
+    Shortcut { sequence: "Right"; enabled: !root.typing; onActivated: player.seekBy(5) }
+    Shortcut { sequence: "Left"; enabled: !root.typing; onActivated: player.seekBy(-5) }
+    Shortcut { sequence: "Ctrl+Up"; onActivated: player.changeVolume(0.05) }
+    Shortcut { sequence: "Ctrl+Down"; onActivated: player.changeVolume(-0.05) }
+    Shortcut { sequence: "Media Play"; onActivated: player.toggle() }
+    Shortcut { sequence: "Toggle Media Play/Pause"; onActivated: player.toggle() }
+    Shortcut { sequence: "Media Next"; onActivated: player.next() }
+    Shortcut { sequence: "Media Previous"; onActivated: player.previous() }
+    Connections {
+        target: player
+        function onSleepFired() { Nav.toast("check", qsTr("定时关闭:已暂停播放")) }
+    }
     Shortcut {
         sequence: "Escape"
         enabled: !root.typing
         onActivated: {
             if (trackMenu.shown) trackMenu.close()
+            else if (trackInfo.shown) trackInfo.close()
             else if (libraryPanel.shown) libraryPanel.close()
             else if (chain.shown) chain.shown = false
+            else if (queuePanel.shown) queuePanel.shown = false
             else if (nowPlaying.shown) nowPlaying.shown = false
             else root.back()
         }
@@ -612,5 +767,51 @@ Window {
     function automationGo(sec) { root.go(String(sec)) }
     function automationOpenArtist(name) { root.openArtist(library.artistIndexOf(String(name))) }
     function automationOpenPlaylist(id) { root.openPlaylist(String(id)) }
+    function automationTrackInfo(show) { trackMenu.close(); if (show) trackInfo.open(player.trackId); else trackInfo.close() }
     function automationTrackMenu(x, y) { trackMenu.open(player.trackId, Number(x), Number(y), {}) }
+
+    // ======================= 帧率计 (Ctrl+Shift+P 开关) =======================
+    // 只统计真正出帧的时刻:静止时不出帧是正常的,滚动 / 播放时看 fps 与最慢一帧
+    Shortcut { sequence: "Ctrl+Shift+P"; onActivated: fpsMeter.visible = !fpsMeter.visible }
+    Rectangle {
+        id: fpsMeter
+        visible: false
+        z: 10000
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: 52
+        width: fpsText.implicitWidth + 20
+        height: 28
+        radius: 8
+        color: Qt.rgba(0, 0, 0, 0.7)
+        property int frames: 0
+        property real last: 0
+        property real worst: 0
+        property int fps: 0
+        property real worstShown: 0
+        Connections {
+            target: fpsMeter.visible ? root : null
+            function onFrameSwapped() {
+                const now = Date.now()
+                if (fpsMeter.last > 0) fpsMeter.worst = Math.max(fpsMeter.worst, now - fpsMeter.last)
+                fpsMeter.last = now
+                fpsMeter.frames++
+            }
+        }
+        Timer {
+            interval: 1000; repeat: true; running: fpsMeter.visible
+            onTriggered: {
+                fpsMeter.fps = fpsMeter.frames; fpsMeter.worstShown = fpsMeter.worst
+                fpsMeter.frames = 0; fpsMeter.worst = 0
+            }
+        }
+        Text {
+            id: fpsText
+            anchors.centerIn: parent
+            text: fpsMeter.fps + " fps · 最慢 " + Math.round(fpsMeter.worstShown) + " ms" + (Screen.refreshRate > 0 ? " · " + Math.round(Screen.refreshRate) + " Hz" : "")
+            color: "white"
+            font.family: Theme.fontFamily
+            font.pixelSize: 12
+        }
+    }
 }

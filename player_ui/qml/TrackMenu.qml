@@ -1,7 +1,8 @@
 import QtQuick
 import PlayerUi
 
-// 曲目右键菜单:下一首播放 / 加入队列 / 加入歌单 (二级) / 收藏 / 查看专辑 / 查看歌手 / 从歌单移除
+// 曲目右键菜单:播放 / 下一首播放 / 加入队列 / 加入歌单 (二级) / 收藏 / 查看专辑 / 查看歌手 /
+// 打开文件位置 / 复制歌名 / 复制文件路径 / 歌曲信息 / 从歌单移除
 Item {
     id: menu
     anchors.fill: parent
@@ -10,6 +11,10 @@ Item {
     property var ctx: ({})
     property bool shown: false
     property bool subShown: false
+    // 点击位置;面板位置随菜单实际高度绑定,菜单项变多时也不会超出窗口底部
+    property real reqX: 0
+    property real reqY: 0
+    signal infoRequested(real trackId)
 
     readonly property bool fav: playlists.revision >= 0 && trackId >= 0 && playlists.isFavorite(trackId)
 
@@ -18,8 +23,8 @@ Item {
         ctx = c || {}
         subShown = false
         rebuild()
-        panel.x = Math.max(8, Math.min(px, width - panel.width - 8))
-        panel.y = Math.max(8, Math.min(py, height - panel.implicitHeight - 8))
+        reqX = px
+        reqY = py
         shown = true
     }
     function close() { shown = false; subShown = false }
@@ -27,13 +32,19 @@ Item {
     property var items: []
     function rebuild() {
         const list = [
+            { key: "play", icon: "play", text: qsTr("播放") },
             { key: "next", icon: "next-up", text: qsTr("下一首播放") },
             { key: "queue", icon: "queue", text: qsTr("添加到播放队列") },
             { key: "playlist", icon: "playlist", text: qsTr("添加到歌单"), sub: true },
             { key: "fav", icon: menu.fav ? "heart-filled" : "heart", text: menu.fav ? qsTr("取消收藏") : qsTr("收藏") },
             { key: "sep" },
             { key: "album", icon: "album-open", text: qsTr("查看专辑") },
-            { key: "artist", icon: "artist", text: qsTr("查看歌手") }
+            { key: "artist", icon: "artist", text: qsTr("查看歌手") },
+            { key: "sep" },
+            { key: "reveal", icon: "folder-open", text: qsTr("打开文件位置") },
+            { key: "copyName", icon: "note", text: qsTr("复制歌名") },
+            { key: "copyPath", icon: "external", text: qsTr("复制文件路径") },
+            { key: "info", icon: "more", text: qsTr("歌曲信息") }
         ]
         if (ctx && ctx.playlistId)
             list.push({ key: "sep" }, { key: "remove", icon: "trash", text: qsTr("从歌单移除") })
@@ -41,12 +52,22 @@ Item {
     }
     function act(key) {
         const id = trackId
-        if (key === "next") { player.playNext(id); Nav.toast("next-up", qsTr("将在下一首播放")) }
+        if (key === "play") player.playTrack(id)
+        else if (key === "next") { player.playNext(id); Nav.toast("next-up", qsTr("将在下一首播放")) }
         else if (key === "queue") { player.enqueue([id]); Nav.toast("queue", qsTr("已添加到播放队列")) }
         else if (key === "fav") playlists.toggleFavorite(id)
         else if (key === "album") Nav.openAlbum(library.albumOfTrack(id))
         else if (key === "artist") Nav.openArtist(library.artistOfTrack(id))
         else if (key === "remove") playlists.removeTrack(ctx.playlistId, id)
+        else if (key === "reveal") {
+            if (!library.revealTrack(id)) Nav.toast("folder", qsTr("找不到这首歌所在的文件夹"))
+        } else if (key === "copyName" || key === "copyPath") {
+            const t = library.trackInfo(id)
+            if (t.path !== undefined) {
+                library.copyToClipboard(key === "copyPath" ? t.path : (t.artist ? t.artist + " - " + t.title : t.title))
+                Nav.toast("check", key === "copyPath" ? qsTr("已复制文件路径") : qsTr("已复制歌名"))
+            }
+        } else if (key === "info") menu.infoRequested(id)
         close()
     }
     function addTo(pid, name) {
@@ -67,6 +88,8 @@ Item {
     Rectangle {
         id: panel
         width: 196
+        x: Math.max(8, Math.min(menu.reqX, menu.width - width - 8))
+        y: Math.max(8, Math.min(menu.reqY, menu.height - height - 8))
         implicitHeight: col.implicitHeight + 12
         height: implicitHeight
         radius: 14

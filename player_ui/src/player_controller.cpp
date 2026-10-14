@@ -1,5 +1,7 @@
 #include "player_controller.h"
 
+#include <QCoreApplication>
+#include <QGuiApplication>
 #include <QPointer>
 #include <QSettings>
 #include <QThreadPool>
@@ -11,13 +13,16 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QStandardPaths>
 #include <QRegularExpression>
 #include <QTimer>
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 #include <random>
 #include "audio_tag_parser.hpp"
 #include "platform_io.hpp"
+#include "lyric_manager.hpp"
 
 #include "cover_provider.h"
 
@@ -48,9 +53,23 @@ PlayerController::PlayerController(LibraryService* lib, QObject* parent) : QObje
     gapless_ = s.value("player/gapless", true).toBool();
     rgMode_ = std::clamp(s.value("player/replayGain", 0).toInt(), 0, 2);
     device_ = s.value("audio/device").toString();
-    timer_.setInterval(16); // 约 60Hz 推送进度与频谱
+    // 播放期间的节拍器:窗口可见时只负责请求下一帧,真正的更新在窗口每帧的 afterAnimating 里做;
+    // 窗口最小化 / 不可见时退回到由它直接驱动
+    timer_.setInterval(16);
     timer_.setTimerType(Qt::PreciseTimer);
-    connect(&timer_, &QTimer::timeout, this, &PlayerController::tick);
+    connect(&timer_, &QTimer::timeout, this, &PlayerController::onFrameTimer);
+    frameClock_.start();
+
+    sleepTimer_.setInterval(1000);
+    connect(&sleepTimer_, &QTimer::timeout, this, [this]() {
+        if (sleepMinutes_ > 0 && QDateTime::currentMSecsSinceEpoch() >= sleepDeadline_) {
+            setSleepTimer(0);
+            if (playing_) toggle();
+            emit sleepFired();
+            return;
+        }
+        emit sleepChanged();
+    });
 
     fade_.setEasingCurve(QEasingCurve::OutCubic);
     connect(&fade_, &QVariantAnimation::valueChanged, this, [this](const QVariant& v) {
@@ -184,6 +203,16 @@ void PlayerController::playAlbum(int albumIndex, int startRow) {
 void PlayerController::setQueue(std::vector<uint64_t> ids, int start) {
     if (ids.empty()) return;
     start = std::clamp(start, 0, static_cast<int>(ids.size()) - 1);
+    // 点的是正在播放的同一份列表 (同一张专辑 / 歌单 / 歌手) 里的另一首:
+    // 只在现有队列里跳过去,不重建队列 (随机顺序、手动加的「下一首播放」、播放列表面板的位置都保留)
+    if (ids == context_ && !queue_.empty()) {
+        auto it = std::find(queue_.begin(), queue_.end(), ids[start]);
+        if (it != queue_.end()) {
+            openIndex(static_cast<int>(it - queue_.begin()), true);
+            return;
+        }
+    }
+    context_ = ids;
     unshuffled_ = ids;
     if (shuffle_) {
         // 点选的曲目先播,其余随机
@@ -242,6 +271,23 @@ void PlayerController::removeFromQueue(int index) {
     auto it = std::find(unshuffled_.begin(), unshuffled_.end(), id);
     if (it != unshuffled_.end()) unshuffled_.erase(it);
     if (index < queueIndex_) --queueIndex_;
+    queueContentChanged();
+    emit queueIndexChanged();
+}
+
+void PlayerController::clearQueue() {
+    if (queue_.size() <= 1) return;
+    if (queueIndex_ < 0 || queueIndex_ >= static_cast<int>(queue_.size())) {
+        queue_.clear();
+        unshuffled_.clear();
+        queueIndex_ = -1;
+    } else {
+        const uint64_t cur = queue_[queueIndex_];
+        context_.clear();
+        queue_.assign(1, cur);
+        unshuffled_.clear();
+        queueIndex_ = 0;
+    }
     queueContentChanged();
     emit queueIndexChanged();
 }
@@ -372,7 +418,7 @@ void PlayerController::scheduleGapless() {
 void PlayerController::queueGapless() {
     if (!engine_ || !current_ || !snap_ || queue_.empty()) return;
     int idx = -1;
-    if (gapless_) {
+    if (gapless_ && sleepMinutes_ != -1) {
         if (repeat_ == 2) idx = queueIndex_;
         else if (queueIndex_ + 1 < static_cast<int>(queue_.size())) idx = queueIndex_ + 1;
         else if (repeat_ == 1) idx = 0;
@@ -416,7 +462,36 @@ void PlayerController::setRepeatMode(int m) {
     scheduleGapless();
 }
 
+void PlayerController::setSleepTimer(int minutes) {
+    minutes = std::max(-1, minutes);
+    sleepMinutes_ = minutes;
+    if (minutes > 0) {
+        sleepDeadline_ = QDateTime::currentMSecsSinceEpoch() + qint64(minutes) * 60000;
+        sleepTimer_.start();
+    } else {
+        sleepDeadline_ = 0;
+        sleepTimer_.stop();
+    }
+    emit sleepChanged();
+    // 「播完本首」时不预加载下一首,让当前曲目自然结束并触发 onEnded
+    scheduleGapless();
+}
+
+int PlayerController::sleepRemaining() const {
+    if (sleepMinutes_ <= 0) return 0;
+    return static_cast<int>(std::max<qint64>(0, (sleepDeadline_ - QDateTime::currentMSecsSinceEpoch() + 999) / 1000));
+}
+
 void PlayerController::onEnded() {
+    if (sleepMinutes_ == -1) {
+        // 播完本首后停止:停在下一首的开头,按播放即可继续
+        setSleepTimer(0);
+        if (queueIndex_ + 1 < static_cast<int>(queue_.size())) openIndex(queueIndex_ + 1, false);
+        else if (engine_) engine_->Stop();
+        setPlaying(false);
+        emit sleepFired();
+        return;
+    }
     if (repeat_ == 2 && current_) {
         openIndex(queueIndex_, true);
         return;
@@ -561,8 +636,36 @@ void PlayerController::seek(double seconds) {
     updateLyricIndex();
 }
 
+void PlayerController::attachWindow(QQuickWindow* window) {
+    window_ = window;
+    if (!window) return;
+    connect(window, &QQuickWindow::afterAnimating, this, [this]() {
+        if (!timer_.isActive()) return;
+        tick();
+        // 前台播放时连续出帧,跟随显示器刷新率 (vsync 节流);后台时只按 16ms 节拍器出帧
+        if (window_ && QGuiApplication::applicationState() == Qt::ApplicationActive) window_->update();
+    });
+}
+
+void PlayerController::onFrameTimer() {
+    const bool frameDriven = window_ && window_->isExposed() && window_->visibility() != QWindow::Minimized;
+    // 帧驱动时只请求下一帧;若 100ms 内一帧都没出 (渲染被阻塞),直接更新,保证进度与歌词不停
+    if (frameDriven && lastTickMs_ >= 0 && frameClock_.elapsed() - lastTickMs_ < 100) {
+        window_->update();
+        return;
+    }
+    tick();
+    if (frameDriven) window_->update();
+}
+
 void PlayerController::tick() {
     if (!engine_) return;
+    // 距上一帧的真实间隔:所有平滑都按它换算,60 / 120 / 144Hz 下速度一致
+    const qint64 nowMs = frameClock_.elapsed();
+    const double dt = lastTickMs_ < 0 ? 1.0 / 60.0 : std::clamp((nowMs - lastTickMs_) / 1000.0, 0.001, 0.1);
+    lastTickMs_ = nowMs;
+    const double frames = dt * 60.0;
+    auto follow = [frames](double k) { return 1.0 - std::pow(1.0 - k, frames); };
     double p = engine_->GetPositionSeconds();
     if (std::abs(p - position_) > 1e-4) {
         position_ = p;
@@ -571,7 +674,7 @@ void PlayerController::tick() {
     bool isPlaying = engine_->GetState() == PlaybackState::Playing;
     if (playing_ != isPlaying && !isPlaying && engine_->GetState() == PlaybackState::Stopped) setPlaying(false);
 
-    std::vector<float> bars = engine_->GetVisualizer().GetSpectrumBars();
+    std::vector<float> bars = engine_->GetVisualizer().GetSpectrumBars(static_cast<float>(dt));
     double energy = 0, low = 0;
     for (size_t i = 0; i < bars.size() && i < 32; ++i) {
         spectrum_[static_cast<int>(i)] = bars[i];
@@ -589,13 +692,13 @@ void PlayerController::tick() {
     pulse_[0] = band(2, 8);
     pulse_[1] = band(10, 18);
     pulse_[2] = band(18, 28);
-    bass_ = low > bass_ ? bass_ * 0.4 + low * 0.6 : bass_ * 0.9 + low * 0.1;
+    bass_ += (low - bass_) * follow(low > bass_ ? 0.6 : 0.1);
     // 呼吸:低音包络起得稳 (约 120ms)、落得更慢 (约 400ms),避免逐帧抖动;
     // 底波让安静段落也有生命感;播放 / 暂停时整体在约 0.6s 内浮现或沉下,而不是跳变
     const double target = playing_ ? std::min(1.0, bass_ * 1.25) : 0.0;
-    breathEnv_ += (target - breathEnv_) * (target > breathEnv_ ? 0.12 : 0.04);
-    breathPresence_ += ((playing_ ? 1.0 : 0.0) - breathPresence_) * 0.045;
-    if (playing_) breathPhase_ = std::fmod(breathPhase_ + 0.016 / 5.2, 1.0);
+    breathEnv_ += (target - breathEnv_) * follow(target > breathEnv_ ? 0.12 : 0.04);
+    breathPresence_ += ((playing_ ? 1.0 : 0.0) - breathPresence_) * follow(0.045);
+    if (playing_) breathPhase_ = std::fmod(breathPhase_ + dt / 5.2, 1.0);
     breath_ = breathPresence_ * (0.30 + 0.12 * std::sin(breathPhase_ * 6.283185307)) + breathEnv_ * 0.58;
     emit spectrumChanged();
     updateLyricIndex();
@@ -716,13 +819,11 @@ QString PlayerController::chainSummary() const {
     return parts.join(QStringLiteral("  ·  "));
 }
 
-// 歌词来源:同名 .lrc (自动识别 UTF-8 / UTF-16 / GBK) 与文件内嵌歌词 (USLT / LYRICS / ©lyr),优先级可在设置中调整
-// 支持一行多时间戳与 [offset:] 标签;没有时间戳的纯文本歌词按静态歌词显示
+// 歌词来源:同名 .lrc (自动识别 UTF-8 / UTF-16 / GBK) 与文件内嵌歌词 (USLT / LYRICS / ©lyr),优先级可在设置中调整;
+// 两者都没有时,在后台到本机酷狗歌词库 (.krc) 里按歌名 / 歌手严格匹配
 void PlayerController::loadLyrics() {
-    lyrics_.clear();
-    lyricTimes_.clear();
-    lyricIndex_ = -1;
-    lyricsSynced_ = false;
+    ++lyricsGen_;
+    QString text;
     if (current_) {
         auto readLrc = [this]() -> QString {
             QFileInfo fi(Q(current_->file_path));
@@ -746,16 +847,68 @@ void PlayerController::loadLyrics() {
             return QString::fromStdWString(m.lyrics);
         };
         const bool embeddedFirst = QSettings().value("player/lyricsSource", 0).toInt() == 1;
-        QString text = embeddedFirst ? readEmbedded() : readLrc();
+        text = embeddedFirst ? readEmbedded() : readLrc();
         if (text.trimmed().isEmpty()) text = embeddedFirst ? readLrc() : readEmbedded();
+        if (text.trimmed().isEmpty()) loadKugouLyrics();
+    }
+    applyLyricsText(text, true);
+}
 
+// 酷狗歌词:先查本地酷狗歌词库 (.krc),没有再请求酷狗在线接口 (设置 player/onlineLyrics,默认开),
+// 在线拉到的 KRC 缓存到应用数据目录 lyrics/,下次直接从本地命中
+void PlayerController::loadKugouLyrics() {
+    const quint64 gen = lyricsGen_;
+    const std::wstring path = current_->file_path, title = current_->title, artist = current_->artist;
+    const uint32_t durationMs = current_->duration_ms;
+    const bool online = QSettings().value("player/onlineLyrics", true).toBool();
+    const std::wstring cacheDir =
+        (QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + QStringLiteral("/lyrics")).toStdWString();
+    QPointer<PlayerController> self(this);
+    QThreadPool::globalInstance()->start([self, gen, path, title, artist, durationMs, online, cacheDir]() {
+        // 首次使用时探测歌词库目录,之后常驻;内部自带锁,可跨线程复用
+        static lyric_core::LyricManager kugou;
+        static std::once_flag cacheOnce;
+        std::call_once(cacheOnce, [&]() { kugou.SetCacheDirectory(cacheDir); });
+        lyric_core::ParsedLyrics parsed;
+        bool ok = kugou.LoadLyricsForTrack(path, title, artist, parsed);
+        if (!ok && online) ok = kugou.FetchOnline(path, title, artist, durationMs, parsed);
+        if (!ok) return;
+        const QString lrc = QString::fromStdString(parsed.ToStandardLrc());
+        // 酷狗歌词带每句的演唱时长,用来让当前句的填充与演唱同步 (键与 LRC 时间戳同为 10ms 精度)
+        // 外文歌的中文翻译来自 KRC 的 [language:] 标签,同样按时间戳挂到对应行
+        QHash<qint64, qint64> durations;
+        QHash<qint64, QString> translations;
+        for (const auto& l : parsed.lines) {
+            durations.insert(l.start_ms / 10 * 10, l.duration_ms);
+            if (!l.translation.empty()) translations.insert(l.start_ms / 10 * 10, QString::fromStdWString(l.translation));
+        }
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, lrc, durations, translations]() {
+            // 期间切了歌或重新加载过,结果作废
+            if (self && self->lyricsGen_ == gen) {
+                self->applyLyricsText(lrc, false, durations, translations);
+                self->updateLyricIndex();
+            }
+        }, Qt::QueuedConnection);
+    });
+}
+
+// 解析 LRC 文本:支持一行多时间戳与 [offset:] 标签;没有时间戳的纯文本歌词按静态歌词显示。
+// wholeFileTimeline:歌词时间轴按整个音频文件计 (CUE 分轨需换算到分轨起点);酷狗歌词按单曲计,不换算
+void PlayerController::applyLyricsText(const QString& text, bool wholeFileTimeline, const QHash<qint64, qint64>& durations,
+                                       const QHash<qint64, QString>& translations) {
+    lyrics_.clear();
+    lyricTimes_.clear();
+    lyricIndex_ = -1;
+    lyricsSynced_ = false;
+    if (current_ && !text.trimmed().isEmpty()) {
         static const QRegularExpression tagRe(QStringLiteral("\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?\\]"));
         static const QRegularExpression offRe(QStringLiteral("\\[offset:\\s*([+-]?\\d+)\\]"), QRegularExpression::CaseInsensitiveOption);
         static const QRegularExpression metaRe(QStringLiteral("^\\[[a-zA-Z]+:.*\\]$"));
         qint64 offset = 0;
         auto om = offRe.match(text);
         if (om.hasMatch()) offset = om.captured(1).toLongLong();
-        std::vector<std::pair<qint64, QString>> lines;
+        struct Line { qint64 time; QString text; qint64 duration; QString translation; };
+        std::vector<Line> lines;
         QStringList plain;
         for (const QString& line : text.split(QRegularExpression(QStringLiteral("[\\r\\n]+")))) {
             std::vector<qint64> times;
@@ -765,7 +918,7 @@ void PlayerController::loadLyrics() {
                 QString frac = m.captured(3);
                 qint64 ms = m.captured(1).toLongLong() * 60000 + m.captured(2).toLongLong() * 1000;
                 if (!frac.isEmpty()) ms += frac.length() == 1 ? frac.toLongLong() * 100 : frac.length() == 2 ? frac.toLongLong() * 10 : frac.toLongLong();
-                times.push_back(ms - offset);
+                times.push_back(ms);
                 pos = m.capturedEnd();
             }
             QString body = line.mid(pos).trimmed();
@@ -774,19 +927,36 @@ void PlayerController::loadLyrics() {
                 if (!metaRe.match(body).hasMatch()) plain << body;
                 continue;
             }
-            for (qint64 t : times) lines.emplace_back(t, body);
+            for (qint64 t : times) lines.push_back({t - offset, body, durations.value(t, -1), translations.value(t)});
         }
         if (!lines.empty()) {
             lyricsSynced_ = true;
-            std::stable_sort(lines.begin(), lines.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            std::stable_sort(lines.begin(), lines.end(), [](const Line& a, const Line& b) { return a.time < b.time; });
+            // 双语 LRC:与上一句时间戳相同的第二行是翻译,并到上一句里而不是单独占一行
+            std::vector<Line> merged;
+            for (Line& l : lines) {
+                if (!merged.empty() && merged.back().time == l.time && merged.back().translation.isEmpty() && merged.back().text != l.text) {
+                    merged.back().translation = l.text;
+                    continue;
+                }
+                merged.push_back(std::move(l));
+            }
+            lines.swap(merged);
             // CUE 分轨:歌词时间轴通常按整轨计,换算到分轨起点
-            qint64 shift = current_->is_cue_track ? static_cast<qint64>(current_->cue_start_ms) : 0;
-            for (const auto& l : lines) {
-                if (l.first - shift < 0 && shift > 0) continue;
-                lyricTimes_.push_back(l.first - shift);
+            qint64 shift = wholeFileTimeline && current_->is_cue_track ? static_cast<qint64>(current_->cue_start_ms) : 0;
+            for (size_t i = 0; i < lines.size(); ++i) {
+                const Line& l = lines[i];
+                if (l.time - shift < 0 && shift > 0) continue;
+                lyricTimes_.push_back(l.time - shift);
                 QVariantMap m;
-                m["text"] = l.second;
-                m["time"] = static_cast<double>(l.first - shift) / 1000.0;
+                m["text"] = l.text;
+                m["time"] = static_cast<double>(l.time - shift) / 1000.0;
+                if (!l.translation.isEmpty()) m["translation"] = l.translation;
+                // 本句演唱时长 (秒):酷狗歌词自带;普通 LRC 按字数估算,且不超过到下一句的间隔
+                const qint64 gap = i + 1 < lines.size() ? lines[i + 1].time - l.time : 6000;
+                const qint64 guess = std::max<qint64>(1200, static_cast<qint64>(l.text.size()) * 260);
+                const qint64 dur = l.duration > 0 ? l.duration : guess;
+                m["duration"] = static_cast<double>(std::max<qint64>(200, std::min(dur, gap))) / 1000.0;
                 lyrics_.append(m);
             }
         } else {
@@ -800,6 +970,15 @@ void PlayerController::loadLyrics() {
     }
     emit lyricsChanged();
     emit lyricIndexChanged();
+}
+
+QString PlayerController::lyricAt(double seconds) const {
+    if (lyricTimes_.empty() || !(seconds >= 0)) return {};
+    const qint64 ms = static_cast<qint64>(seconds * 1000.0);
+    auto it = std::upper_bound(lyricTimes_.begin(), lyricTimes_.end(), ms);
+    const int idx = static_cast<int>(it - lyricTimes_.begin()) - 1;
+    if (idx < 0 || idx >= lyrics_.size()) return {};
+    return lyrics_.at(idx).toMap().value(QStringLiteral("text")).toString();
 }
 
 void PlayerController::updateLyricIndex() {

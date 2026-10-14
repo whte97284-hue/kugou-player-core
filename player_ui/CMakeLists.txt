@@ -10,6 +10,7 @@ qt_add_executable(KugouPlayer
     src/window_helper.h src/window_helper.cpp
     src/playlist_service.h src/playlist_service.cpp
     src/decrypt_service.h src/decrypt_service.cpp
+    src/folder_watcher.h src/folder_watcher.cpp
     src/settings_service.h src/settings_service.cpp
 )
 
@@ -50,6 +51,7 @@ qt_add_qml_module(KugouPlayer
         qml/PlayingBars.qml
         qml/SmoothScroll.qml
         qml/TrackMenu.qml
+        qml/TrackInfo.qml
         qml/Toast.qml
         qml/LetterRail.qml
         qml/SongsPage.qml
@@ -61,6 +63,8 @@ qt_add_qml_module(KugouPlayer
         qml/SearchPage.qml
         qml/ToolsPage.qml
         qml/CrossfadeCover.qml
+        qml/Backdrop.qml
+        qml/QueuePanel.qml
         qml/Capsule.qml
         qml/SettingsPage.qml
         qml/DecryptPrompt.qml
@@ -79,6 +83,9 @@ qt_add_shaders(KugouPlayer "shaders"
         shaders/glow.frag
         shaders/ring.frag
         shaders/tint.frag
+        shaders/wipe.frag
+        shaders/backdrop.frag
+        shaders/fade.frag
 )
 
 target_link_libraries(KugouPlayer PRIVATE player_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::QuickControls2 Qt6::Svg)

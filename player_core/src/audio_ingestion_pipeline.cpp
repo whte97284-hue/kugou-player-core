@@ -11,6 +11,7 @@
 #include <cwctype>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace {
 
@@ -216,25 +217,11 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
         policy = decrypt_policy_;
         indexPath = decrypt_index_path_;
     }
-    // 产物本身位于扫描目录内时会被当作普通文件扫描到,加密源这边就不再重复入库
-    std::vector<std::wstring> normInputs;
-    for (const auto& in : inputs) {
-        std::wstring n = Lower(in);
-        for (auto& ch : n) if (ch == L'\\') ch = L'/';
-        if (!n.empty() && n.back() != L'/') n += L'/';
-        normInputs.push_back(n);
-    }
-    auto insideInputs = [&](const std::wstring& path) {
-        std::wstring n = Lower(path);
-        for (auto& ch : n) if (ch == L'\\') ch = L'/';
-        for (const auto& in : normInputs)
-            if (n.compare(0, in.size(), in) == 0) return true;
-        return false;
-    };
     DecryptIndex decIndex;
     const bool useIndex = !indexPath.empty();
     if (useIndex) decIndex.Load(indexPath);
     std::atomic<size_t> decryptedCount{0};
+    std::atomic<bool> indexDirty{false};
     std::mutex pendingMutex;
     std::vector<EncryptedFileInfo> pending;
     // 增量缓存只保存封面偏移,因此仅在惰性封面模式下启用
@@ -349,6 +336,8 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
     std::vector<ScanCacheEntry> fresh(useCache ? total : 0);
     std::vector<uint8_t> freshValid(useCache ? total : 0, 0);
     std::mutex catalogMutex, progressMutex;
+    // 全部曲目先收集起来,去掉重复后再一次性入库 (解密产物恰好也在扫描目录里时,会被当作普通文件再扫到一次)
+    std::vector<TrackItem> collected;
     size_t progressDone = 0;
     auto progressFn = on_progress;
 
@@ -358,11 +347,12 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
         auto flush = [&]() {
             if (batch.empty()) return;
             std::lock_guard<std::mutex> lock(catalogMutex);
-            catalog.AddPreparedTracks(std::move(batch));
+            for (auto& t : batch) collected.push_back(std::move(t));
             batch.clear();
         };
         auto addTrack = [&](const std::wstring& path, const AudioMetadata& meta, const WorkItem& w) {
-            TrackItem t = MusicCatalog::BuildTrack(path, meta);
+            // 解密产物记下加密源:专辑归类、隐藏文件夹都按源文件所在目录判断
+            TrackItem t = MusicCatalog::BuildTrack(path, meta, path == w.path ? std::wstring() : w.path);
             if (!t.has_cover && !w.folder_cover.empty()) {
                 t.external_cover_path = w.folder_cover;
                 externalCovers.fetch_add(1);
@@ -433,7 +423,9 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
                     remember(idx, w, true, hit->meta, hit->target_path);
                 } else {
                     // 1) 产物索引  2) 旧版本按文件名放在产物目录的结果  3) Auto 模式现场解密
-                    std::wstring product = useIndex ? decIndex.Find(w.path, w.size, w.mtime) : L"";
+                    bool moved = false;
+                    std::wstring product = useIndex ? decIndex.Lookup(w.path, w.size, w.mtime, &moved) : L"";
+                    if (moved) indexDirty.store(true);
                     if (product.empty() && !targetDir.empty()) {
                         for (const wchar_t* e : {L".flac", L".mp3", L".ogg", L".m4a", L".wav"}) {
                             std::wstring c = JoinPath(targetDir, StemOf(w.path) + e);
@@ -448,17 +440,13 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
                         if (dr.ok) {
                             product = dr.output;
                             decryptedCount.fetch_add(1);
-                            if (useIndex) decIndex.Put(w.path, w.size, w.mtime, product);
+                            if (useIndex) decIndex.Put(w.path, w.size, w.mtime, product, DecryptIndex::Fingerprint(w.path, w.size));
                             msg = L"解密成功并持久化落盘";
                         } else {
                             msg = dr.message;
                         }
                     }
-                    if (!product.empty() && insideInputs(product)) {
-                        item.target_path = product;
-                        item.success = true;
-                        if (msg.empty()) msg = L"产物位于曲库目录内,按普通文件入库";
-                    } else if (!product.empty()) {
+                    if (!product.empty()) {
                         if (!countedMiss) cacheMisses.fetch_add(1);
                         AudioMetadata meta;
                         bool ok = AudioTagParser::ParseFile(product, meta, parseOpt);
@@ -552,7 +540,32 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
     for (size_t t = 0; t < numThreads; ++t) workers.emplace_back(worker);
     for (auto& th : workers) th.join();
 
-    // ---------------- 3. 汇总 ----------------
+    // ---------------- 3. 去重入库 ----------------
+    // 已作为某个加密源的产物入库的文件,不再以普通文件身份重复出现;同一路径同一起点只保留一首
+    {
+        auto norm = [](const std::wstring& p) {
+            std::wstring n = Lower(p);
+            for (auto& ch : n) if (ch == L'\\') ch = L'/';
+            return n;
+        };
+        std::unordered_set<std::wstring> products;
+        for (const auto& t : collected)
+            if (!t.source_path.empty()) products.insert(norm(t.file_path));
+        std::unordered_set<std::wstring> seen;
+        std::vector<TrackItem> unique;
+        unique.reserve(collected.size());
+        for (auto& t : collected) {
+            std::wstring key = norm(t.file_path);
+            if (t.source_path.empty() && products.count(key)) continue;
+            if (!seen.insert(key + L"|" + std::to_wstring(t.cue_start_ms)).second) continue;
+            unique.push_back(std::move(t));
+        }
+        collected.clear();
+        collected.shrink_to_fit();
+        catalog.AddPreparedTracks(std::move(unique));
+    }
+
+    // ---------------- 4. 汇总 ----------------
     std::vector<IngestionItemResult> out;
     out.reserve(total);
     for (auto& r : results) {
@@ -582,7 +595,7 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
     summary.decrypted_count = decryptedCount.load();
     std::sort(pending.begin(), pending.end(), [](const EncryptedFileInfo& a, const EncryptedFileInfo& b) { return a.path < b.path; });
     summary.encrypted_pending = std::move(pending);
-    if (useIndex && summary.decrypted_count > 0) decIndex.Save(indexPath);
+    if (useIndex && (summary.decrypted_count > 0 || indexDirty.load())) decIndex.Save(indexPath);
     summary.elapsed_seconds = std::chrono::duration<double>(Clock::now() - t0).count();
     {
         std::lock_guard<std::mutex> lock(pipeline_mutex_);

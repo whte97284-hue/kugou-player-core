@@ -198,6 +198,16 @@ Item {
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 8
+                // 工具页转换的歌默认不进曲库,需要时一键加入
+                Capsule {
+                    visible: decrypt.addableCount > 0 && !decrypt.busy
+                    accent: true
+                    text: qsTr("加入曲库 · %1").arg(decrypt.addableCount)
+                    onClicked: {
+                        const n = decrypt.addResultsToLibrary()
+                        if (n > 0) Nav.toast("check", qsTr("已加入曲库 %1 首").arg(n))
+                    }
+                }
                 Capsule {
                     visible: (page.st.done || 0) > 0 && !decrypt.busy
                     text: qsTr("清除已完成")
@@ -390,7 +400,7 @@ Item {
                                 width: parent.width * 0.3
                                 color: Theme.accent
                                 XAnimator on x {
-                                    running: row.status === 1
+                                    running: row.status === 1 && row.visible
                                     from: 8; to: act.width - flow.width - 8
                                     duration: 700
                                     loops: Animation.Infinite

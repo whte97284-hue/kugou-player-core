@@ -1,13 +1,18 @@
 #include "library_service.h"
 
+#include <QClipboard>
 #include <QCoreApplication>
 #include <QDate>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QDesktopServices>
+#include <QGuiApplication>
+#include <QProcess>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QTimer>
 #include <QUrl>
 #include <algorithm>
 #include <atomic>
@@ -15,6 +20,13 @@
 #include <map>
 
 #include "audio_ingestion_pipeline.hpp"
+#include "audio_tag_parser.hpp"
+#include "folder_watcher.h"
+#include "kugou_track_bridge.hpp"
+#ifdef Q_OS_WIN
+#include <malloc.h>
+#include <windows.h>
+#endif
 #include "pinyin_table.hpp"
 
 namespace {
@@ -110,6 +122,7 @@ public:
     std::unique_ptr<MusicCatalog> catalog = std::make_unique<MusicCatalog>();
     std::atomic<qint64> lastPost{0};
     QElapsedTimer clock;
+    QStringList hidden; // 本次聚合时要隐藏的文件夹
 };
 
 QString LibraryService::dataDir() {
@@ -124,6 +137,116 @@ LibraryService::LibraryService(QObject* parent) : QObject(parent) {
     snap_ = std::make_shared<LibrarySnapshot>();
     QSettings s;
     folders_ = s.value("library/folders").toStringList();
+    hiddenFolders_ = s.value("library/hiddenFolders").toStringList();
+    extraFiles_ = s.value("library/files").toStringList();
+    kugouFolders_ = s.value("library/kugouFolders").toStringList();
+    watch_ = s.value("library/watch", true).toBool();
+    // 文件夹有变化后等 3 秒:期间又有变化就重新计时,酷狗还在下载 (文件不断变大) 时不会去扫半截文件
+    watchDebounce_ = new QTimer(this);
+    watchDebounce_->setSingleShot(true);
+    watchDebounce_->setInterval(3000);
+    connect(watchDebounce_, &QTimer::timeout, this, &LibraryService::rescan);
+    watcher_ = new FolderWatcher(this);
+    connect(watcher_, &FolderWatcher::changed, watchDebounce_, qOverload<>(&QTimer::start));
+    updateWatcher();
+}
+
+QString LibraryService::decryptOutputDir() {
+    QString d = QSettings().value("decrypt/outputDir").toString();
+    if (d.isEmpty()) d = QDir::toNativeSeparators(QStandardPaths::writableLocation(QStandardPaths::MusicLocation) + "/Decrypted");
+    return d;
+}
+
+void LibraryService::setWatchFolders(bool on) {
+    if (on == watch_) return;
+    watch_ = on;
+    QSettings().setValue("library/watch", on);
+    updateWatcher();
+    emit watchFoldersChanged();
+}
+
+void LibraryService::updateWatcher() {
+    QStringList roots;
+    if (watch_)
+        for (const QString& f : folders_)
+            if (QFileInfo(f).isDir()) roots << f;
+    watcher_->setRoots(roots);
+}
+
+int LibraryService::addFiles(const QStringList& paths) {
+    int added = 0;
+    for (const QString& p : paths) {
+        QString n = QDir::toNativeSeparators(QDir::cleanPath(p));
+        if (n.isEmpty() || !QFileInfo(n).isFile()) continue;
+        if (extraFiles_.contains(n, Qt::CaseInsensitive)) continue;
+        extraFiles_.append(n);
+        ++added;
+    }
+    if (added) {
+        saveFolders();
+        rescan();
+    }
+    return added;
+}
+
+void LibraryService::clearExtraFiles() {
+    if (extraFiles_.isEmpty()) return;
+    extraFiles_.clear();
+    saveFolders();
+    if (folders_.isEmpty()) finishScan(std::make_shared<LibrarySnapshot>(), IngestionSummary{});
+    else rescan();
+}
+
+QStringList LibraryService::kugouCandidates() const {
+    QStringList all;
+    for (const std::wstring& d : lyric_core::KuGouTrackBridge::DiscoverKuGouMusicDirectories())
+        all << QDir::toNativeSeparators(QDir::cleanPath(Q(d)));
+    auto norm = [](const QString& p) { return QDir::fromNativeSeparators(p).toLower(); };
+    const QStringList dismissed = QSettings().value("library/kugouDismissed").toStringList();
+    QStringList out;
+    for (const QString& c : all) {
+        const QString nc = norm(c);
+        // 有更具体的子目录 (KuGou\KugouMusic) 时不列父目录,避免把缓存、歌词目录也扫进来
+        bool hasChild = false;
+        for (const QString& o : all)
+            if (norm(o).startsWith(nc + "/")) hasChild = true;
+        if (hasChild) continue;
+        bool covered = false;
+        for (const QString& f : folders_) {
+            const QString nf = norm(f);
+            if (nc == nf || nc.startsWith(nf + "/")) covered = true;
+        }
+        if (covered || dismissed.contains(c, Qt::CaseInsensitive) || out.contains(c, Qt::CaseInsensitive)) continue;
+        out << c;
+    }
+    return out;
+}
+
+int LibraryService::addKugouFolders(const QStringList& paths) {
+    for (const QString& p : paths)
+        if (!kugouFolders_.contains(p, Qt::CaseInsensitive)) kugouFolders_ << p;
+    QSettings().setValue("library/kugouFolders", kugouFolders_);
+    QVariantList urls;
+    for (const QString& p : paths) urls << p;
+    return addFolderUrls(urls);
+}
+
+void LibraryService::dismissKugouCandidates(const QStringList& paths) {
+    QSettings s;
+    QStringList d = s.value("library/kugouDismissed").toStringList();
+    for (const QString& p : paths)
+        if (!d.contains(p, Qt::CaseInsensitive)) d << p;
+    s.setValue("library/kugouDismissed", d);
+}
+
+bool LibraryService::isKugouFolder(const QString& path) const {
+    if (kugouFolders_.contains(path, Qt::CaseInsensitive)) return true;
+    // 手动加入的酷狗目录也认:路径里有一级目录就叫 KuGou / KugouMusic / KuGou8
+    for (const QString& part : QDir::fromNativeSeparators(path).split('/', Qt::SkipEmptyParts)) {
+        const QString l = part.toLower();
+        if (l == QLatin1String("kugou") || l == QLatin1String("kugoumusic") || l == QLatin1String("kugou8")) return true;
+    }
+    return false;
 }
 
 LibraryService::~LibraryService() {
@@ -134,7 +257,7 @@ LibraryService::~LibraryService() {
 
 LibraryService* LibraryService::instance() { return g_instance; }
 
-int LibraryService::trackCount() const { return static_cast<int>(snapshot()->catalog.GetAllTracks().size()); }
+int LibraryService::trackCount() const { return static_cast<int>(snapshot()->songs.size()); } // 不含隐藏文件夹
 int LibraryService::albumCount() const { return static_cast<int>(snapshot()->albums.size()); }
 
 std::shared_ptr<const LibrarySnapshot> LibraryService::snapshot() const {
@@ -144,7 +267,19 @@ std::shared_ptr<const LibrarySnapshot> LibraryService::snapshot() const {
 
 void LibraryService::saveFolders() {
     QSettings().setValue("library/folders", folders_);
+    QSettings().setValue("library/hiddenFolders", hiddenFolders_);
+    QSettings().setValue("library/files", extraFiles_);
+    updateWatcher();
     emit foldersChanged();
+}
+
+void LibraryService::setFolderHidden(const QString& path, bool hidden) {
+    if (!folders_.contains(path) || hiddenFolders_.contains(path) == hidden) return;
+    if (hidden) hiddenFolders_.append(path);
+    else hiddenFolders_.removeOne(path);
+    saveFolders();
+    // 增量扫描几乎全部命中缓存,只是按新的隐藏列表重新聚合专辑 / 歌手 / 歌曲
+    rescan();
 }
 
 void LibraryService::addFolder(const QString& path) {
@@ -153,13 +288,17 @@ void LibraryService::addFolder(const QString& path) {
 
 int LibraryService::addFolderUrls(const QVariantList& urls) {
     int added = 0;
+    QStringList files;
     for (const QVariant& v : urls) {
         QUrl u = v.toUrl();
         QString local = u.isLocalFile() ? u.toLocalFile() : v.toString();
         if (local.isEmpty()) continue;
         QFileInfo fi(local);
-        // 拖进来的是文件:取其所在文件夹
-        if (fi.exists() && !fi.isDir()) fi = QFileInfo(fi.absolutePath());
+        // 拖进来的是单个音频文件:只加这一首,不把整个所在文件夹都加进来
+        if (fi.isFile()) {
+            if (AudioTagParser::IsSupportedExtension(("." + fi.suffix().toLower()).toStdWString())) files << fi.absoluteFilePath();
+            continue;
+        }
         if (!fi.isDir()) continue;
         QString p = QDir::toNativeSeparators(QDir::cleanPath(fi.absoluteFilePath()));
         // 已被某个父文件夹覆盖的子文件夹不重复添加;新加的父文件夹吸收已有的子文件夹
@@ -181,16 +320,18 @@ int LibraryService::addFolderUrls(const QVariantList& urls) {
         saveFolders();
         rescan();
     }
+    if (!files.isEmpty()) added += addFiles(files);
     return added;
 }
 
 void LibraryService::removeFolder(const QString& path) {
     if (!folders_.removeOne(path)) return;
+    hiddenFolders_.removeOne(path);
     saveFolders();
     if (scanning_) {
         rescanPending_ = true;
         cancelScan();
-    } else if (folders_.isEmpty()) {
+    } else if (folders_.isEmpty() && extraFiles_.isEmpty()) {
         // 最后一个文件夹被移除:清空曲库
         finishScan(std::make_shared<LibrarySnapshot>(), IngestionSummary{});
     } else {
@@ -199,7 +340,7 @@ void LibraryService::removeFolder(const QString& path) {
 }
 
 void LibraryService::rescan() {
-    if (folders_.isEmpty()) return;
+    if (folders_.isEmpty() && extraFiles_.isEmpty()) return;
     if (scanning_) {
         rescanPending_ = true;
         return;
@@ -226,11 +367,17 @@ void LibraryService::startScan() {
     job->pipeline.SetLegacyCodePage(static_cast<unsigned>(st.value("library/codePage", 936).toInt()));
     job->pipeline.SetReadId3v1(st.value("library/readId3v1", true).toBool());
     job->pipeline.SetScanCacheFile((dataDir + "/scan.cache").toStdWString());
-    job->pipeline.SetTargetLibraryDir((dataDir + "/decoded").toStdWString());
-    // 加密源:默认只收集,由界面询问后再解密;产物索引让已解密的文件下次直接入库
-    job->pipeline.SetDecryptPolicy(autoDecrypt_ ? DecryptPolicy::Auto : DecryptPolicy::Ask);
+    // 加密源:扫描只收集,是否转换由 DecryptService 按「询问 / 自动 / 不转换」决定 (唯一的开关);
+    // 已转换过的按解密记录 (路径或内容指纹) 直接入库。旧版本扫描时自动解密到 数据目录\decoded,
+    // 那里还有文件时继续按文件名认领,新的转换一律写到转换服务的输出目录
+    const QString legacy = dataDir + "/decoded";
+    job->pipeline.SetTargetLibraryDir(QDir(legacy).exists() ? legacy.toStdWString() : std::wstring());
+    job->pipeline.SetDecryptPolicy(DecryptPolicy::Ask);
     job->pipeline.SetDecryptIndexFile((dataDir + "/decrypt.index").toStdWString());
     for (const QString& f : folders_) job->pipeline.AddInputPath(f.toStdWString());
+    for (const QString& f : extraFiles_)
+        if (QFileInfo(f).isFile()) job->pipeline.AddInputPath(f.toStdWString());
+    job->hidden = hiddenFolders_;
     job->clock.start();
 
     scanning_ = true;
@@ -264,7 +411,7 @@ void LibraryService::startScan() {
         },
         [this, job](const IngestionSummary& sum) {
             // 专辑聚合同样在后台线程完成,界面线程只做指针交换
-            auto snap = BuildAlbums(std::move(job->catalog));
+            auto snap = BuildAlbums(std::move(job->catalog), job->hidden);
             QMetaObject::invokeMethod(this, [this, snap, sum]() { finishScan(snap, sum); }, Qt::QueuedConnection);
         });
 }
@@ -299,7 +446,7 @@ void LibraryService::finishScan(std::shared_ptr<LibrarySnapshot> snap, const Ing
         {"cancelled", sum.cancelled},
     };
     if (sum.cancelled) status_ = tr("已取消扫描");
-    else if (folders_.isEmpty()) status_ = tr("曲库已清空");
+    else if (folders_.isEmpty() && extraFiles_.isEmpty()) status_ = tr("曲库已清空");
     else
         status_ = tr("%1 首 · %2 张专辑 · %3 秒%4")
                       .arg(tracks)
@@ -314,21 +461,51 @@ void LibraryService::finishScan(std::shared_ptr<LibrarySnapshot> snap, const Ing
     QMetaObject::invokeMethod(this, [this]() {
         if (scanning_) return;
         job_.reset();
+        ReleaseFreeHeap();
         if (rescanPending_) {
             rescanPending_ = false;
-            if (folders_.isEmpty()) finishScan(std::make_shared<LibrarySnapshot>(), IngestionSummary{});
+            if (folders_.isEmpty() && extraFiles_.isEmpty()) finishScan(std::make_shared<LibrarySnapshot>(), IngestionSummary{});
             else startScan();
         }
     }, Qt::QueuedConnection);
 }
 
-std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<MusicCatalog> catalog) {
+// 扫描时几十个线程同时解析标签,堆里会留下大量已释放的零碎块;扫描结束 (旧快照与流水线都已释放) 后
+// 把空闲块交还系统,载入大曲库后的常驻内存回到实际占用水平
+void LibraryService::ReleaseFreeHeap() {
+#ifdef Q_OS_WIN
+    _heapmin();
+    HeapCompact(GetProcessHeap(), 0);
+#endif
+}
+
+std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<MusicCatalog> catalog, const QStringList& hidden) {
     auto snap = std::make_shared<LibrarySnapshot>();
     snap->catalog = std::move(*catalog);
     const auto& tracks = snap->catalog.GetAllTracks();
+    // 隐藏文件夹:曲目仍留在 catalog 里 (收藏 / 歌单按曲目查找时还能找到),只是不进入下面的专辑、歌手、歌曲列表
+    std::vector<std::wstring> hiddenPrefixes;
+    for (const QString& h : hidden) {
+        std::wstring p = QDir::cleanPath(h).toLower().toStdWString();
+        for (wchar_t& c : p) if (c == L'\\') c = L'/';
+        if (!p.empty() && p.back() != L'/') p += L'/';
+        hiddenPrefixes.push_back(p);
+    }
+    auto isHidden = [&](const TrackItem& t) {
+        if (hiddenPrefixes.empty()) return false;
+        // 解密产物按它自己的落盘位置归类/隐藏 (转换输出目录就是用户可见的曲库)
+        const std::wstring& path = t.file_path;
+        std::wstring p;
+        p.reserve(path.size());
+        for (wchar_t c : path) p += c == L'\\' ? L'/' : static_cast<wchar_t>(towlower(c));
+        for (const auto& h : hiddenPrefixes)
+            if (p.compare(0, h.size(), h) == 0) return true;
+        return false;
+    };
 
     std::map<std::wstring, int> index;
     for (const auto& t : tracks) {
+        if (isHidden(t)) continue;
         std::wstring albumLower;
         for (wchar_t c : t.album) albumLower += static_cast<wchar_t>(towlower(c));
         std::wstring key = albumLower + L"\x1F" + AlbumDirKey(t.file_path);
@@ -434,7 +611,8 @@ std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<Mus
     // ---- 全部歌曲 (按标题拼音) ----
     std::vector<std::pair<QString, const TrackItem*>> keyed;
     keyed.reserve(tracks.size());
-    for (const auto& t : tracks) keyed.emplace_back(SortKeyOf(t.title), &t);
+    for (const auto& t : tracks)
+        if (!isHidden(t)) keyed.emplace_back(SortKeyOf(t.title), &t);
     std::sort(keyed.begin(), keyed.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
     snap->songs.reserve(keyed.size());
     snap->songLetters.reserve(keyed.size());
@@ -544,6 +722,60 @@ int LibraryService::albumOfTrack(double trackId) const {
     auto s = snapshot();
     auto it = s->trackAlbum.find(static_cast<uint64_t>(trackId));
     return it == s->trackAlbum.end() ? -1 : it->second;
+}
+
+QVariantMap LibraryService::trackInfo(double trackId) const {
+    QVariantMap m;
+    auto s = snapshot();
+    const TrackItem* t = s->catalog.FindById(static_cast<uint64_t>(trackId));
+    if (!t) return m;
+    const QString path = Q(t->file_path);
+    m["title"] = Q(t->title.empty() ? t->file_name : t->title);
+    m["artist"] = Q(t->artist.empty() ? t->album_artist : t->artist);
+    m["album"] = Q(t->album);
+    m["albumArtist"] = Q(t->album_artist);
+    m["year"] = Q(t->year);
+    m["genre"] = Q(t->genre);
+    m["trackNo"] = t->track_no;
+    m["discNo"] = t->disc_no;
+    m["path"] = QDir::toNativeSeparators(path);
+    m["folder"] = QDir::toNativeSeparators(QFileInfo(path).absolutePath());
+    m["format"] = Q(t->format);
+    m["codec"] = Q(t->codec);
+    m["duration"] = formatDuration(t->duration_ms);
+    m["bitrate"] = static_cast<int>(t->bitrate_kbps);
+    m["sampleRate"] = static_cast<int>(t->sample_rate);
+    m["bits"] = static_cast<int>(t->bits_per_sample);
+    m["channels"] = static_cast<int>(t->channels);
+    m["size"] = static_cast<double>(t->file_size);
+    m["quality"] = trackQuality(*t);
+    m["isCue"] = t->is_cue_track;
+    m["exists"] = QFileInfo::exists(path);
+    m["source"] = t->source_path.empty() ? QString() : QDir::toNativeSeparators(Q(t->source_path)); // 解密产物的加密源
+    return m;
+}
+
+bool LibraryService::revealTrack(double trackId) const {
+    auto s = snapshot();
+    const TrackItem* t = s->catalog.FindById(static_cast<uint64_t>(trackId));
+    if (!t) return false;
+    const QFileInfo fi(Q(t->file_path));
+    if (fi.exists()) {
+#ifdef Q_OS_WIN
+        // explorer 只认 /select,"路径" 这种写法;QProcess 默认会把整个参数加引号,路径带空格时会失效
+        QProcess p;
+        p.setProgram(QStringLiteral("explorer.exe"));
+        p.setNativeArguments(QStringLiteral("/select,\"%1\"").arg(QDir::toNativeSeparators(fi.absoluteFilePath())));
+        return p.startDetached();
+#endif
+    }
+    const QDir dir = fi.absoluteDir();
+    if (!dir.exists()) return false;
+    return QDesktopServices::openUrl(QUrl::fromLocalFile(dir.absolutePath()));
+}
+
+void LibraryService::copyToClipboard(const QString& text) const {
+    if (auto* cb = QGuiApplication::clipboard()) cb->setText(text);
 }
 
 int LibraryService::artistOfTrack(double trackId) const {

@@ -12,6 +12,9 @@ BorderImage {
     height: target ? target.height + spread * 2 : 0
     source: "qrc:/images/shadow.png"
     border { left: 64; top: 64; right: 64; bottom: 64 }
-    opacity: strength
+    // 跟随目标的透明度:共享元素飞行时目标被隐藏,投影不该单独留在原地
+    // 落地交接时目标是一下子显示出来的,投影短暂淡入,不会和封面一起「啪」地出现
+    opacity: strength * (target ? target.opacity : 1)
+    Behavior on opacity { NumberAnimation { duration: 280; easing.type: Easing.OutCubic } }
     smooth: true
 }

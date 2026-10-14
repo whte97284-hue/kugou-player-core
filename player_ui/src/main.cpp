@@ -66,7 +66,9 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
     steps->push_back({"04_menu", [window] {
         QMetaObject::invokeMethod(window, "automationTrackMenu", Q_ARG(QVariant, 760), Q_ARG(QVariant, 420));
     }, 900});
+    steps->push_back({"04b_track_info", [call] { call("automationTrackInfo", true); }, 900});
     steps->push_back({"05_artists", [window, call] {
+        QMetaObject::invokeMethod(window, "automationTrackInfo", Q_ARG(QVariant, false));
         QMetaObject::invokeMethod(window, "automationBack");
         call("automationGo", QStringLiteral("artists"));
     }, 1600});
@@ -180,6 +182,14 @@ int main(int argc, char* argv[]) {
     TrackCollectionModel playlistTracks(&library, &playlists);
     artistTracks.setSource("artist");
     playlistTracks.setSource("playlist");
+    TrackCollectionModel historyTracks(&library, &playlists);
+    historyTracks.setSource("history");
+    // 真正开始播放一首歌时记入历史 (恢复上次会话时停在暂停状态的那首,等按下播放才算)
+    auto recordPlay = [&player, &playlists]() {
+        if (player.playing() && player.trackId() >= 0) playlists.recordPlay(player.trackId());
+    };
+    QObject::connect(&player, &PlayerController::trackChanged, &playlists, recordPlay);
+    QObject::connect(&player, &PlayerController::playingChanged, &playlists, recordPlay);
     WindowHelper windowHelper;
 
     QQmlApplicationEngine engine;
@@ -197,6 +207,7 @@ int main(int argc, char* argv[]) {
     ctx->setContextProperty("songsModel", &songs);
     ctx->setContextProperty("artistTracks", &artistTracks);
     ctx->setContextProperty("playlistTracks", &playlistTracks);
+    ctx->setContextProperty("historyTracks", &historyTracks);
     ctx->setContextProperty("windowHelper", &windowHelper);
 
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, []() { QCoreApplication::exit(1); },
@@ -205,6 +216,13 @@ int main(int argc, char* argv[]) {
     engine.addImportPath(QStringLiteral("qrc:/qt/qml"));
     engine.load(QUrl(QStringLiteral("qrc:/qt/qml/PlayerUi/qml/Main.qml")));
     if (engine.rootObjects().isEmpty()) return 1;
+    player.attachWindow(qobject_cast<QQuickWindow*>(engine.rootObjects().value(0)));
+    // 全局多媒体键
+    app.installNativeEventFilter(&windowHelper);
+    windowHelper.registerMediaKeys(qobject_cast<QWindow*>(engine.rootObjects().value(0)));
+    QObject::connect(&windowHelper, &WindowHelper::mediaPlayPause, &player, &PlayerController::toggle);
+    QObject::connect(&windowHelper, &WindowHelper::mediaNext, &player, &PlayerController::next);
+    QObject::connect(&windowHelper, &WindowHelper::mediaPrevious, &player, &PlayerController::previous);
 
     if (!libraryArg.isEmpty()) library.addFolder(libraryArg);
     else library.rescan();

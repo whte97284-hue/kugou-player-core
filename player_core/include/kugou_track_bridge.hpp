@@ -5,6 +5,9 @@
 #include <memory>
 #include <cstdint>
 #include <functional>
+#include <mutex>
+#include <condition_variable>
+#include <unordered_set>
 #include "audio_tag_parser.hpp"
 #include "decryptor.hpp"
 #include "lyric_manager.hpp"
@@ -33,28 +36,44 @@ public:
     // 智能嗅探酷狗客户端当前配置的所有真实音乐下载/存储目录 (零硬编码)
     static std::vector<std::wstring> DiscoverKuGouMusicDirectories();
 
-    // 设置/覆盖解密掩码表路径 (默认自动嗅探 tools/kgm/kgm.mask)
+    // 设置/覆盖解密掩码表路径 (默认用解密器注册表的 tools 目录;找不到时退到程序所在目录的 tools\kgm\kgm.mask)
     void SetMaskPath(const std::wstring& maskPath);
 
-    // 设置解密后的高速缓存输出目录 (默认 output 或 player_core/cache)
+    // 设置解密产物缓存目录 (默认 %LOCALAPPDATA%\KugouPlayer\decrypted,非 Windows 为系统临时目录下的 kugou_player_decrypted)。
+    // 每首源文件对应其中一个子目录,目录名由源文件路径、大小和修改时间算出,源文件变了会重新解密
     void SetCacheOutputDir(const std::wstring& cacheDir);
+
+    // 与播放器共用的解密记录 (数据目录\decrypt.index)。设置后先查这里:播放器已经转换过的歌直接用它的产物,
+    // 桥接新解密的结果也记进去,两边不会各转一份
+    void SetDecryptIndexFile(const std::wstring& indexPath);
 
     // 扫描酷狗音乐库目录，枚举所有歌曲 (自动区分加密音轨与非加密音轨，自动关联歌词)
     std::vector<KuGouTrackEntry> ScanKuGouLibrary(const std::wstring& customDir = L"");
 
-    // 核心接口: 透明即时解析并准备可播音频 (若为加密音轨则触发 40ms 级极速解码并关联歌词)
-    // 线程安全，支持直接作为播放引擎的预处理钩子
+    // 准备可播音频:非加密文件直接返回原路径;加密文件先查缓存,没有再解密 (无损文件约需 1 秒)。
+    // 线程安全:不同歌曲可以并行解密,同一首歌同时请求时只解密一次。返回值与 outEntry.is_ready_to_play 一致
     bool PreparePlayableTrack(const std::wstring& sourcePath, KuGouTrackEntry& outEntry);
 
-    // 批量静默入库/解码 (支持进度回调，多线程高速并发)
+    // 批量解码,多线程并行 (threads 为 0 时按 CPU 核数,最多 4 个)。进度回调在工作线程里串行调用
     size_t BatchPrepare(const std::vector<std::wstring>& sourcePaths,
-                        std::function<void(size_t done, size_t total, const std::wstring& current)> onProgress = nullptr);
+                        std::function<void(size_t done, size_t total, const std::wstring& current)> onProgress = nullptr,
+                        unsigned threads = 0);
 
 private:
+    std::wstring CacheDir() const;
+    std::wstring CacheSlotFor(const std::wstring& sourcePath) const; // 这首歌的缓存子目录
+    void FillPlainEntry(const std::wstring& sourcePath, KuGouTrackEntry& e);
+    static std::wstring FindCachedOutput(const std::wstring& slotDir);
+
     std::wstring mask_path_;
     std::wstring cache_dir_;
-    LyricManager lyric_manager_;
-    std::mutex mutex_;
+    std::wstring index_path_;
+    std::wstring SharedProduct(const std::wstring& sourcePath) const; // 共用记录里的产物
+    void RecordProduct(const std::wstring& sourcePath, const std::wstring& product);
+    LyricManager lyric_manager_;           // 自带锁,可并发调用
+    mutable std::mutex mutex_;             // 只保护 mask_path_ / cache_dir_ / inflight_,解密时不持有
+    std::condition_variable inflight_cv_;
+    std::unordered_set<std::wstring> inflight_; // 正在解密的缓存子目录
 };
 
 } // namespace lyric_core

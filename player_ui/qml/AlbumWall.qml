@@ -23,14 +23,27 @@ Item {
     onVisibleChanged: if (visible && grid.count > 0 && !grid.userScrolled) { entering = true; enterWindow.restart() }
 
     function scrollToEnd() { grid.contentY = grid.originY + grid.contentHeight - grid.height + grid.bottomMargin }
-    function coverOf(index) {
-        if (grid.headerItem && grid.headerItem.albumIndex === index && grid.headerItem.coverItem
-                && grid.contentY < grid.headerItem.height * 0.6)
-            return grid.headerItem.coverItem
+    // 封面在网格视口里露出了多少 (0..1);完全滚出视野的不当作飞行落点
+    function shownPart(item) {
+        const p = item.mapToItem(grid, 0, 0)
+        const top = Math.max(0, p.y), bottom = Math.min(grid.height, p.y + item.height)
+        return item.height > 0 ? Math.max(0, bottom - top) / item.height : 0
+    }
+    // 关闭专辑时封面飞回的位置:优先网格里露出来的那张卡片,其次是顶部横幅;都不在视野内就不飞
+    // (横幅显示的是刚打开过的专辑,滚下去之后它已在视野之外,飞向它看起来像往上跳走)
+    function coverOf(index, preferred) {
+        // 优先飞回打开时点的那一张 (它所在的格子 / 横幅仍是这张专辑,且露在视野里)
+        if (preferred && shownPart(preferred) > 0.3) {
+            let p = preferred
+            while (p && p.albumIndex === undefined) p = p.parent
+            if (p && p.albumIndex === index) return preferred
+        }
         for (let i = 0; i < grid.contentItem.children.length; ++i) {
             const c = grid.contentItem.children[i]
-            if (c.albumIndex === index && c.coverItem) return c.coverItem
+            if (c.albumIndex === index && c.coverItem && c.visible && shownPart(c.coverItem) > 0.3) return c.coverItem
         }
+        const h = grid.headerItem
+        if (h && h.albumIndex === index && h.coverItem && shownPart(h.coverItem) > 0.3) return h.coverItem
         return null
     }
 

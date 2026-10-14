@@ -11,6 +11,8 @@ struct TrackItem {
     uint64_t id = 0;
     std::wstring file_path;
     std::wstring file_name;
+    // 解密产物入库时为加密源路径 (曲库按它归类、隐藏、移除);普通文件为空
+    std::wstring source_path;
 
     std::wstring title;
     std::wstring artist;
@@ -91,7 +93,8 @@ public:
     bool AddTrack(const std::wstring& filePath, const AudioMetadata& meta);
 
     // 线程安全的纯计算:清洗元数据并构建拼音/检索索引 (可在工作线程中并行执行,无需持有曲库锁)
-    static TrackItem BuildTrack(const std::wstring& filePath, const AudioMetadata& meta);
+    // sourcePath:解密产物对应的加密源 (无专辑标签时按源文件所在目录命名专辑,并记入 source_path)
+    static TrackItem BuildTrack(const std::wstring& filePath, const AudioMetadata& meta, const std::wstring& sourcePath = L"");
     // 批量提交已构建好的曲目 (分配 ID 并建立倒排索引)
     void AddPreparedTracks(std::vector<TrackItem>&& tracks);
 

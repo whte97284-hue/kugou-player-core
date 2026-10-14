@@ -9,12 +9,14 @@ Item {
     property int decodeSize: 512
     property alias status: img.status
     property bool fadeIn: true // 共享元素飞行用的副本关掉淡入,首帧即可见
+    property bool placeholder: true // 未就绪时的浅色底
+    property bool outline: true
 
     Rectangle {
         anchors.fill: parent
         radius: root.radius
         color: Qt.rgba(1, 1, 1, 0.05)
-        visible: img.status !== Image.Ready
+        visible: root.placeholder && img.status !== Image.Ready
     }
     Image {
         id: img
@@ -41,6 +43,7 @@ Item {
         anchors.fill: parent
         radius: root.radius
         color: "transparent"
+        visible: root.outline
         border.width: 1
         border.color: Qt.rgba(1, 1, 1, 0.07)
     }

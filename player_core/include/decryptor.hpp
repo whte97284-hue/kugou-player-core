@@ -10,7 +10,7 @@
 
 // ============================================================================
 //  加密音频解密工具集
-//   · kgm  酷狗 KGM / KGMA / VPR —— 原生 C++,kgm.mask 掩码表只映射一次、多线程共享
+//   · kgm  酷狗 KGM / KGMA / VPR —— 原生 C++,掩码内置 (可选用外部 kgm.mask 覆盖)
 //   · ncm  网易云 NCM            —— 原生 C++ (AES 密钥块 → RC4 变体密钥流),产物自动写回标题/歌手/专辑/封面
 //   · kgg  酷狗 KGG              —— 外部工具 kgg-dec.exe + infra.dll (仅 Windows);
 //                                  源文件先复制到临时工作目录,绝不在曲库目录里写任何东西
@@ -62,7 +62,7 @@ public:
     // 外部资源位置:<tools>/kgm/kgm.mask、<tools>/kgg/kgg-dec.exe
     void SetToolsDir(const std::wstring& dir);
     std::wstring ToolsDir() const;
-    // 显式指定 KGM 掩码表 (优先于 tools 目录)
+    // 显式指定 KGM 掩码表 (可选;文件不存在时用内置掩码)
     void SetKgmMaskPath(const std::wstring& path);
     std::wstring KgmMaskPath() const;
 
@@ -75,6 +75,8 @@ private:
 };
 
 // KGM 掩码解密内核 (单元测试用):out = x ^ (x << 4), x = c ^ key[i % 17] ^ mask[i % maskLen]
+// 不需要掩码文件的 KGM 解密 (内置掩码,与 tools/kgm/kgm.mask 逐字节等价)
+void KgmDecryptBlockBuiltin(uint8_t* data, size_t len, uint64_t fileOffset, const uint8_t key17[17]);
 void KgmDecryptBlock(uint8_t* data, size_t len, uint64_t fileOffset, const uint8_t key17[17], const uint8_t* mask,
                      uint64_t maskLen);
 
@@ -82,7 +84,7 @@ void KgmDecryptBlock(uint8_t* data, size_t len, uint64_t fileOffset, const uint8
 bool IsEncryptedAudioExtension(const std::wstring& lowerExt);
 
 // ============================================================================
-//  解密产物索引:源文件 (路径 + 大小 + 修改时间) → 产物路径
+//  解密产物索引:源文件 (路径 + 大小 + 修改时间,或内容指纹) → 产物路径
 //  扫描时据此把加密源直接映射为已解密的音频,无需再次解密;源文件变化后自动失效
 // ============================================================================
 class DecryptIndex {
@@ -91,15 +93,23 @@ public:
     bool Save(const std::wstring& file) const;
     // 命中且产物仍存在时返回产物路径,否则返回空
     std::wstring Find(const std::wstring& src, uint64_t size, uint64_t mtime) const;
-    void Put(const std::wstring& src, uint64_t size, uint64_t mtime, const std::wstring& product);
+    // 按内容指纹查找 (源文件被移动 / 改名 / 修改时间变了也能认出);产物不存在时返回空
+    std::wstring FindByFingerprint(uint64_t fingerprint) const;
+    // 先按路径,再按指纹;指纹命中时把新路径记进索引 (返回 true 表示索引有改动,需要保存)
+    std::wstring Lookup(const std::wstring& src, uint64_t size, uint64_t mtime, bool* changed = nullptr);
+    void Put(const std::wstring& src, uint64_t size, uint64_t mtime, const std::wstring& product, uint64_t fingerprint = 0);
     size_t Size() const;
+    // 内容指纹:文件大小 + 开头 16KB (加密文件头里有每首歌独立的密钥,足以区分);读取失败返回 0
+    static uint64_t Fingerprint(const std::wstring& src, uint64_t size);
 
 private:
     struct Entry {
         uint64_t size = 0;
         uint64_t mtime = 0;
         std::wstring product;
+        uint64_t fingerprint = 0;
     };
     mutable std::mutex mtx_;
     std::unordered_map<std::wstring, Entry> map_;
+    std::unordered_map<uint64_t, std::wstring> byPrint_; // 指纹 → 产物
 };

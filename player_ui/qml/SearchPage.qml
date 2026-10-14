@@ -15,8 +15,11 @@ Item {
     readonly property bool empty: q.length > 0 && !hasTop && searchModel.count === 0
 
     function focusWith(t) {
-        input.text = t
-        searchModel.query = t
+        // 从侧栏 / 快捷键回到搜索页时保留上次的搜索,只有带着新词进来才替换
+        if (t.length) {
+            input.text = t
+            searchModel.query = t
+        }
         input.forceActiveFocus()
         input.cursorPosition = input.text.length
     }
@@ -94,37 +97,51 @@ Item {
     // ---------------- 结果 ----------------
     // 单个可滚动列:最佳匹配 / 歌手 / 专辑 / 歌曲。键盘焦点始终留在输入框:↑↓ 选择歌曲,回车播放
     property int sel: -1
-    onQChanged: { sel = -1; results.contentY = 0 }
+    onQChanged: { sel = -1; results.contentY = 0; if (q.length) refresh.restart() }
+    // 结果刷新:新结果从略下方轻轻浮上并淡入,而不是整页瞬间替换
+    ParallelAnimation {
+        id: refresh
+        OpacityAnimator { target: results; from: 0.35; to: 1; duration: 260; easing.type: Easing.OutCubic }
+        NumberAnimation { target: colShift; property: "y"; from: 10; to: 0; duration: 380; easing.type: Easing.OutQuint }
+    }
     function moveSel(d) {
         const n = searchModel.count
         if (n === 0) return
         sel = Math.max(-1, Math.min(n - 1, sel + d))
         if (sel < 0) { results.contentY = 0; return }
-        const r = trackRepeater.itemAt(sel)
+        results.positionViewAtIndex(sel, ListView.Contain)
+        const r = results.itemAtIndex(sel)
         if (!r) return
-        const y = r.mapToItem(col, 0, 0).y
-        if (y < results.contentY + 20) results.contentY = Math.max(0, y - 20)
-        else if (y + r.height > results.contentY + results.height - page.bottomInset)
-            results.contentY = Math.min(results.contentHeight - results.height + page.bottomInset, y + r.height - results.height + page.bottomInset)
+        // 别让选中行藏到底部播放条下面
+        const over = r.y + r.height - (results.contentY + results.height - page.bottomInset)
+        if (over > 0) results.contentY += over
     }
 
-    Flickable {
+    // 结果用 ListView 虚拟化:歌曲再多也只创建可见的几十行,滚动不卡;
+    // 最佳匹配 / 歌手 / 专辑带作为 header 跟着一起滚
+    ListView {
         id: results
+        model: searchModel
+        cacheBuffer: 900
+        transform: Translate { id: colShift }
         anchors.top: field.bottom
         anchors.topMargin: 8
         anchors.bottom: parent.bottom
-        x: page.sidePadding
-        width: page.width - page.sidePadding * 2
+        // 列表铺满整页宽度 (两侧留白用边距),鼠标停在左右空白处也能滚动
+        width: page.width
+        leftMargin: page.sidePadding
+        rightMargin: page.sidePadding
+        readonly property real innerWidth: width - page.sidePadding * 2
         clip: true
-        contentHeight: col.height + page.bottomInset
+        footer: Item { width: 1; height: page.bottomInset }
         boundsBehavior: Flickable.StopAtBounds
         opacity: page.q.length ? 1 : 0
         Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
         SmoothScroll { flickable: results }
 
-            Column {
+        header: Column {
             id: col
-            width: results.width
+            width: results.innerWidth
             topPadding: 24
             spacing: 0
 
@@ -236,6 +253,7 @@ Item {
                             radius: 64
                             source: modelData.cover
                             decodeSize: 256
+                            Behavior on y { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
                         }
                         Text {
                             y: 160
@@ -284,6 +302,7 @@ Item {
                         radius: 8
                         source: modelData.cover
                         decodeSize: 220
+                        Behavior on y { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
                     }
                     Text {
                         y: 170
@@ -318,33 +337,28 @@ Item {
             Item { width: 1; height: searchModel.count ? 26 : 0 }
             Marker { visible: searchModel.count > 0; icon: "note"; count: searchModel.count }
             Item { width: 1; height: 6 }
-
-            Repeater {
-                id: trackRepeater
-                model: searchModel
-                delegate: TrackRow {
-                    width: col.width
-                    trackId: model.trackId
-                    number: index + 1
-                    title: model.title
-                    artist: model.artist
-                    album: model.album
-                    quality: model.quality
-                    duration: model.duration
-                    cover: model.cover
-                    showAlbum: true
-                    highlight: page.q
-                    Rectangle {
-                        anchors.fill: parent
-                        radius: Theme.radiusM
-                        color: "transparent"
-                        border.width: 1
-                        border.color: Theme.accentAlpha(0.55)
-                        visible: page.sel === index
-                    }
-                    onActivated: player.playTracks(searchModel.trackIds(), index)
-                }
+        }
+        delegate: TrackRow {
+            width: results.innerWidth
+            trackId: model.trackId
+            number: index + 1
+            title: model.title
+            artist: model.artist
+            album: model.album
+            quality: model.quality
+            duration: model.duration
+            cover: model.cover
+            showAlbum: true
+            highlight: page.q
+            Rectangle {
+                anchors.fill: parent
+                radius: Theme.radiusM
+                color: "transparent"
+                border.width: 1
+                border.color: Theme.accentAlpha(0.55)
+                visible: page.sel === index
             }
+            onActivated: player.playTracks(searchModel.trackIds(), index)
         }
     }
 

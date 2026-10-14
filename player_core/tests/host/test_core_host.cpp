@@ -261,7 +261,7 @@ int main(int argc, char** argv) {
             DecryptResult r = DecryptorRegistry::Instance().ById(e.kind)->Decrypt(e.path, o);
             if (r.ok) {
                 ++ok;
-                index.Put(e.path, e.size, e.mtime, r.output);
+                index.Put(e.path, e.size, e.mtime, r.output, DecryptIndex::Fingerprint(e.path, e.size));
             }
         }
         index.Save(W(idx.string()));
@@ -270,6 +270,51 @@ int main(int argc, char** argv) {
         IngestionSummary s2 = runAsk(c2);
         Check("再次扫描:按索引直接入库产物,不再提示", s2.encrypted_pending.empty() && c2.GetAllTracks().size() == catalog.GetAllTracks().size(),
               std::to_string(s2.encrypted_pending.size()));
+        size_t withSource = 0;
+        for (const auto& t : c2.GetAllTracks())
+            if (!t.source_path.empty()) ++withSource;
+        Check("产物入库时记下加密源 (按源文件夹归类 / 隐藏)", withSource == 3, std::to_string(withSource));
+
+        // 产物目录本身也在扫描范围内:同一首歌只出现一次
+        {
+            AudioIngestionPipeline p;
+            p.SetLazyCoverExtract(true);
+            p.SetDecryptPolicy(DecryptPolicy::Ask);
+            p.SetDecryptIndexFile(W(idx.string()));
+            p.AddInputPath(W(lib.string()));
+            p.AddInputPath(W((work / "decoded_ask").string()));
+            MusicCatalog c3;
+            p.RunSync(c3);
+            size_t src = 0;
+            for (const auto& t : c3.GetAllTracks())
+                if (!t.source_path.empty()) ++src;
+            Check("产物目录也被扫描时不重复入库", c3.GetAllTracks().size() == c2.GetAllTracks().size() && src == 3,
+                  std::to_string(c3.GetAllTracks().size()) + " vs " + std::to_string(c2.GetAllTracks().size()));
+        }
+
+        // 源文件被移动 / 改名:按内容指纹认出,不再提示转换
+        {
+            const std::wstring first = s1.encrypted_pending.front().path;
+            fs::path movedDir = work / "moved";
+            fs::create_directories(movedDir);
+            fs::path moved = movedDir / ("改名后" + fs::path(first).extension().string());
+            fs::copy_file(fs::path(first), moved, fs::copy_options::overwrite_existing);
+            AudioIngestionPipeline p;
+            p.SetLazyCoverExtract(true);
+            p.SetDecryptPolicy(DecryptPolicy::Ask);
+            p.SetDecryptIndexFile(W(idx.string()));
+            p.AddInputPath(W(movedDir.string()));
+            MusicCatalog c4;
+            p.RunSync(c4);
+            IngestionSummary s4 = p.GetLastSummary();
+            DecryptIndex reloaded;
+            reloaded.Load(W(idx.string()));
+            uint64_t sz = 0, mt = 0;
+            platform::GetFileInfo(W(moved.string()), sz, mt);
+            Check("移动 / 改名的加密源按指纹复用产物", s4.encrypted_pending.empty() && c4.GetAllTracks().size() == 1 &&
+                                                         !reloaded.Find(W(moved.string()), sz, mt).empty(),
+                  std::to_string(s4.encrypted_pending.size()));
+        }
     }
 
     // CUE

@@ -41,6 +41,11 @@ public:
     // 一个不与现有歌单重名的默认名称
     Q_INVOKABLE QString suggestName() const;
     Q_INVOKABLE QVariantList trackIdsOf(const QString& id) const;
+    // 播放历史:最近播放的排最前,同一首只保留最近一次,最多 kHistoryMax 首
+    Q_INVOKABLE void recordPlay(double trackId);
+    Q_INVOKABLE void clearHistory();
+    std::vector<const TrackItem*> historyTracks() const;
+    static constexpr int kHistoryMax = 300;
 
     // 解析后的曲目 (仅包含当前曲库中存在的)
     std::vector<const TrackItem*> tracksOf(const QString& id) const;
@@ -49,6 +54,7 @@ signals:
     void playlistsChanged();
     // 某个歌单的曲目变化 (详情页据此刷新)
     void contentChanged(const QString& id);
+    void historyChanged();
 
 private:
     struct List {
@@ -70,6 +76,7 @@ private:
     std::shared_ptr<const LibrarySnapshot> snap_;
     std::unordered_map<QString, const TrackItem*> index_; // key -> 曲目
     std::vector<List> lists_;
+    std::vector<QString> history_;
     int revision_ = 0;
     QTimer saveTimer_;
     QString file_;

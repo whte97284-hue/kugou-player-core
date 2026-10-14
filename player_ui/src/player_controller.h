@@ -3,10 +3,15 @@
 #include <QAbstractListModel>
 #include <QColor>
 #include <QObject>
+#include <QElapsedTimer>
+#include <QHash>
+#include <QPointer>
 #include <QTimer>
 #include <QVariantAnimation>
 #include <QVariantList>
 #include <memory>
+
+#include <QQuickWindow>
 
 #include "audio_playback_engine.hpp"
 #include "library_service.h"
@@ -77,9 +82,14 @@ class PlayerController : public QObject {
     Q_PROPERTY(bool lyricsSynced READ lyricsSynced NOTIFY lyricsChanged)
     Q_PROPERTY(QString chainSummary READ chainSummary NOTIFY signalChainChanged)
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorChanged)
+    // 定时关闭:0 = 关闭,-1 = 播完当前歌曲后停止,N = N 分钟后暂停;sleepRemaining 为剩余秒数
+    Q_PROPERTY(int sleepMinutes READ sleepMinutes NOTIFY sleepChanged)
+    Q_PROPERTY(int sleepRemaining READ sleepRemaining NOTIFY sleepChanged)
 
 public:
     explicit PlayerController(LibraryService* lib, QObject* parent = nullptr);
+    // 主窗口创建后调用一次:之后的进度 / 频谱更新由窗口每帧驱动
+    void attachWindow(QQuickWindow* window);
     ~PlayerController() override;
 
     bool hasTrack() const { return current_ != nullptr; }
@@ -105,6 +115,8 @@ public:
     int queueLength() const { return static_cast<int>(queue_.size()); }
     int queuePosition() const { return queueIndex_; }
     QString errorText() const { return error_; }
+    int sleepMinutes() const { return sleepMinutes_; }
+    int sleepRemaining() const;
     QObject* queueModel() { return &queueModel_; }
     bool exclusive() const { return exclusive_; }
     void setExclusive(bool on);
@@ -119,6 +131,8 @@ public:
     void setReplayGain(int mode);
     Q_INVOKABLE void refreshDevices();
     Q_INVOKABLE void reloadLyrics() { loadLyrics(); updateLyricIndex(); }
+    // 某一时刻 (秒) 正在唱的那句歌词;没有同步歌词或尚未开始时为空 (进度条悬停提示用)
+    Q_INVOKABLE QString lyricAt(double seconds) const;
     int repeatMode() const { return repeat_; }
     void setRepeatMode(int m);
     double breath() const { return breath_; }
@@ -142,6 +156,12 @@ public:
     Q_INVOKABLE void playNext(double trackId);
     Q_INVOKABLE void enqueue(const QVariantList& trackIds);
     Q_INVOKABLE void removeFromQueue(int index);
+    // 清空播放列表:只保留正在播放的这一首,播放不中断
+    Q_INVOKABLE void clearQueue();
+    Q_INVOKABLE void setSleepTimer(int minutes);
+    // 键盘快捷键:相对跳转 (秒) / 音量增减
+    Q_INVOKABLE void seekBy(double seconds) { seek(position_ + seconds); }
+    Q_INVOKABLE void changeVolume(double delta) { setVolume(volume_ + delta); }
 
 signals:
     void trackChanged();
@@ -158,6 +178,9 @@ signals:
     void lyricsChanged();
     void lyricIndexChanged();
     void devicesChanged();
+    void sleepChanged();
+    // 定时关闭到点并已暂停 (界面据此提示)
+    void sleepFired();
 
 private:
     bool openIndex(int index, bool autoPlay);
@@ -170,7 +193,11 @@ private:
     void restoreSession();
     void rebuildSignalChain();
     void tick();
+    void onFrameTimer();
     void loadLyrics();
+    void loadKugouLyrics();
+    void applyLyricsText(const QString& text, bool wholeFileTimeline, const QHash<qint64, qint64>& durations = {},
+                         const QHash<qint64, QString>& translations = {});
     void updateLyricIndex();
     void extractAccent();
     void setPlaying(bool p);
@@ -186,6 +213,7 @@ private:
     std::unique_ptr<AudioPlaybackEngine> engine_;
     std::shared_ptr<const LibrarySnapshot> snap_; // 当前队列所依附的曲库快照
     std::vector<uint64_t> queue_;
+    std::vector<uint64_t> context_; // 最近一次整体设为队列的那份列表 (点同一列表里的歌时只跳转)
     int queueIndex_ = -1;
     std::vector<uint64_t> unshuffled_; // 打开随机前的原始顺序,关闭随机时恢复
     bool shuffle_ = false;
@@ -217,9 +245,16 @@ private:
     QVariantList spectrum_;
     QString error_;
     QTimer timer_;
+    QPointer<QQuickWindow> window_;  // 有窗口时按显示器刷新节拍推送进度与频谱 (与 vsync 对齐,高刷屏不再只有 60 帧)
+    QElapsedTimer frameClock_;
+    qint64 lastTickMs_ = -1;
     int accentRequest_ = 0;
     QVariantList lyrics_;
     std::vector<qint64> lyricTimes_; // 毫秒,相对于当前曲目起点
     int lyricIndex_ = -1;
     bool lyricsSynced_ = false;
+    quint64 lyricsGen_ = 0; // 每次重新加载歌词递增,丢弃过期的后台结果
+    int sleepMinutes_ = 0;
+    qint64 sleepDeadline_ = 0; // QDateTime 毫秒;按分钟定时时有效
+    QTimer sleepTimer_;        // 每秒刷新剩余时间
 };

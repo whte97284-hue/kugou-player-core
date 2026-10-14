@@ -1,3 +1,0 @@
-# 酷狗音频解码终端 - Python 依赖
-flask>=2.0.0
-werkzeug>=2.0.0

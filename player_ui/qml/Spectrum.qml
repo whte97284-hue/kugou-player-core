@@ -18,7 +18,11 @@ Item {
             Item {
                 width: spec.barW
                 height: spec.height
-                readonly property real v: spec.values[index] || 0
+                // 柱数少于内核的段数时按比例取样 (低频到高频均匀覆盖)
+                readonly property real v: {
+                    const n = spec.values.length
+                    return n ? (spec.values[Math.min(n - 1, Math.floor((index + 0.5) * n / spec.bars))] || 0) : 0
+                }
                 Rectangle {
                     anchors.bottom: parent.bottom
                     width: parent.width

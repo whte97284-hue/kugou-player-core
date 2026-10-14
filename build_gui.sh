@@ -43,9 +43,11 @@ for p in "$CMAKE_BIN/cmake.exe" "$NINJA_BIN/ninja.exe" "$QT_ROOT/bin/windeployqt
 done
 
 # ---- 关掉正在运行的实例(否则链接报 LNK1104) --------------------------------
-if tasklist //FI "IMAGENAME eq KugouPlayer.exe" 2>/dev/null | grep -qi KugouPlayer; then
+# 注意: tasklist //FI 的双斜杠会被 MSYS 转义坏 (tasklist 报"无效参数 - '//FI'"), 且 stderr 被
+# 2>/dev/null 吞掉 -> 判断恒为假 -> 旧实例没被杀掉 -> 链接报 LNK1104。改用 MSYS_NO_PATHCONV=1 + 单斜杠。
+if MSYS_NO_PATHCONV=1 tasklist /FI "IMAGENAME eq KugouPlayer.exe" 2>/dev/null | grep -qi KugouPlayer; then
     echo "[1/6] 结束正在运行的 KugouPlayer.exe ..."
-    taskkill //F //IM KugouPlayer.exe >/dev/null 2>&1 || true
+    MSYS_NO_PATHCONV=1 taskkill /F /IM KugouPlayer.exe >/dev/null 2>&1 || true
     sleep 2
 else
     echo "[1/6] 没有运行中的实例"
@@ -105,6 +107,15 @@ windeployqt.exe --release --no-translations --qmldir "$BUILD_ROOT/player_ui/qml"
 # windeployqt 抓不到间接依赖,手工补(SVG 图标必需)
 [ -f Qt6Svg.dll ] || cp -n "$QT_ROOT/bin/Qt6Svg.dll" . 2>/dev/null || true
 [ -f Qt6ShaderTools.dll ] || cp -n "$QT_ROOT/bin/Qt6ShaderTools.dll" . 2>/dev/null || true
+
+# KGG 外部解码器:程序启动时从 <exe>\tools\kgg 查找 (KGM 掩码已内置,不再需要 kgm.mask)
+for f in kgg/kgg-dec.exe kgg/infra.dll; do
+    [ -f "$SRC_ROOT/tools/$f" ] || continue
+    mkdir -p "tools/$(dirname "$f")"
+    if [ ! -f "tools/$f" ] || [ "$(stat -c%s "tools/$f")" != "$(stat -c%s "$SRC_ROOT/tools/$f")" ]; then
+        cp -f "$SRC_ROOT/tools/$f" "tools/$f"
+    fi
+done
 
 echo "[6/6] 完成"
 echo

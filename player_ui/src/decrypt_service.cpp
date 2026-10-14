@@ -2,6 +2,7 @@
 
 #include <QDesktopServices>
 #include <QDir>
+#include <QDateTime>
 #include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFile>
@@ -9,6 +10,8 @@
 #include <QSet>
 #include <QSaveFile>
 #include <QPointer>
+#include <QRegularExpression>
+#include <QTimer>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QUrl>
@@ -205,11 +208,10 @@ DecryptService::DecryptService(LibraryService* lib, QObject* parent) : QObject(p
     connect(&queue_, &DecryptQueueModel::statsChanged, this, &DecryptService::statsChanged);
     QSettings s;
     policy_ = std::clamp(s.value("decrypt/policy", 0).toInt(), 0, 2);
-    outputDir_ = s.value("decrypt/outputDir").toString();
-    if (outputDir_.isEmpty())
-        outputDir_ = QDir::toNativeSeparators(QStandardPaths::writableLocation(QStandardPaths::MusicLocation) + "/Decrypted");
+    outputDir_ = LibraryService::decryptOutputDir();
     loadSeen();
     connect(lib_, &LibraryService::pendingEncryptedChanged, this, &DecryptService::onPendingChanged);
+    connect(lib_, &LibraryService::foldersChanged, this, &DecryptService::statsChanged); // 「加入曲库」数量随之变化
 }
 
 DecryptService::~DecryptService() {
@@ -284,6 +286,28 @@ QVariantMap DecryptService::pending() const {
 }
 
 namespace {
+bool SameContent(const QString& a, const QString& b) {
+    QFile fa(a), fb(b);
+    if (!fa.open(QIODevice::ReadOnly) || !fb.open(QIODevice::ReadOnly) || fa.size() != fb.size()) return false;
+    while (!fa.atEnd()) {
+        if (fa.read(1 << 20) != fb.read(1 << 20)) return false;
+    }
+    return true;
+}
+
+// 输出目录里已经有同一首歌 (例如解密记录丢了又转了一次) 时会生成「歌名 (2).flac」:
+// 内容与「歌名.flac」完全一样就删掉新的,复用原来那份
+QString CollapseCopy(const QString& out) {
+    QFileInfo fi(out);
+    static const QRegularExpression re(QStringLiteral("^(.*) \\((\\d+)\\)$"));
+    QRegularExpressionMatch m = re.match(fi.completeBaseName());
+    if (!m.hasMatch()) return out;
+    const QString base = fi.absolutePath() + "/" + m.captured(1) + "." + fi.suffix();
+    if (!QFileInfo(base).isFile() || !SameContent(out, base)) return out;
+    QFile::remove(out);
+    return QDir::toNativeSeparators(base);
+}
+
 QString SeenFile() { return LibraryService::dataDir() + "/decrypt.seen"; }
 } // namespace
 
@@ -331,7 +355,24 @@ void DecryptService::onPendingChanged() {
     if (lib_->pendingEncrypted().empty() || busy_ || !hasUnseen()) return;
     // 自动模式也只处理新出现的文件:解密失败的不会反复重试
     if (policy_ == 0) emit promptRequested();
-    else if (policy_ == 1) decryptPending();
+    else if (policy_ == 1) {
+        // 刚出现、还在变化的文件 (酷狗正在下载) 先不转:5 秒后再看,大小和修改时间稳定了才转换
+        const QDateTime now = QDateTime::currentDateTime();
+        for (const auto& e : lib_->pendingEncrypted()) {
+            QFileInfo fi(Q(e.path));
+            if (fi.exists() && (fi.size() != qint64(e.size) || fi.lastModified().secsTo(now) < 5)) {
+                if (!recheck_) {
+                    recheck_ = true;
+                    QTimer::singleShot(5000, this, [this]() {
+                        recheck_ = false;
+                        lib_->rescan(); // 重扫拿到文件的最终大小,再按策略处理
+                    });
+                }
+                return;
+            }
+        }
+        decryptPending();
+    }
 }
 
 void DecryptService::dismissPending() { markSeen(); }
@@ -431,7 +472,10 @@ int DecryptService::decryptUrls(const QVariantList& urls) {
     std::vector<Item> items = collect(urls);
     addUrls(urls);
     QStringList paths;
-    for (const Item& it : items) paths << Q(it.path);
+    for (const Item& it : items) {
+        paths << Q(it.path);
+        toLibrary_.insert(Q(it.path)); // 拖进播放器 = 想听:转换完直接进曲库
+    }
     decryptPaths(paths);
     return int(items.size());
 }
@@ -448,7 +492,18 @@ void DecryptService::clearResults() {
     emit jobChanged();
 }
 
-void DecryptService::addOutputToLibrary() { lib_->addFolder(outputDir_); }
+QStringList DecryptService::addableOutputs() const {
+    QStringList out;
+    const QStringList& have = lib_->extraFiles();
+    for (const auto& e : queue_.entries()) {
+        if (e.status != DecryptQueueModel::Done || e.fromLibrary || e.output.isEmpty()) continue;
+        const QString o = QDir::toNativeSeparators(e.output);
+        if (!have.contains(o, Qt::CaseInsensitive) && !out.contains(o, Qt::CaseInsensitive) && QFileInfo::exists(o)) out << o;
+    }
+    return out;
+}
+
+int DecryptService::addResultsToLibrary() { return lib_->addFiles(addableOutputs()); }
 
 void DecryptService::openOutputFolder() {
     QDir().mkpath(outputDir_);
@@ -513,10 +568,20 @@ void DecryptService::start(std::vector<Item> items, bool rescanAfter) {
             };
             const Decryptor* d = DecryptorRegistry::Instance().ById(it.kind);
             DecryptResult r;
-            if (d) r = d->Decrypt(it.path, o);
-            else r.message = L"未知格式";
+            // 转换过的 (按路径,或按内容指纹认出被移动 / 改名的源文件) 直接复用原来的结果
+            const std::wstring existing = index.Lookup(it.path, it.size, it.mtime);
+            if (!existing.empty()) {
+                r.ok = true;
+                r.output = existing;
+                r.message = L"已转换过,直接复用";
+            } else if (d) {
+                r = d->Decrypt(it.path, o);
+                if (r.ok) r.output = CollapseCopy(Q(r.output)).toStdWString();
+            } else {
+                r.message = L"未知格式";
+            }
             if (r.ok) {
-                index.Put(it.path, it.size, it.mtime, r.output);
+                index.Put(it.path, it.size, it.mtime, r.output, DecryptIndex::Fingerprint(it.path, it.size));
                 // 源文件在曲库里:解密后需要重扫才能入库
                 QString src = QDir::fromNativeSeparators(Q(it.path));
                 for (const QString& f : folders)
@@ -533,6 +598,7 @@ void DecryptService::start(std::vector<Item> items, bool rescanAfter) {
                 self->queue_.setStatus(qpath, m.value("ok").toBool() ? DecryptQueueModel::Done : DecryptQueueModel::Failed,
                                        m.value("message").toString(), m.value("output").toString());
                 self->results_.append(m);
+                if (m.value("ok").toBool() && self->toLibrary_.remove(qpath)) self->autoAdd_ << m.value("output").toString();
                 (m.value("ok").toBool() ? self->ok_ : self->fail_)++;
                 self->done_ = static_cast<int>(i) + 1;
                 self->progress_ = (i + 1) / n;
@@ -550,7 +616,10 @@ void DecryptService::start(std::vector<Item> items, bool rescanAfter) {
             emit self->jobChanged();
             emit self->progressChanged();
             emit self->finished(self->ok_, self->fail_);
+            if (!self->autoAdd_.isEmpty()) self->lib_->addFiles(self->autoAdd_); // 加入后会自己重扫
+            self->autoAdd_.clear();
             if (touchesLibrary && self->ok_ > 0) self->lib_->rescan();
+            emit self->statsChanged();
         }, Qt::QueuedConnection);
     });
 }

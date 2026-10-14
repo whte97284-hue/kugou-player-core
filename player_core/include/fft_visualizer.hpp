@@ -30,7 +30,8 @@ public:
     void PushSamples(const float* samples, size_t count, size_t channels);
 
     // 获取当前平滑后的 32 频段能量值 (范围 0.0f ~ 1.0f，按 60FPS 动效刷新调用)
-    std::vector<float> GetSpectrumBars();
+    // dtSeconds:距上次调用的时间,平滑系数按它换算,任意调用频率 (60 / 120 / 144 Hz) 下回落速度一致
+    std::vector<float> GetSpectrumBars(float dtSeconds = 1.0f / 60.0f);
 
     // 每个频柱的中心频率 (Hz),供 UI 绘制刻度
     std::vector<float> GetBandCenterFrequencies() const;

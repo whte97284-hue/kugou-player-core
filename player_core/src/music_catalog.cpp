@@ -82,16 +82,17 @@ int TrackFromFileName(const std::wstring& name) {
 
 } // namespace
 
-TrackItem MusicCatalog::BuildTrack(const std::wstring& filePath, const AudioMetadata& meta) {
+TrackItem MusicCatalog::BuildTrack(const std::wstring& filePath, const AudioMetadata& meta, const std::wstring& sourcePath) {
     std::wstring fileName = FileNameOf(filePath);
 
     // 1. 元数据启发式清洗与补全
-    std::wstring rawAlbum = meta.album.empty() ? AlbumFromPath(filePath) : meta.album;
+    std::wstring rawAlbum = meta.album.empty() ? AlbumFromPath(sourcePath.empty() ? filePath : sourcePath) : meta.album;
     CleanedSongInfo cleaned = SongCleaner::Clean(meta.title, meta.artist, rawAlbum, fileName);
 
     TrackItem track;
     track.file_path = filePath;
     track.file_name = fileName;
+    if (sourcePath != filePath) track.source_path = sourcePath;
     track.title = cleaned.title;
     track.artist = cleaned.artist;
     track.album = cleaned.album;

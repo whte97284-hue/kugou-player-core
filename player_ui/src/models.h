@@ -84,7 +84,7 @@ private:
     QStringList letters_;
 };
 
-// 通用曲目列表:source = "all" (全部歌曲,按标题拼音) / "artist" (某位歌手) / "playlist" (某个歌单)
+// 通用曲目列表:source = "all" (全部歌曲,按标题拼音) / "artist" (某位歌手) / "playlist" (某个歌单) / "history" (播放历史)
 class TrackCollectionModel : public QAbstractListModel {
     Q_OBJECT
     Q_PROPERTY(QString source READ source WRITE setSource NOTIFY sourceChanged)
