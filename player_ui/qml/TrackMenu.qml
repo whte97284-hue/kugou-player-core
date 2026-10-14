@@ -3,6 +3,7 @@ import PlayerUi
 
 // 曲目右键菜单:播放 / 下一首播放 / 加入队列 / 加入歌单 (二级) / 收藏 / 查看专辑 / 查看歌手 /
 // 打开文件位置 / 复制歌名 / 复制文件路径 / 歌曲信息 / 从歌单移除
+// trackId < 0 且 ctx.albumIndex 有值时是「整张专辑」菜单 (专辑详情的「更多」、专辑墙卡片右键)
 Item {
     id: menu
     anchors.fill: parent
@@ -17,6 +18,9 @@ Item {
     signal infoRequested(real trackId)
 
     readonly property bool fav: playlists.revision >= 0 && trackId >= 0 && playlists.isFavorite(trackId)
+    readonly property bool albumMode: trackId < 0 && ctx && ctx.albumIndex !== undefined && ctx.albumIndex >= 0
+    // 菜单作用的曲目:单曲,或整张专辑
+    function targetIds() { return albumMode ? library.albumTrackIds(ctx.albumIndex) : [trackId] }
 
     function open(id, px, py, c) {
         trackId = id
@@ -31,6 +35,27 @@ Item {
 
     property var items: []
     function rebuild() {
+        if (albumMode) {
+            const ids = library.albumTrackIds(ctx.albumIndex)
+            const allFav = playlists.revision >= 0 && ids.length > 0 && ids.every(i => playlists.isFavorite(i))
+            const info = library.albumInfo(ctx.albumIndex)
+            items = [
+                { key: "albumPlay", icon: "play", text: qsTr("播放") },
+                { key: "albumShuffle", icon: "shuffle", text: qsTr("随机播放") },
+                { key: "next", icon: "next-up", text: qsTr("下一首播放") },
+                { key: "queue", icon: "queue", text: qsTr("添加到播放队列") },
+                { key: "playlist", icon: "playlist", text: qsTr("添加到歌单"), sub: true },
+                { key: "favAll", icon: allFav ? "heart-filled" : "heart", text: allFav ? qsTr("全部取消收藏") : qsTr("全部收藏"), on: allFav },
+                { key: "sep" },
+                { key: "albumOpen", icon: "album-open", text: qsTr("查看专辑"), hide: ctx.fromDetail === true },
+                { key: "albumArtist", icon: "artist", text: qsTr("查看歌手"), hide: library.artistIndexOf(info.artist || "") < 0 },
+                { key: "sep" },
+                { key: "reveal", icon: "folder-open", text: qsTr("打开所在文件夹") },
+                { key: "copyAlbum", icon: "note", text: qsTr("复制专辑名") }
+            ].filter(e => !e.hide)
+            return
+        }
+        const sameAlbum = ctx && ctx.albumIndex !== undefined && ctx.albumIndex === library.albumOfTrack(trackId)
         const list = [
             { key: "play", icon: "play", text: qsTr("播放") },
             { key: "next", icon: "next-up", text: qsTr("下一首播放") },
@@ -38,7 +63,7 @@ Item {
             { key: "playlist", icon: "playlist", text: qsTr("添加到歌单"), sub: true },
             { key: "fav", icon: menu.fav ? "heart-filled" : "heart", text: menu.fav ? qsTr("取消收藏") : qsTr("收藏") },
             { key: "sep" },
-            { key: "album", icon: "album-open", text: qsTr("查看专辑") },
+            { key: "album", icon: "album-open", text: qsTr("查看专辑"), hide: sameAlbum },
             { key: "artist", icon: "artist", text: qsTr("查看歌手") },
             { key: "sep" },
             { key: "reveal", icon: "folder-open", text: qsTr("打开文件位置") },
@@ -48,10 +73,11 @@ Item {
         ]
         if (ctx && ctx.playlistId)
             list.push({ key: "sep" }, { key: "remove", icon: "trash", text: qsTr("从歌单移除") })
-        items = list
+        items = list.filter(e => !e.hide)
     }
     function act(key) {
         const id = trackId
+        if (albumMode && actAlbum(key)) { close(); return }
         if (key === "play") player.playTrack(id)
         else if (key === "next") { player.playNext(id); Nav.toast("next-up", qsTr("将在下一首播放")) }
         else if (key === "queue") { player.enqueue([id]); Nav.toast("queue", qsTr("已添加到播放队列")) }
@@ -70,9 +96,39 @@ Item {
         } else if (key === "info") menu.infoRequested(id)
         close()
     }
+    // 整张专辑的操作;返回 false 表示不是专辑专属的键
+    function actAlbum(key) {
+        const a = ctx.albumIndex
+        const ids = library.albumTrackIds(a)
+        if (!ids.length) return true
+        if (key === "albumPlay") { player.shuffle = false; player.playAlbum(a, 0) }
+        else if (key === "albumShuffle") { player.shuffle = true; player.playAlbum(a, Math.floor(Math.random() * ids.length)) }
+        else if (key === "next") { player.playNextTracks(ids); Nav.toast("next-up", qsTr("%1 首将在当前歌曲之后播放").arg(ids.length)) }
+        else if (key === "queue") { player.enqueue(ids); Nav.toast("queue", qsTr("已添加 %1 首到播放队列").arg(ids.length)) }
+        else if (key === "favAll") {
+            const allFav = ids.every(i => playlists.isFavorite(i))
+            let n = 0
+            for (const i of ids) if (playlists.isFavorite(i) === allFav) { playlists.toggleFavorite(i); ++n }
+            Nav.toast(allFav ? "heart" : "heart-filled", allFav ? qsTr("已取消收藏 %1 首").arg(n) : qsTr("已收藏 %1 首").arg(n))
+        }
+        else if (key === "albumOpen") Nav.openAlbum(a)
+        else if (key === "albumArtist") Nav.openArtist(library.artistIndexOf(library.albumInfo(a).artist || ""))
+        else if (key === "reveal") { if (!library.revealTrack(ids[0])) Nav.toast("folder", qsTr("找不到这张专辑所在的文件夹")) }
+        else if (key === "copyAlbum") {
+            const info = library.albumInfo(a)
+            library.copyToClipboard(info.artist ? info.artist + " - " + info.title : info.title)
+            Nav.toast("check", qsTr("已复制专辑名"))
+        }
+        else return false
+        return true
+    }
     function addTo(pid, name) {
-        const n = playlists.addTracks(pid, [trackId])
-        Nav.toast(n > 0 ? "check" : "playlist", n > 0 ? qsTr("已添加到「%1」").arg(name) : qsTr("「%1」里已经有这首歌").arg(name))
+        const ids = targetIds()
+        const n = playlists.addTracks(pid, ids)
+        if (albumMode)
+            Nav.toast(n > 0 ? "check" : "playlist", n > 0 ? qsTr("已添加 %1 首到「%2」").arg(n).arg(name) : qsTr("「%1」里已经有这些歌").arg(name))
+        else
+            Nav.toast(n > 0 ? "check" : "playlist", n > 0 ? qsTr("已添加到「%1」").arg(name) : qsTr("「%1」里已经有这首歌").arg(name))
         close()
     }
 
@@ -87,7 +143,7 @@ Item {
     // ---- 一级菜单 ----
     Rectangle {
         id: panel
-        width: 196
+        width: 212
         x: Math.max(8, Math.min(menu.reqX, menu.width - width - 8))
         y: Math.max(8, Math.min(menu.reqY, menu.height - height - 8))
         implicitHeight: col.implicitHeight + 12
@@ -130,11 +186,20 @@ Item {
             radius: 9
             readonly property bool hot: m.containsMouse || (!!entry.sub && menu.subShown)
             color: hot ? Theme.hover : "transparent"
+            readonly property bool on: (entry.key === "fav" && menu.fav) || entry.on === true
+            Icon {
+                x: 12
+                anchors.verticalCenter: parent.verticalCenter
+                name: entry.icon || ""
+                size: 15
+                tint: it.on ? Theme.accent : "transparent"
+                opacity: it.on ? 1 : (it.hot ? 0.9 : 0.62)
+            }
             Text {
-                x: 14
+                x: 38
                 anchors.verticalCenter: parent.verticalCenter
                 text: entry.text
-                color: entry.key === "fav" && menu.fav ? Theme.accent : Theme.text
+                color: it.on ? Theme.accent : Theme.text
                 font.family: Theme.fontFamily
                 font.pixelSize: 13
             }

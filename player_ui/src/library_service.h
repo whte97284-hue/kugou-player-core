@@ -161,6 +161,8 @@ public:
     // 按名字找歌手 (找不到返回 -1);曲目所属专辑 / 首位歌手
     Q_INVOKABLE int artistIndexOf(const QString& name) const;
     Q_INVOKABLE int albumOfTrack(double trackId) const;
+    // 专辑的全部曲目 ID (按曲序);专辑墙上的右键菜单等没有绑定曲目列表的地方用
+    Q_INVOKABLE QVariantList albumTrackIds(int albumIndex) const;
     Q_INVOKABLE int artistOfTrack(double trackId) const;
     // 曲目详情 (右键「歌曲信息」):标签、文件路径、格式、采样率、码率、大小等;找不到返回空表
     Q_INVOKABLE QVariantMap trackInfo(double trackId) const;
@@ -169,6 +171,8 @@ public:
     Q_INVOKABLE void copyToClipboard(const QString& text) const;
 
     static QString formatDuration(uint64_t ms);
+    // 专辑 / 歌手总时长:「52 分钟」「1 小时 8 分钟」(不写成 1:08:00,免得像时间点)
+    static QString formatLongDuration(uint64_t ms);
     static QString trackQuality(const TrackItem& t);
 
     // 把堆里的空闲块交还系统 (载入曲库、查重整理这类重活之后调用)

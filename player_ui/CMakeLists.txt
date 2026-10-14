@@ -74,6 +74,8 @@ qt_add_qml_module(KugouPlayer
         qml/OrganizePage.qml
         qml/DedupePage.qml
         qml/DesktopLyrics.qml
+        qml/AlbumStrip.qml
+        qml/CoverViewer.qml
 )
 
 qt_add_shaders(KugouPlayer "shaders"

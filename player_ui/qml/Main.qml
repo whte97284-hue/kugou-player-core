@@ -47,13 +47,39 @@ Window {
     property var history: []
     // 详情页各自记住最后打开的对象,切到别的详情时不跟着重载
     property int lastArtist: -1
+    property string lastArtistName: ""
     property string lastPlaylist: ""
     onViewChanged: trackMenu.close()
     onDetailRefChanged: syncDetail()
     onDetailKindChanged: syncDetail()
     function syncDetail() {
-        if (detailKind === "artist") lastArtist = detailRef
+        if (detailKind === "artist") {
+            lastArtist = detailRef
+            lastArtistName = library.artistInfo(detailRef).name || ""
+        }
         else if (detailKind === "playlist") lastPlaylist = detailRef
+    }
+
+    // 重新扫描后专辑 / 歌手的下标都会变:打开着的详情页跟着换到新下标 (专辑由曲目列表模型找回),
+    // 找不到了就退回分区页;历史里的旧下标已经无效,直接丢掉,免得「返回」打开别的专辑
+    Connections {
+        target: library
+        function onLibraryChanged() {
+            const h = root.history.filter(st => st.kind !== "album" && st.kind !== "artist")
+            if (h.length !== root.history.length) root.history = h
+            if (root.lastArtistName.length) {
+                const ai = library.artistIndexOf(root.lastArtistName)
+                if (root.detailKind === "artist") {
+                    if (ai >= 0) root.detailRef = ai
+                    else root.detailKind = ""
+                }
+                root.lastArtist = ai
+            }
+            if (root.detailKind === "album") {
+                if (albumTracks.albumIndex >= 0) root.detailRef = albumTracks.albumIndex
+                else { root.detailKind = ""; Nav.toast("albums", qsTr("这张专辑已不在曲库中")) }
+            }
+        }
     }
 
     function snapshotState() { return { section: section, kind: detailKind, ref: detailRef } }
@@ -115,6 +141,7 @@ Window {
         function onOpenArtistFrom(i, item) { root.openArtist(i, item) }
         function onOpenPlaylist(id) { root.openPlaylist(id) }
         function onTrackMenu(id, x, y, ctx) { trackMenu.open(id, x, y, ctx) }
+        function onViewCover(src, t, s) { coverViewer.open(src, t, s) }
         function onToast(icon, text) { toast.show(icon, text) }
     }
 
@@ -450,6 +477,8 @@ Window {
     property Item albumFrom: null
     function openAlbum(index, coverItem) {
         if (index < 0) return
+        // 已经在看这张专辑 (例如页尾或菜单里点了它自己):不重置列表
+        if (detailKind === "album" && detailRef === index && albumTracks.albumIndex === index) return
         albumTracks.albumIndex = index
         detail.resetScroll()
         const fromItem = coverItem
@@ -616,6 +645,10 @@ Window {
         id: trackInfo
         z: 44
     }
+    CoverViewer {
+        id: coverViewer
+        z: 45
+    }
 
     Toast {
         id: toast
@@ -701,6 +734,7 @@ Window {
         enabled: !root.typing
         onActivated: {
             if (trackMenu.shown) trackMenu.close()
+            else if (coverViewer.shown) coverViewer.close()
             else if (trackInfo.shown) trackInfo.close()
             else if (libraryPanel.shown) libraryPanel.close()
             else if (chain.shown) chain.shown = false
@@ -722,6 +756,8 @@ Window {
         focus: !root.typing
         Keys.onPressed: (e) => {
             if (e.modifiers & (Qt.ControlModifier | Qt.AltModifier)) return
+            // 专辑详情:上下键选曲、回车播放
+            if (root.view === "album" && !trackMenu.shown && !coverViewer.shown && detail.keyNav(e)) { e.accepted = true; return }
             if (e.text.length === 1 && /\S/.test(e.text)) {
                 root.openSearch(e.text)
                 e.accepted = true
@@ -766,6 +802,14 @@ Window {
             if (library.albumInfo(i).title === String(t)) { player.playAlbum(i, 0); return }
     }
     function automationHideChain() { chain.shown = false }
+    function automationOpenAlbumTitle(t) {
+        for (let i = 0; i < library.albumCount; ++i)
+            if (library.albumInfo(i).title === String(t)) { root.openAlbum(i, wall.coverOf(i)); return }
+    }
+    function automationDetailScroll(y) { detail.automationScroll(Number(y)) }
+    function automationAlbumMenu() { trackMenu.open(-1, root.width - 420, 330, { albumIndex: albumTracks.albumIndex, fromDetail: true }) }
+    function automationViewCover(on) { if (on) coverViewer.open(albumTracks.cover, albumTracks.title, albumTracks.artist); else coverViewer.close() }
+    function automationCloseMenu() { trackMenu.close() }
     function automationDecryptPrompt(on) { on ? decryptPrompt.open() : decryptPrompt.close() }
     function automationLibraryPanel(on) { on ? libraryPanel.open() : libraryPanel.close() }
     function automationGo(sec) { root.go(String(sec)) }

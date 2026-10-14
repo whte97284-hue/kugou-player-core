@@ -83,7 +83,9 @@ PlayerController::PlayerController(LibraryService* lib, QObject* parent) : QObje
             restored_ = true;
             restoreSession();
         }
-        if (!pendingRemap_.isEmpty()) applyPendingRemap();
+        // 每次重新扫描曲目 ID 都会重新分配:无论有没有整理 / 查重带来的路径变化,都把队列换算到新快照,
+        // 否则界面 (新快照的 ID) 和播放器 (旧快照的 ID) 对不上,当前行高亮、收藏心形会指向别的歌
+        applyPendingRemap();
     });
 }
 
@@ -306,6 +308,20 @@ void PlayerController::playNext(double trackId) {
     uint64_t id = static_cast<uint64_t>(trackId);
     queue_.insert(queue_.begin() + queueIndex_ + 1, id);
     unshuffled_.push_back(id);
+    queueContentChanged();
+}
+
+void PlayerController::playNextTracks(const QVariantList& trackIds) {
+    if (trackIds.isEmpty()) return;
+    if (queue_.empty() || !current_) {
+        playTracks(trackIds, 0);
+        return;
+    }
+    std::vector<uint64_t> ids;
+    ids.reserve(trackIds.size());
+    for (const QVariant& v : trackIds) ids.push_back(static_cast<uint64_t>(v.toDouble()));
+    queue_.insert(queue_.begin() + queueIndex_ + 1, ids.begin(), ids.end());
+    unshuffled_.insert(unshuffled_.end(), ids.begin(), ids.end());
     queueContentChanged();
 }
 

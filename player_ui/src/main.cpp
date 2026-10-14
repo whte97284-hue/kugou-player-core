@@ -65,6 +65,33 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         steps->push_back({"o6_dedupe", [tools, call] { call("automationGo", QStringLiteral("dedupe")); tools()->findDuplicates(); }, 6000});
         steps->push_back({"o7_applied", [tools] { tools()->applyDedupe(1); }, 6000});
         steps->push_back({"o8_play_after", [&player] { player.playAlbum(1, 0); player.next(); }, 2000});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_ALBUM")) {
+        // 专辑页:详情 / 播放中 / 滚动后的精简栏 / 页尾 / 专辑菜单 / 封面大图 / 多碟 / 宽窗与小窗
+        const QString hires = qEnvironmentVariable("KP_ALBUM_A", QStringLiteral("async"));
+        const QString multi = qEnvironmentVariable("KP_ALBUM_B", QStringLiteral("Joe Hisaishi Best"));
+        steps->push_back({"a01_detail", [call, hires] { call("automationOpenAlbumTitle", hires); }, 1600});
+        steps->push_back({"a02_playing", [call, hires] { call("automationPlayTitle", hires); }, 1800});
+        steps->push_back({"a03_scrolled", [call] { call("automationDetailScroll", 420); }, 900});
+        steps->push_back({"a04_footer", [call] { call("automationDetailScroll", -1); }, 1200});
+        steps->push_back({"a05_menu", [call] { call("automationDetailScroll", 0); call("automationAlbumMenu"); }, 900});
+        steps->push_back({"a06_cover", [call] { call("automationCloseMenu"); call("automationViewCover", true); }, 1200});
+        steps->push_back({"a07_multidisc", [call, multi] {
+            call("automationViewCover", false);
+            call("automationBack");
+            call("automationOpenAlbumTitle", multi);
+        }, 1800});
+        steps->push_back({"a07b_multidisc_scroll", [call] { call("automationDetailScroll", 300); }, 900});
+        steps->push_back({"a08_wide", [window, call, hires] {
+            window->resize(1920, 1080);
+            call("automationBack");
+            call("automationOpenAlbumTitle", hires);
+        }, 2000});
+        steps->push_back({"a09_wall_wide", [call] { call("automationBack"); }, 1600});
+        steps->push_back({"a10_small", [window, call, hires] {
+            window->resize(980, 640);
+            call("automationOpenAlbumTitle", hires);
+        }, 2000});
+        steps->push_back({"a11_wall_small", [call] { call("automationBack"); }, 1600});
     } else if (qEnvironmentVariableIsSet("KP_TEST_FINDPLAY")) {
         // 回归:只查找重复、只预览整理 (不动文件),然后点播放
         auto tools = [&engine]() { return qobject_cast<LibraryTools*>(engine.rootContext()->contextProperty("libtools").value<QObject*>()); };

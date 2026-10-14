@@ -7,7 +7,7 @@ Item {
     property int bottomInset: 140
     property string playlistId
     signal back()
-    readonly property int sidePadding: width > 1400 ? 64 : 44
+    readonly property int sidePadding: Theme.pagePadding(width)
     readonly property var info: playlists.revision >= 0 && playlistId.length ? playlists.info(playlistId) : ({})
     property bool confirmDelete: false
 

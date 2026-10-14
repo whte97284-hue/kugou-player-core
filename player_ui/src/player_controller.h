@@ -155,6 +155,8 @@ public:
     // 播放任意曲目列表 (歌曲页 / 歌手 / 歌单 / 搜索结果)
     Q_INVOKABLE void playTracks(const QVariantList& trackIds, int start = 0);
     Q_INVOKABLE void playNext(double trackId);
+    // 一组曲目整体插到当前歌曲之后 (保持原顺序)
+    Q_INVOKABLE void playNextTracks(const QVariantList& trackIds);
     Q_INVOKABLE void enqueue(const QVariantList& trackIds);
     Q_INVOKABLE void removeFromQueue(int index);
     // 清空播放列表:只保留正在播放的这一首,播放不中断

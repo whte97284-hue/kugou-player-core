@@ -16,6 +16,8 @@ Item {
     property string duration
     property string cover               // 非空时以小封面代替序号
     property bool showAlbum: false
+    property bool showQuality: true     // 整张专辑音质相同时由专辑页关掉,不逐行重复
+    property bool keyFocus: false       // 键盘选中 (上下键)
     property string highlight           // 搜索词高亮
     property var menuContext: ({})
     readonly property bool current: player.hasTrack && player.trackId === trackId
@@ -26,7 +28,7 @@ Item {
     readonly property bool fav: playlists.revision >= 0 && playlists.isFavorite(trackId)
     readonly property bool wide: width > 760
 
-    // 当前曲目底色 + 悬停底色 (透明度动画在渲染线程执行,快速划过整列也不掉帧)
+    // 当前曲目底色 + 悬停底色 (透明度动画在渲染线程执行,快速划过整列也不掉帧);当前行悬停时也略微提亮
     Rectangle {
         anchors.fill: parent
         radius: Theme.radiusM
@@ -36,9 +38,18 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: Theme.radiusM
-        color: Theme.hover
-        opacity: row.hovered && !row.current ? 1 : 0
+        color: row.current ? Theme.accentAlpha(0.06) : Theme.hover
+        opacity: row.hovered ? 1 : 0
         Behavior on opacity { OpacityAnimator { duration: 120 } }
+    }
+    // 键盘选中:细描边
+    Rectangle {
+        anchors.fill: parent
+        radius: Theme.radiusM
+        visible: row.keyFocus
+        color: "transparent"
+        border.width: 1
+        border.color: Theme.accentAlpha(0.5)
     }
 
     MouseArea {
@@ -64,13 +75,15 @@ Item {
         x: 12
         width: row.cover.length ? 40 : 32
         height: parent.height
+        // 序号:当前曲目暂停时也显示序号 (强调色),不再画三个像省略号的小点
         Text {
             anchors.centerIn: parent
-            visible: !row.cover.length && !row.current && !row.hovered
+            visible: !row.cover.length && !row.hovered && (!row.current || !player.playing)
             text: row.number
-            color: Theme.textTertiary
+            color: row.current ? Theme.accent : Theme.textTertiary
             font.family: Theme.fontFamily
             font.pixelSize: 13
+            font.weight: row.current ? Font.DemiBold : Font.Normal
         }
         RoundedImage {
             visible: row.cover.length > 0
@@ -86,16 +99,24 @@ Item {
             width: 40; height: 40; radius: 6
             color: Qt.rgba(0, 0, 0, 0.45)
         }
+        // 悬停:当前曲目显示暂停 / 继续,其他显示播放
         Icon {
             anchors.centerIn: parent
-            visible: !row.current && row.hovered
-            name: "play"
+            visible: row.hovered
+            name: row.current && player.playing ? "pause" : "play"
             size: 14
         }
         Loader {
             anchors.centerIn: parent
-            active: row.current
+            active: row.current && !row.hovered && (player.playing || row.cover.length > 0)
             sourceComponent: PlayingBars { maxHeight: 14 }
+        }
+        // 点序号 / 封面位置:当前曲目是暂停 / 继续 (不从头重放),其他曲目照常播放
+        MouseArea {
+            anchors.fill: parent
+            enabled: row.hovered
+            cursorShape: Qt.PointingHandCursor
+            onClicked: row.current ? player.toggle() : row.activated()
         }
     }
 
@@ -116,12 +137,13 @@ Item {
             iconSize: 15
             restOpacity: row.fav ? 0.95 : 0.6
             opacity: row.fav || row.hovered ? 1 : 0
+            Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
             onClicked: playlists.toggleFavorite(row.trackId)
         }
         // 品质标签放进定宽槽位,专辑列因此上下对齐
         Item {
             anchors.verticalCenter: parent.verticalCenter
-            visible: row.wide
+            visible: row.wide && row.showQuality
             width: 64
             height: 20
             QualityBadge {
@@ -147,6 +169,7 @@ Item {
             icon: "more"
             iconSize: 16
             opacity: row.hovered ? 1 : 0
+            Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
             onClicked: {
                 const p = mapToItem(null, width / 2, height)
                 Nav.trackMenu(row.trackId, p.x, p.y, row.menuContext)

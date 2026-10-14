@@ -32,6 +32,19 @@ class TrackListModel : public QAbstractListModel {
     Q_PROPERTY(QString cover READ cover NOTIFY albumChanged)
     Q_PROPERTY(QStringList badges READ badges NOTIFY albumChanged)
     Q_PROPERTY(bool multiDisc READ multiDisc NOTIFY albumChanged)
+    // 整张专辑共同的音质 (每首都一样时);不一样时为空,曲目行只给与众不同的那几首标音质
+    Q_PROPERTY(QString commonQuality READ commonQuality NOTIFY albumChanged)
+    // 格式说明:「FLAC · 24 bit / 96 kHz」;混合时给出范围
+    Q_PROPERTY(QString formatText READ formatText NOTIFY albumChanged)
+    Q_PROPERTY(QString codecText READ codecText NOTIFY albumChanged) // 「FLAC」「FLAC / MP3」
+    Q_PROPERTY(QString specText READ specText NOTIFY albumChanged)   // 「24 bit / 96 kHz」「16–24 bit / 44.1–96 kHz」
+    Q_PROPERTY(QString genre READ genre NOTIFY albumChanged)
+    // 页尾的专辑资料:{ size, folder, folderCount, firstTrackId, albumGain, discCount }
+    Q_PROPERTY(QVariantMap details READ details NOTIFY albumChanged)
+    // 每张碟:[{ disc, count, duration, firstRow }] (按曲目顺序)
+    Q_PROPERTY(QVariantList discs READ discs NOTIFY albumChanged)
+    // 全部曲目 ID (整张加入队列 / 歌单 / 收藏)
+    Q_PROPERTY(QVariantList trackIds READ trackIds NOTIFY albumChanged)
 public:
     enum Roles { TrackIdRole = Qt::UserRole + 1, NumberRole, TitleRole, ArtistRole, DurationRole, QualityRole, DiscRole };
     explicit TrackListModel(LibraryService* lib, QObject* parent = nullptr);
@@ -48,12 +61,22 @@ public:
     QString cover() const;
     QStringList badges() const;
     bool multiDisc() const;
+    QString commonQuality() const;
+    QString formatText() const;
+    QString codecText() const;
+    QString specText() const;
+    QString genre() const;
+    QVariantMap details() const;
+    QVariantList discs() const;
+    QVariantList trackIds() const;
 
 signals:
     void albumChanged();
 
 private:
     const AlbumInfo* current() const;
+    // 重新扫描后在新快照里找回同一张专辑 (曲目 ID 与专辑下标每次扫描都会变)
+    void reresolve();
     LibraryService* lib_;
     std::shared_ptr<const LibrarySnapshot> snap_;
     int album_ = -1;

@@ -1,6 +1,11 @@
 #include "models.h"
 
+#include <QDir>
+#include <QFileInfo>
 #include <algorithm>
+#include <map>
+#include <set>
+#include <unordered_set>
 
 #include "pinyin_table.hpp"
 #include "playlist_service.h"
@@ -52,7 +57,31 @@ QHash<int, QByteArray> AlbumModel::roleNames() const {
 // ============================================================================
 TrackListModel::TrackListModel(LibraryService* lib, QObject* parent) : QAbstractListModel(parent), lib_(lib) {
     snap_ = lib_->snapshot();
-    connect(lib_, &LibraryService::libraryChanged, this, [this]() { setAlbumIndex(-1); });
+    connect(lib_, &LibraryService::libraryChanged, this, &TrackListModel::reresolve);
+}
+
+void TrackListModel::reresolve() {
+    auto fresh = lib_->snapshot();
+    if (fresh == snap_) return;
+    int found = -1;
+    if (const AlbumInfo* a = current()) {
+        // 用旧快照 (仍然有效) 里这张专辑的曲目标识,到新快照里找第一首还在的
+        std::unordered_set<QString> keys;
+        for (const TrackItem* t : a->tracks) keys.insert(TrackKeyOf(*t));
+        for (const TrackItem& t : fresh->catalog.GetAllTracks()) {
+            if (!keys.count(TrackKeyOf(t))) continue;
+            auto it = fresh->trackAlbum.find(t.id);
+            if (it != fresh->trackAlbum.end()) {
+                found = it->second;
+                break;
+            }
+        }
+    }
+    beginResetModel();
+    snap_ = fresh;
+    album_ = found;
+    endResetModel();
+    emit albumChanged();
 }
 
 const AlbumInfo* TrackListModel::current() const {
@@ -61,6 +90,8 @@ const AlbumInfo* TrackListModel::current() const {
 }
 
 void TrackListModel::setAlbumIndex(int i) {
+    // 同一张专辑、同一份快照:不重置 (否则列表会无故跳回顶部)
+    if (i == album_ && snap_ == lib_->snapshot()) return;
     beginResetModel();
     snap_ = lib_->snapshot();
     album_ = i;
@@ -84,7 +115,7 @@ QVariant TrackListModel::data(const QModelIndex& index, int role) const {
         case ArtistRole: return Q(t.artist);
         case DurationRole: return LibraryService::formatDuration(t.duration_ms);
         case QualityRole: return LibraryService::trackQuality(t);
-        case DiscRole: return t.disc_no;
+        case DiscRole: return std::max(1, t.disc_no); // 没写碟号的算第 1 张,不单独分出「0」
     }
     return {};
 }
@@ -104,27 +135,160 @@ QString TrackListModel::summary() const {
     if (!a) return {};
     QStringList parts;
     if (!a->year.isEmpty()) parts << a->year;
+    const QString g = genre();
+    if (!g.isEmpty()) parts << g;
     parts << tr("%1 首").arg(a->tracks.size());
-    parts << LibraryService::formatDuration(a->totalMs);
+    parts << LibraryService::formatLongDuration(a->totalMs);
     return parts.join(QStringLiteral("  ·  "));
 }
 
+// 只留一个「档次」标签 (DSD / Hi-Res / 无损),具体的位深采样率由 formatText 用文字写出,不再叠三个相似的胶囊
 QStringList TrackListModel::badges() const {
     const AlbumInfo* a = current();
     if (!a) return {};
     QStringList b;
-    QString q = lib_->qualityBadge(album_);
-    if (!q.isEmpty()) b << q;
-    if (a->hires && !a->dsd) b << QStringLiteral("Hi-Res");
-    if (!a->tracks.empty()) b << Q(a->tracks.front()->codec);
+    if (a->dsd) b << a->dsdCodec;
+    else if (a->hires) b << QStringLiteral("Hi-Res");
+    else if (a->lossless) b << tr("无损");
     if (a->cue) b << QStringLiteral("CUE");
-    b.removeDuplicates();
     return b;
 }
 
 bool TrackListModel::multiDisc() const {
     const AlbumInfo* a = current();
-    return a && !a->tracks.empty() && a->tracks.front()->disc_no != a->tracks.back()->disc_no;
+    if (!a || a->tracks.empty()) return false;
+    const int first = std::max(1, a->tracks.front()->disc_no);
+    for (const TrackItem* t : a->tracks)
+        if (std::max(1, t->disc_no) != first) return true;
+    return false;
+}
+
+QString TrackListModel::commonQuality() const {
+    const AlbumInfo* a = current();
+    if (!a || a->tracks.empty()) return {};
+    const QString q = LibraryService::trackQuality(*a->tracks.front());
+    for (const TrackItem* t : a->tracks)
+        if (LibraryService::trackQuality(*t) != q) return {};
+    return q;
+}
+
+namespace {
+QString KHz(uint32_t rate) {
+    return rate % 1000 ? QString::number(rate / 1000.0, 'f', 1) : QString::number(rate / 1000);
+}
+QString Range(const QString& lo, const QString& hi) { return lo == hi ? lo : lo + QStringLiteral("–") + hi; }
+} // namespace
+
+QString TrackListModel::formatText() const {
+    const QString head = codecText(), spec = specText();
+    if (head.isEmpty()) return spec;
+    return spec.isEmpty() ? head : head + QStringLiteral("  ·  ") + spec;
+}
+
+QString TrackListModel::codecText() const {
+    const AlbumInfo* a = current();
+    if (!a) return {};
+    QStringList codecs;
+    for (const TrackItem* t : a->tracks) {
+        const QString c = Q(t->codec.empty() ? t->format : t->codec);
+        if (!c.isEmpty() && !codecs.contains(c)) codecs << c;
+    }
+    return codecs.size() > 2 ? tr("%1 等 %2 种格式").arg(codecs.front()).arg(codecs.size()) : codecs.join(QStringLiteral(" / "));
+}
+
+// 位深 / 采样率 (无损);DSD 为 MHz;有损为最高码率。混合时给出范围
+QString TrackListModel::specText() const {
+    const AlbumInfo* a = current();
+    if (!a || a->tracks.empty()) return {};
+    uint32_t minRate = UINT32_MAX, maxRate = 0, maxKbps = 0;
+    uint16_t minBits = UINT16_MAX, maxBits = 0;
+    bool allLossless = true;
+    for (const TrackItem* t : a->tracks) {
+        allLossless = allLossless && t->is_lossless;
+        if (t->sample_rate) minRate = std::min(minRate, t->sample_rate), maxRate = std::max(maxRate, t->sample_rate);
+        if (t->bits_per_sample) minBits = std::min(minBits, t->bits_per_sample), maxBits = std::max(maxBits, t->bits_per_sample);
+        maxKbps = std::max(maxKbps, t->bitrate_kbps);
+    }
+    QString spec;
+    if (a->dsd && maxRate) {
+        spec = Range(QString::number(minRate / 1e6, 'f', 1), QString::number(maxRate / 1e6, 'f', 1)) + QStringLiteral(" MHz");
+    } else if (allLossless && maxRate) {
+        if (maxBits) spec = Range(QString::number(minBits), QString::number(maxBits)) + QStringLiteral(" bit / ");
+        spec += Range(KHz(minRate), KHz(maxRate)) + QStringLiteral(" kHz");
+    } else if (maxKbps) {
+        spec = tr("最高 %1 kbps").arg(maxKbps);
+    }
+    return spec;
+}
+
+QString TrackListModel::genre() const {
+    const AlbumInfo* a = current();
+    if (!a) return {};
+    std::map<std::wstring, int> count;
+    for (const TrackItem* t : a->tracks)
+        if (!t->genre.empty()) ++count[t->genre];
+    const std::wstring* best = nullptr;
+    int n = 0;
+    for (const auto& kv : count)
+        if (kv.second > n) best = &kv.first, n = kv.second;
+    return best ? Q(*best) : QString();
+}
+
+QVariantMap TrackListModel::details() const {
+    QVariantMap m;
+    const AlbumInfo* a = current();
+    if (!a || a->tracks.empty()) return m;
+    // CUE 分轨共用一个文件:大小按不同的文件累计
+    std::set<std::wstring> files;
+    std::set<QString> folders;
+    uint64_t bytes = 0;
+    std::set<int> discSet;
+    for (const TrackItem* t : a->tracks) {
+        if (files.insert(t->file_path).second) bytes += t->file_size;
+        folders.insert(QFileInfo(Q(t->file_path)).absolutePath());
+        discSet.insert(std::max(1, t->disc_no));
+    }
+    const TrackItem* front = a->tracks.front();
+    m["size"] = static_cast<double>(bytes);
+    m["folder"] = QDir::toNativeSeparators(QFileInfo(Q(front->file_path)).absolutePath());
+    m["folderCount"] = static_cast<int>(folders.size());
+    m["firstTrackId"] = static_cast<double>(front->id);
+    m["discCount"] = static_cast<int>(discSet.size());
+    m["albumGain"] = front->has_rg_album ? QString::asprintf("%+.2f dB", front->rg_album_gain) : QString();
+    return m;
+}
+
+QVariantList TrackListModel::discs() const {
+    QVariantList out;
+    const AlbumInfo* a = current();
+    if (!a) return out;
+    int row = 0, disc = -1, count = 0, first = 0;
+    uint64_t ms = 0;
+    auto flush = [&]() {
+        if (disc < 0) return;
+        out.append(QVariantMap{{"disc", disc}, {"count", count}, {"duration", LibraryService::formatLongDuration(ms)}, {"firstRow", first}});
+    };
+    for (const TrackItem* t : a->tracks) {
+        const int d = std::max(1, t->disc_no);
+        if (d != disc) {
+            flush();
+            disc = d, count = 0, ms = 0, first = row;
+        }
+        ++count;
+        ms += t->duration_ms;
+        ++row;
+    }
+    flush();
+    return out;
+}
+
+QVariantList TrackListModel::trackIds() const {
+    QVariantList out;
+    const AlbumInfo* a = current();
+    if (!a) return out;
+    out.reserve(static_cast<int>(a->tracks.size()));
+    for (const TrackItem* t : a->tracks) out.append(static_cast<double>(t->id));
+    return out;
 }
 
 // ============================================================================

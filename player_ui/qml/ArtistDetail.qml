@@ -7,7 +7,7 @@ Item {
     property int bottomInset: 140
     property int artistIndex: -1
     signal back()
-    readonly property int sidePadding: width > 1400 ? 64 : 44
+    readonly property int sidePadding: Theme.pagePadding(width)
     readonly property Item heroAvatar: list.headerItem ? list.headerItem.avatarItem : null
     readonly property var info: library.generation >= 0 ? library.artistInfo(artistIndex) : ({})
     readonly property var albums: library.generation >= 0 ? library.artistAlbums(artistIndex) : []
@@ -108,56 +108,10 @@ Item {
 
             Item { width: 1; height: 40 }
             // 专辑带
-            ListView {
-                id: strip
-                visible: page.albums.length > 0
+            AlbumStrip {
                 width: list.width
-                height: visible ? 214 : 0
-                orientation: ListView.Horizontal
-                spacing: 22
-                clip: true
-                boundsBehavior: Flickable.StopAtBounds
                 model: page.albums
-                SmoothScroll { flickable: strip; horizontal: true }
-                delegate: Item {
-                    width: 150
-                    height: strip.height
-                    readonly property bool hovered: am.containsMouse
-                    RoundedImage {
-                        id: ac
-                        width: 150; height: 150
-                        radius: 8
-                        y: parent.hovered ? -3 : 0
-                        Behavior on y { YAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
-                        source: modelData.cover
-                        decodeSize: 220
-                    }
-                    Text {
-                        y: 160
-                        width: parent.width
-                        text: modelData.title
-                        elide: Text.ElideRight
-                        color: Theme.text
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 13
-                        font.weight: Font.DemiBold
-                    }
-                    Text {
-                        y: 180
-                        width: parent.width
-                        text: modelData.year || ""
-                        color: Theme.textTertiary
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 11
-                    }
-                    MouseArea {
-                        id: am
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: Nav.openAlbum(modelData.index)
-                    }
-                }
+                onOpen: (index) => Nav.openAlbum(index)
             }
             Item { width: 1; height: 18 }
             Rectangle { width: list.width; height: 1; color: Theme.hairline }

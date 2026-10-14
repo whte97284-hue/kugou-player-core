@@ -777,6 +777,20 @@ QString LibraryService::formatDuration(uint64_t ms) {
     return QString("%1:%2").arg(s / 60).arg(s % 60, 2, 10, QChar('0'));
 }
 
+QString LibraryService::formatLongDuration(uint64_t ms) {
+    const uint64_t min = (ms + 30000) / 60000;
+    if (min < 60) return tr("%1 分钟").arg(std::max<uint64_t>(1, min));
+    return min % 60 ? tr("%1 小时 %2 分钟").arg(min / 60).arg(min % 60) : tr("%1 小时").arg(min / 60);
+}
+
+QVariantList LibraryService::albumTrackIds(int i) const {
+    QVariantList out;
+    auto s = snapshot();
+    if (i < 0 || i >= static_cast<int>(s->albums.size())) return out;
+    for (const TrackItem* t : s->albums[i].tracks) out.append(static_cast<double>(t->id));
+    return out;
+}
+
 QString LibraryService::trackQuality(const TrackItem& t) {
     if (t.codec.compare(0, 3, L"DSD") == 0) return Q(t.codec);
     if (t.is_lossless && t.sample_rate)
@@ -827,7 +841,7 @@ QVariantMap LibraryService::albumInfo(int i) const {
     m["trackCount"] = static_cast<int>(a.tracks.size());
     QStringList parts;
     if (!a.year.isEmpty()) parts << a.year;
-    parts << tr("%1 首").arg(a.tracks.size()) << formatDuration(a.totalMs);
+    parts << tr("%1 首").arg(a.tracks.size()) << formatLongDuration(a.totalMs);
     m["summary"] = parts.join(QStringLiteral("  ·  "));
     return m;
 }
@@ -844,7 +858,7 @@ QVariantMap LibraryService::artistInfo(int i) const {
     m["cover"] = a.coverAlbum >= 0 ? QString("image://cover/a/%1/%2").arg(generation_).arg(a.coverAlbum) : QString();
     m["albumCount"] = static_cast<int>(a.albums.size());
     m["trackCount"] = static_cast<int>(a.tracks.size());
-    m["summary"] = tr("%1 张专辑  ·  %2 首  ·  %3").arg(a.albums.size()).arg(a.tracks.size()).arg(formatDuration(ms));
+    m["summary"] = tr("%1 张专辑  ·  %2 首  ·  %3").arg(a.albums.size()).arg(a.tracks.size()).arg(formatLongDuration(ms));
     return m;
 }
 

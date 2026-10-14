@@ -11,6 +11,8 @@ QtObject {
     // ctx: { playlistId } 等上下文 (在歌单中时菜单多出「从歌单移除」)
     signal trackMenu(real trackId, real x, real y, var ctx)
     signal toast(string icon, string text)
+    // 看封面大图 (专辑详情点封面)
+    signal viewCover(string source, string title, string subtitle)
     // 新建歌单后,详情页打开时直接进入改名状态
     property string renameNext: ""
 

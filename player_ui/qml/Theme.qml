@@ -63,6 +63,9 @@ QtObject {
     readonly property int normal: reduced ? 140 : 260
     readonly property int slow: reduced ? 220 : 520
 
+    // 详情页左右留白:窄窗 44、宽窗 64;超宽屏时内容列最宽 1560 居中
+    function pagePadding(w) { return Math.max(w > 1400 ? 64 : 44, Math.round((w - 1560) / 2)) }
+
     // 正在滚动的列表数 (SmoothScroll 维护):滚动期间暂停背景流动、呼吸点、悬停效果,把每一帧都留给滚动
     property int scrollers: 0
     readonly property bool scrolling: scrollers > 0
