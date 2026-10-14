@@ -182,6 +182,14 @@ int main(int argc, char* argv[]) {
     TrackCollectionModel playlistTracks(&library, &playlists);
     artistTracks.setSource("artist");
     playlistTracks.setSource("playlist");
+    TrackCollectionModel historyTracks(&library, &playlists);
+    historyTracks.setSource("history");
+    // 真正开始播放一首歌时记入历史 (恢复上次会话时停在暂停状态的那首,等按下播放才算)
+    auto recordPlay = [&player, &playlists]() {
+        if (player.playing() && player.trackId() >= 0) playlists.recordPlay(player.trackId());
+    };
+    QObject::connect(&player, &PlayerController::trackChanged, &playlists, recordPlay);
+    QObject::connect(&player, &PlayerController::playingChanged, &playlists, recordPlay);
     WindowHelper windowHelper;
 
     QQmlApplicationEngine engine;
@@ -199,6 +207,7 @@ int main(int argc, char* argv[]) {
     ctx->setContextProperty("songsModel", &songs);
     ctx->setContextProperty("artistTracks", &artistTracks);
     ctx->setContextProperty("playlistTracks", &playlistTracks);
+    ctx->setContextProperty("historyTracks", &historyTracks);
     ctx->setContextProperty("windowHelper", &windowHelper);
 
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, []() { QCoreApplication::exit(1); },

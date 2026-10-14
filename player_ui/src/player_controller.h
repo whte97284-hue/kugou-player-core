@@ -213,6 +213,7 @@ private:
     std::unique_ptr<AudioPlaybackEngine> engine_;
     std::shared_ptr<const LibrarySnapshot> snap_; // 当前队列所依附的曲库快照
     std::vector<uint64_t> queue_;
+    std::vector<uint64_t> context_; // 最近一次整体设为队列的那份列表 (点同一列表里的歌时只跳转)
     int queueIndex_ = -1;
     std::vector<uint64_t> unshuffled_; // 打开随机前的原始顺序,关闭随机时恢复
     bool shuffle_ = false;

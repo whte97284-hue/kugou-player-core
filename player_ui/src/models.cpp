@@ -199,6 +199,9 @@ TrackCollectionModel::TrackCollectionModel(LibraryService* lib, PlaylistService*
     connect(playlists_, &PlaylistService::contentChanged, this, [this](const QString& id) {
         if (source_ == QLatin1String("playlist") && id == playlist_) reload();
     });
+    connect(playlists_, &PlaylistService::historyChanged, this, [this]() {
+        if (source_ == QLatin1String("history")) reload();
+    });
 }
 
 void TrackCollectionModel::setSource(const QString& s) {
@@ -235,6 +238,8 @@ void TrackCollectionModel::reload() {
         if (artist_ >= 0 && artist_ < static_cast<int>(snap_->artists.size())) rows_ = snap_->artists[artist_].tracks;
     } else if (source_ == QLatin1String("playlist")) {
         rows_ = playlists_->tracksOf(playlist_);
+    } else if (source_ == QLatin1String("history")) {
+        rows_ = playlists_->historyTracks();
     }
     endResetModel();
     emit contentChanged();

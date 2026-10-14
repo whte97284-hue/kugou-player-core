@@ -203,6 +203,16 @@ void PlayerController::playAlbum(int albumIndex, int startRow) {
 void PlayerController::setQueue(std::vector<uint64_t> ids, int start) {
     if (ids.empty()) return;
     start = std::clamp(start, 0, static_cast<int>(ids.size()) - 1);
+    // 点的是正在播放的同一份列表 (同一张专辑 / 歌单 / 歌手) 里的另一首:
+    // 只在现有队列里跳过去,不重建队列 (随机顺序、手动加的「下一首播放」、播放列表面板的位置都保留)
+    if (ids == context_ && !queue_.empty()) {
+        auto it = std::find(queue_.begin(), queue_.end(), ids[start]);
+        if (it != queue_.end()) {
+            openIndex(static_cast<int>(it - queue_.begin()), true);
+            return;
+        }
+    }
+    context_ = ids;
     unshuffled_ = ids;
     if (shuffle_) {
         // 点选的曲目先播,其余随机
@@ -273,6 +283,7 @@ void PlayerController::clearQueue() {
         queueIndex_ = -1;
     } else {
         const uint64_t cur = queue_[queueIndex_];
+        context_.clear();
         queue_.assign(1, cur);
         unshuffled_.clear();
         queueIndex_ = 0;
