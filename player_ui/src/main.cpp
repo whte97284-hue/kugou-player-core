@@ -6,6 +6,9 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QTimer>
+#include <QFileInfo>
+#include <QFile>
+#include <QPainter>
 
 #include "cover_provider.h"
 #include "library_service.h"
@@ -17,6 +20,8 @@
 #include "decryptor.hpp"
 #include "window_helper.h"
 #include "library_tools.h"
+#include "taskbar_helper.h"
+#include <QIcon>
 
 // 离屏截图驱动 (开发验证用):--screenshot <输出目录>
 // 依次调用 QML 根对象上的自动化函数并截图,用于在无显示器环境下检查排版与配色
@@ -122,6 +127,40 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         if (t) t->findDuplicates();
     }, 400});
     steps->push_back({"22b_dedupe_done", [] {}, 14000});
+    steps->push_back({"23_desktop_lyrics", [&engine, &player] {
+        // 从头播放,给这首写一份短 LRC (测试曲目只有 2 秒);锁定以显示不悬停时的样子
+        player.playAlbum(0, 0);
+        const QString path = player.currentPath();
+        QFile f(QFileInfo(path).path() + "/" + QFileInfo(path).completeBaseName() + ".lrc");
+        if (f.open(QIODevice::WriteOnly)) {
+            f.write(QStringLiteral("[00:00.00]風が吹いている\n[00:00.60]遠くの空へ 届くように\n[00:01.20]桌面歌词 · 逐字高亮测试\n[00:01.90]下一句\n").toUtf8());
+            f.close();
+        }
+        auto* st = qobject_cast<SettingsService*>(engine.rootContext()->contextProperty("settings").value<QObject*>());
+        if (st) { st->setLyricsLocked(true); st->setDesktopLyrics(true); }
+        player.reloadLyrics();
+    }, 1450});
+    steps->push_back({"24_desktop_lyrics_off", [&engine, outDir] {
+        // 桌面歌词是独立窗口:单独截下来,垫一张深色和一张浅色底看描边效果
+        for (QWindow* w : QGuiApplication::topLevelWindows()) {
+            auto* q = qobject_cast<QQuickWindow*>(w);
+            if (!q || q->title() != QStringLiteral("桌面歌词") || !q->isVisible()) continue;
+            // 离屏截图拿不到透明底:临时换成深 / 浅底色各截一张
+            q->setColor(QColor(30, 34, 40));
+            const QImage dark = q->grabWindow();
+            q->setColor(QColor(225, 232, 238));
+            const QImage light = q->grabWindow();
+            q->setColor(Qt::transparent);
+            QImage out(dark.width(), dark.height() * 2, QImage::Format_ARGB32_Premultiplied);
+            QPainter p(&out);
+            p.drawImage(0, 0, dark);
+            p.drawImage(0, dark.height(), light);
+            p.end();
+            out.save(outDir + "/23b_desktop_lyrics_window.png");
+        }
+        auto* st = qobject_cast<SettingsService*>(engine.rootContext()->contextProperty("settings").value<QObject*>());
+        if (st) { st->setDesktopLyrics(false); st->setLyricsLocked(false); }
+    }, 600});
     steps->push_back({"15_tools", [call] { call("automationGo", QStringLiteral("tools")); }, 1400});
     steps->push_back({"16_tools_decrypting", [&engine] {
         auto* d = qobject_cast<DecryptService*>(engine.rootContext()->contextProperty("decrypt").value<QObject*>());
@@ -176,6 +215,7 @@ int main(int argc, char* argv[]) {
     if (scale > 0.5 && scale < 3.0 && std::abs(scale - 1.0) > 0.01 && qEnvironmentVariableIsEmpty("QT_SCALE_FACTOR"))
         qputenv("QT_SCALE_FACTOR", QByteArray::number(scale, 'f', 2));
     QGuiApplication app(argc, argv);
+    app.setWindowIcon(QIcon(QStringLiteral(":/images/app_icon_256.png")));
     QQuickStyle::setStyle("Basic");
 
     QString screenshotDir, libraryArg, flowArg;
@@ -245,6 +285,12 @@ int main(int argc, char* argv[]) {
     QObject::connect(&windowHelper, &WindowHelper::mediaPlayPause, &player, &PlayerController::toggle);
     QObject::connect(&windowHelper, &WindowHelper::mediaNext, &player, &PlayerController::next);
     QObject::connect(&windowHelper, &WindowHelper::mediaPrevious, &player, &PlayerController::previous);
+    // 任务栏缩略图 (封面) 与缩略图按钮
+    TaskbarHelper taskbar(&player, &playlists);
+    app.installNativeEventFilter(&taskbar);
+    taskbar.attach(qobject_cast<QQuickWindow*>(engine.rootObjects().value(0)));
+    QObject::connect(&taskbar, &TaskbarHelper::toggleDesktopLyrics, &settings,
+                     [&settings]() { settings.setDesktopLyrics(!settings.desktopLyrics()); });
 
     if (!libraryArg.isEmpty()) library.addFolder(libraryArg);
     else library.rescan();

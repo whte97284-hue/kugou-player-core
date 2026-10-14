@@ -324,6 +324,21 @@ Item {
                     onPicked: (v) => { settings.lyricsSource = v; player.reloadLyrics() }
                 }
                 OptionRow {
+                    label: qsTr("桌面歌词")
+                    options: [{ t: qsTr("显示"), v: true }, { t: qsTr("关闭"), v: false }]
+                    value: settings.desktopLyrics
+                    hint: qsTr("置顶显示在桌面上 · Ctrl D")
+                    onPicked: (v) => settings.desktopLyrics = v
+                }
+                OptionRow {
+                    visible: settings.desktopLyrics
+                    label: qsTr("歌词锁定")
+                    options: [{ t: qsTr("锁定"), v: true }, { t: qsTr("可拖动"), v: false }]
+                    value: settings.lyricsLocked
+                    hint: qsTr("锁定后鼠标可以穿过歌词")
+                    onPicked: (v) => settings.lyricsLocked = v
+                }
+                OptionRow {
                     label: qsTr("淡入淡出")
                     options: [{ t: qsTr("开启"), v: true }, { t: qsTr("关闭"), v: false }]
                     value: settings.fade
@@ -676,7 +691,7 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         width: parent.width
                         elide: Text.ElideRight
-                        text: qsTr("空格 播放 / 暂停   ·   Ctrl K 搜索   ·   Ctrl ← → 切歌   ·   Alt ← 返回   ·   直接打字即搜索")
+                        text: qsTr("空格 播放 / 暂停   ·   Ctrl K 搜索   ·   Ctrl ← → 切歌   ·   Ctrl D 桌面歌词   ·   Alt ← 返回   ·   直接打字即搜索")
                         color: Theme.textSecondary
                         font.family: Theme.fontFamily
                         font.pixelSize: 13

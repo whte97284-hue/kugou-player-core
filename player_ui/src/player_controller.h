@@ -1,4 +1,5 @@
 #pragma once
+#include <QImage>
 #include <QStringList>
 #include <QAbstractListModel>
 #include <QColor>
@@ -181,12 +182,16 @@ signals:
     void sleepChanged();
     // 定时关闭到点并已暂停 (界面据此提示)
     void sleepFired();
+    // 封面图解码完成 (切歌后异步到达)
+    void coverImageChanged();
 
 public:
     // 整理 / 查重移动了文件:下一次曲库刷新时按映射把播放队列接到新快照上 (正在播放的那首不会被移动)
     void remapPathsOnNextScan(const QHash<QString, QString>& pathMap);
     // 正在播放的文件路径 (整理时排除)
     QString currentPath() const;
+    // 当前封面 (最长边 256,无封面时为占位图;任务栏缩略图用)
+    QImage coverImage() const { return coverImage_; }
 
 private:
     void applyPendingRemap();
@@ -257,6 +262,7 @@ private:
     QElapsedTimer frameClock_;
     qint64 lastTickMs_ = -1;
     int accentRequest_ = 0;
+    QImage coverImage_;
     QVariantList lyrics_;
     std::vector<qint64> lyricTimes_; // 毫秒,相对于当前曲目起点
     int lyricIndex_ = -1;

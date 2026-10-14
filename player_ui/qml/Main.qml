@@ -676,6 +676,7 @@ Window {
 
     // ======================= 键盘 / 鼠标侧键 =======================
     readonly property bool typing: activeFocusItem && activeFocusItem.hasOwnProperty("cursorPosition")
+    Shortcut { sequence: "Ctrl+D"; onActivated: settings.desktopLyrics = !settings.desktopLyrics }
     Shortcut { sequence: "Ctrl+K"; onActivated: root.openSearch("") }
     Shortcut { sequence: "Ctrl+F"; onActivated: root.openSearch("") }
     Shortcut { sequence: "Space"; enabled: !root.typing; onActivated: player.toggle() }
@@ -816,5 +817,11 @@ Window {
             font.family: Theme.fontFamily
             font.pixelSize: 12
         }
+    }
+
+    // 桌面歌词:单独的置顶透明窗口,开启时才创建
+    Loader {
+        active: settings.desktopLyrics
+        sourceComponent: DesktopLyrics { visible: true }
     }
 }

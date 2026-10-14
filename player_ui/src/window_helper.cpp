@@ -1,5 +1,7 @@
 #include "window_helper.h"
 
+#include <QCursor>
+
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -82,3 +84,5 @@ bool WindowHelper::isWindows() const {
     return false;
 #endif
 }
+
+QPoint WindowHelper::cursorPos() const { return QCursor::pos(); }

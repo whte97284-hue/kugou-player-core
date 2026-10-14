@@ -820,8 +820,10 @@ void PlayerController::extractAccent() {
         if (img.isNull()) img = CoverProvider::Placeholder(QString::fromStdWString(copy.album), 64);
         QColor c = ExtractAccentColor(img);
         QList<QColor> pal = ExtractPalette(img);
-        QMetaObject::invokeMethod(self, [self, req, c, pal]() {
+        QMetaObject::invokeMethod(self, [self, req, c, pal, img]() {
             if (!self || req != self->accentRequest_) return; // 期间已切歌,丢弃过期结果
+            self->coverImage_ = img;
+            emit self->coverImageChanged();
             self->accent_ = c;
             self->palette_.clear();
             for (const QColor& p : pal) self->palette_.append(p);
