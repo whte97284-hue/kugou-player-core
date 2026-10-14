@@ -30,6 +30,15 @@ QtObject {
     function warnAlpha(a) { return Qt.rgba(warn.r, warn.g, warn.b, a) }
     function perfectAlpha(a) { return Qt.rgba(perfect.r, perfect.g, perfect.b, a) }
 
+    // 桌面歌词已唱部分的配色 (设置页与歌词窗口共用);0 跟随封面强调色
+    readonly property var lyricPresets: [
+        { name: qsTr("跟随封面"), c: accent },
+        { name: qsTr("冰蓝"), c: "#8fd8ff" },
+        { name: qsTr("樱粉"), c: "#ff9cbc" },
+        { name: qsTr("薄荷"), c: "#7ee8be" },
+        { name: qsTr("柠檬"), c: "#ffe27a" }
+    ]
+
     // 强调色的派生色:用于按钮底色、柔光
     function accentAlpha(a) { return Qt.rgba(accent.r, accent.g, accent.b, a) }
     // 强调色偏亮时,其上的文字与图标改用深色 (驯化后的强调色大多属于此类,深字更显精致)

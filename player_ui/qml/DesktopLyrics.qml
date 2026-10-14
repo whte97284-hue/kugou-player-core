@@ -11,20 +11,19 @@ Window {
     id: dl
     readonly property bool locked: settings.lyricsLocked
     readonly property int fs: settings.lyricsFontSize
-    // 锁定时鼠标是否悬停在窗口 / 解锁按钮上 (窗口不接收鼠标,由定时器读全局光标位置)
-    property bool hoverLocked: false
+    // 鼠标是否在窗口范围内:由定时器读全局光标位置判断,不依赖窗口收到的鼠标事件
+    // (透明像素在 Windows 上不接收鼠标,只靠 containsMouse 时鼠标从字缝移到工具条就会「离开」,工具条随即消失)
+    property bool cursorInside: false
     property bool overUnlock: false
-    readonly property bool hovered: locked ? hoverLocked : hoverArea.containsMouse || dragging
+    readonly property bool hoverLocked: locked && cursorInside
+    // 未锁定:鼠标离开后再留 0.8 秒,方便移到工具条上
+    readonly property bool hovered: locked ? hoverLocked : cursorInside || hoverArea.containsMouse || dragging || linger.running
     property bool dragging: false
+    onCursorInsideChanged: if (!cursorInside && !locked) linger.restart()
+    Timer { id: linger; interval: 800 }
 
     // 配色:已唱部分的颜色;0 跟随封面强调色
-    readonly property var presets: [
-        { name: qsTr("跟随封面"), c: Theme.accent },
-        { name: qsTr("冰蓝"), c: "#8fd8ff" },
-        { name: qsTr("樱粉"), c: "#ff9cbc" },
-        { name: qsTr("薄荷"), c: "#7ee8be" },
-        { name: qsTr("柠檬"), c: "#ffe27a" }
-    ]
+    readonly property var presets: Theme.lyricPresets
     readonly property color sungColor: presets[Math.max(0, Math.min(presets.length - 1, settings.lyricsColor))].c
 
     flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
@@ -73,22 +72,32 @@ Window {
     readonly property int topIdx: cur < 0 ? -1 : (cur % 2 === 0 ? cur : cur + 1)
     readonly property int botIdx: cur < 0 ? -1 : (cur % 2 === 1 ? cur : cur + 1)
 
-    // ---------- 锁定状态下的悬停检测 ----------
+    // ---------- 悬停检测 (锁定与否都用全局光标位置) ----------
     Timer {
-        interval: 120
+        interval: 100
         repeat: true
-        running: dl.visible && dl.locked
+        running: dl.visible
+        triggeredOnStart: true
         onTriggered: {
             const p = windowHelper.cursorPos()
             const inWin = p.x >= dl.x && p.x < dl.x + dl.width && p.y >= dl.y && p.y < dl.y + dl.height
-            dl.hoverLocked = inWin
+            dl.cursorInside = inWin
+            if (!dl.locked) { dl.overUnlock = false; return }
             const b = unlockBtn.mapToGlobal(0, 0)
-            dl.overUnlock = inWin && p.x >= b.x - 4 && p.x < b.x + unlockBtn.width + 4 && p.y >= b.y - 4 && p.y < b.y + unlockBtn.height + 4
+            dl.overUnlock = inWin && p.x >= b.x - 6 && p.x < b.x + unlockBtn.width + 6 && p.y >= b.y - 6 && p.y < b.y + unlockBtn.height + 6
         }
-        onRunningChanged: if (!running) { dl.hoverLocked = false; dl.overUnlock = false }
+        onRunningChanged: if (!running) { dl.cursorInside = false; dl.overUnlock = false }
     }
 
     // ---------- 底板 (悬停且未锁定时) ----------
+    // 未锁定时整块窗口铺一层肉眼看不出的底 (alpha 约 3/255):Windows 上完全透明的像素收不到鼠标,
+    // 有了它,窗口内任何位置都能拖动、点到工具条
+    Rectangle {
+        anchors.fill: parent
+        radius: 18
+        color: Qt.rgba(0, 0, 0, 0.012)
+        visible: !dl.locked
+    }
     Rectangle {
         anchors.fill: parent
         radius: 18

@@ -2,139 +2,186 @@ import QtQuick
 import QtQuick.Dialogs
 import PlayerUi
 
-// 设置:顶栏长胶囊 + 若干圆角面板;每行「名称 + 一排选项胶囊」,选中项的强调色底板在行内滑动
-// 改动即时生效,无「保存」;需要重扫 / 重启才生效的在行尾用浅灰小字说明
+// 设置:按分组排成若干圆角面板,每行左边是名称 + 一句说明,右边是控件,所有控件右对齐、同为 32 高。
+// 控件只有四种:开关 (是 / 否)、分段选择 (几选一)、胶囊按钮 (动作)、色块 (配色)。
+// 改动即时生效,没有「保存」;需要重扫 / 重启才生效的在说明里写明
 Item {
     id: page
     property int bottomInset: 140
     readonly property int pad: width > 1400 ? 56 : 40
-    readonly property real contentW: Math.min(1040, width - pad * 2)
+    readonly property real contentW: Math.min(980, width - pad * 2)
+    readonly property int ctrlH: 32
 
     FolderDialog { id: addFolder; onAccepted: library.addFolderUrls([selectedFolder]) }
     FolderDialog { id: outPicker; onAccepted: decrypt.setOutputUrl(selectedFolder) }
 
-    // ---------------- 行:名称 + 选项胶囊 ----------------
-    // 同一行的选项等宽 (取最宽文字,且不小于 88),选中项的强调色底板按格位滑动;
-    // 未选中为极淡的暖色底、无描边,与面板融为一体
-    FontMetrics { id: optFont; font.family: Theme.fontFamily; font.pixelSize: 13; font.weight: Font.DemiBold }
-    readonly property int optH: 32
-    readonly property int optGap: 6
+    FontMetrics { id: segFont; font.family: Theme.fontFamily; font.pixelSize: 13; font.weight: Font.DemiBold }
     // 识别到、还没加入的酷狗下载目录 (加入 / 忽略后刷新)
     property int kgTick: 0
     readonly property var kgCands: { library.folders; kgTick; return library.kugouCandidates() }
 
-    component OptionRow: Item {
-        id: orow
+    // ---------------- 分组标题 ----------------
+    component SectionTitle: Text {
+        leftPadding: 22
+        topPadding: 10
+        bottomPadding: 2
+        color: Theme.textTertiary
+        font.family: Theme.fontFamily
+        font.pixelSize: 13
+        font.weight: Font.DemiBold
+    }
+
+    // ---------------- 行:名称 + 说明 | 控件 ----------------
+    component SettingRow: Item {
+        id: srow
         property string label
+        property string hint
+        property bool noSep: false       // 下方不画分隔线
+        default property alias control: slot.data
+        width: parent ? parent.width : 0
+        height: visible ? (hint !== "" ? 62 : 52) : 0
+        Column {
+            x: 22
+            anchors.verticalCenter: parent.verticalCenter
+            width: srow.width - 44 - slot.width - 24
+            spacing: 3
+            Text {
+                width: parent.width
+                elide: Text.ElideRight
+                text: srow.label
+                color: Theme.text
+                font.family: Theme.fontFamily
+                font.pixelSize: 14
+            }
+            Text {
+                visible: srow.hint !== ""
+                width: parent.width
+                elide: Text.ElideRight
+                text: srow.hint
+                color: Theme.textTertiary
+                font.family: Theme.fontFamily
+                font.pixelSize: 12
+            }
+        }
+        Row {
+            id: slot
+            anchors.right: parent.right
+            anchors.rightMargin: 22
+            anchors.verticalCenter: parent.verticalCenter
+            height: page.ctrlH
+            spacing: 8
+        }
+    }
+
+    // ---------------- 开关 ----------------
+    component Toggle: Item {
+        id: tg
+        property bool checked
+        signal toggled(bool v)
+        width: 44
+        height: page.ctrlH
+        Rectangle {
+            anchors.verticalCenter: parent.verticalCenter
+            width: 44; height: 24; radius: 12
+            color: tg.checked ? Theme.accent : Qt.rgba(1, 0.96, 0.9, tgm.containsMouse ? 0.16 : 0.11)
+            Behavior on color { ColorAnimation { duration: Theme.fast } }
+            Rectangle {
+                y: 3
+                x: tg.checked ? parent.width - width - 3 : 3
+                width: 18; height: 18; radius: 9
+                color: tg.checked ? Theme.onAccent : Theme.textSecondary
+                Behavior on x { NumberAnimation { duration: Theme.reduced ? 0 : 200; easing.type: Easing.OutCubic } }
+            }
+        }
+        MouseArea { id: tgm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: tg.toggled(!tg.checked) }
+    }
+
+    // ---------------- 分段选择:一条胶囊轨道,选中块在轨道里滑动;同一控件里每格等宽 ----------------
+    component Segmented: Item {
+        id: seg
         property var options: []          // [{ t: 文本, v: 值 }]
         property var value
-        property string hint
         signal picked(var v)
-        width: parent ? parent.width : 0
-        height: 54
-
         readonly property int sel: {
             for (let i = 0; i < options.length; ++i) if (options[i].v === value) return i
             return -1
         }
         readonly property real cellW: {
             let w = 0
-            for (let i = 0; i < options.length; ++i) w = Math.max(w, optFont.advanceWidth(options[i].t))
-            return Math.max(88, Math.ceil(w) + 32)
+            for (let i = 0; i < options.length; ++i) w = Math.max(w, segFont.advanceWidth(options[i].t))
+            return Math.max(60, Math.ceil(w) + 28)
         }
-        Text {
-            x: 22
-            anchors.verticalCenter: parent.verticalCenter
-            text: orow.label
-            color: Theme.text
-            font.family: Theme.fontFamily
-            font.pixelSize: 14
-            font.weight: Font.DemiBold
+        width: options.length * cellW + 6
+        height: page.ctrlH
+        Rectangle { anchors.fill: parent; radius: height / 2; color: Qt.rgba(1, 0.96, 0.9, 0.05) }
+        Rectangle {
+            visible: seg.sel >= 0
+            x: 3 + Math.max(0, seg.sel) * seg.cellW
+            y: 3
+            width: seg.cellW
+            height: parent.height - 6
+            radius: height / 2
+            color: Theme.accent
+            Behavior on x { NumberAnimation { duration: Theme.reduced ? 0 : 300; easing.type: Easing.OutQuint } }
         }
-        Item {
-            x: 140
-            anchors.verticalCenter: parent.verticalCenter
-            width: orow.options.length * (orow.cellW + page.optGap) - page.optGap
-            height: page.optH
-            Row {
-                spacing: page.optGap
-                Repeater {
-                    model: orow.options
+        Row {
+            x: 3
+            Repeater {
+                model: seg.options
+                Item {
+                    width: seg.cellW
+                    height: page.ctrlH
                     Rectangle {
-                        width: orow.cellW
-                        height: page.optH
+                        anchors.fill: parent
+                        anchors.margins: 3
                         radius: height / 2
-                        color: Qt.rgba(1, 0.96, 0.9, m.containsMouse && index !== orow.sel ? 0.09 : 0.05)
-                        Behavior on color { ColorAnimation { duration: Theme.fast } }
-                        MouseArea { id: m; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: orow.picked(modelData.v) }
+                        color: Qt.rgba(1, 0.96, 0.9, 0.06)
+                        opacity: sm.containsMouse && index !== seg.sel ? 1 : 0
+                        Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
                     }
-                }
-            }
-            // 选中底板:按格位滑动
-            Rectangle {
-                visible: orow.sel >= 0
-                x: Math.max(0, orow.sel) * (orow.cellW + page.optGap)
-                width: orow.cellW
-                height: page.optH
-                radius: height / 2
-                color: Theme.accent
-                Behavior on x { NumberAnimation { duration: 340; easing.type: Easing.OutQuint } }
-            }
-            // 文字在最上层:选中为深色、其余为柔和灰
-            Row {
-                spacing: page.optGap
-                Repeater {
-                    model: orow.options
                     Text {
-                        width: orow.cellW
-                        height: page.optH
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
+                        anchors.centerIn: parent
                         text: modelData.t
-                        color: index === orow.sel ? Theme.onAccent : Theme.textSecondary
+                        color: index === seg.sel ? Theme.onAccent : Theme.textSecondary
                         font.family: Theme.fontFamily
                         font.pixelSize: 13
-                        font.weight: index === orow.sel ? Font.DemiBold : Font.Normal
+                        font.weight: index === seg.sel ? Font.DemiBold : Font.Normal
                         Behavior on color { ColorAnimation { duration: Theme.normal } }
                     }
+                    MouseArea { id: sm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: seg.picked(modelData.v) }
                 }
             }
         }
-        Text {
-            anchors.right: parent.right
-            anchors.rightMargin: 22
-            anchors.verticalCenter: parent.verticalCenter
-            text: orow.hint
-            color: Theme.textTertiary
-            font.family: Theme.fontFamily
-            font.pixelSize: 12
-        }
     }
 
-    // 行:名称 + 任意内容
-    component CustomRow: Item {
-        property string label
-        default property alias content: slot.data
-        width: parent ? parent.width : 0
-        height: 54
-        Text {
-            x: 22
-            anchors.verticalCenter: parent.verticalCenter
-            text: parent.label
-            color: Theme.text
-            font.family: Theme.fontFamily
-            font.pixelSize: 14
-            font.weight: Font.DemiBold
+    // ---------------- 色块 (配色选择) ----------------
+    component Swatch: Item {
+        id: sw
+        property color swatch
+        property bool on
+        signal clicked()
+        width: 28
+        height: page.ctrlH
+        Rectangle {
+            anchors.centerIn: parent
+            width: 28; height: 28; radius: 14
+            color: "transparent"
+            border.width: 1.5
+            border.color: sw.swatch
+            opacity: sw.on ? 1 : 0
+            Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
         }
-        Item {
-            id: slot
-            x: 140
-            width: parent.width - 140 - 22
-            height: parent.height
+        Rectangle {
+            anchors.centerIn: parent
+            width: 18; height: 18; radius: 9
+            color: sw.swatch
+            scale: swm.containsMouse ? 1.12 : 1
+            Behavior on scale { ScaleAnimator { duration: Theme.fast } }
         }
+        MouseArea { id: swm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: sw.clicked() }
     }
 
-    // 面板:圆角容器,行之间细分隔线;进场时依次浮现
+    // ---------------- 面板:圆角容器,行之间细分隔线;进场时依次浮现 ----------------
     component Panel: Rectangle {
         id: pnl
         property int order: 0
@@ -150,10 +197,10 @@ Item {
         Component.onCompleted: intro.start()
         SequentialAnimation {
             id: intro
-            PauseAnimation { duration: 50 + pnl.order * 60 }
+            PauseAnimation { duration: 50 + pnl.order * 50 }
             ParallelAnimation {
-                OpacityAnimator { target: pnl; to: 1; duration: 380; easing.type: Easing.OutCubic }
-                NumberAnimation { target: lift; property: "y"; to: 0; duration: 520; easing.type: Easing.OutQuint }
+                OpacityAnimator { target: pnl; to: 1; duration: 360; easing.type: Easing.OutCubic }
+                NumberAnimation { target: lift; property: "y"; to: 0; duration: 500; easing.type: Easing.OutQuint }
             }
         }
         Column {
@@ -161,7 +208,13 @@ Item {
             y: 4
             width: parent.width
         }
-        // 行分隔线
+        function visibleAfter(i) {
+            for (let j = i + 1; j < col.children.length; ++j) {
+                const c = col.children[j]
+                if (c.visible && c.height > 0) return true
+            }
+            return false
+        }
         Repeater {
             model: Math.max(0, col.children.length - 1)
             Rectangle {
@@ -171,16 +224,64 @@ Item {
                 width: pnl.width - 44
                 height: 1
                 color: Theme.hairline
-                visible: above && above.visible && above.height > 0
+                // 下面还有可见的行才画;标了 noSep 的行 (文件夹列表、展开的列表) 下方不画
+                visible: above && above.visible && above.height > 0 && above.noSep !== true && pnl.visibleAfter(index)
             }
         }
     }
 
-    // 文字小胶囊按钮
-    component Pill: Capsule { height: 30 }
+    // 就地展开的单选列表 (输出设备):右对齐在控件下方
+    component PickList: Item {
+        id: pl
+        property bool open: false
+        property var items: []           // [{ t: 文本, v: 值 }]
+        property var current
+        signal picked(var v)
+        width: parent ? parent.width : 0
+        height: open ? plCol.implicitHeight + 12 : 0
+        clip: true
+        visible: height > 0
+        Behavior on height { NumberAnimation { duration: Theme.reduced ? 0 : 300; easing.type: Easing.OutQuint } }
+        Column {
+            id: plCol
+            anchors.right: parent.right
+            anchors.rightMargin: 22
+            spacing: 4
+            opacity: pl.open ? 1 : 0
+            Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+            Repeater {
+                model: pl.items
+                Rectangle {
+                    readonly property bool cur: modelData.v === pl.current
+                    width: 340
+                    height: page.ctrlH
+                    radius: height / 2
+                    color: cur ? Theme.accent : Qt.rgba(1, 0.96, 0.9, plm.containsMouse ? 0.09 : 0.05)
+                    Behavior on color { ColorAnimation { duration: Theme.fast } }
+                    Text {
+                        anchors.fill: parent
+                        anchors.leftMargin: 16
+                        anchors.rightMargin: 16
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
+                        text: modelData.t
+                        color: parent.cur ? Theme.onAccent : Theme.textSecondary
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 13
+                        font.weight: parent.cur ? Font.DemiBold : Font.Normal
+                    }
+                    MouseArea { id: plm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { pl.picked(modelData.v); pl.open = false } }
+                }
+            }
+        }
+    }
+
+    function shortPath(p, n) { return p.length > n ? p.slice(0, 3) + "…" + p.slice(p.length - (n - 4)) : p }
+    function artistCountOf() { return library.generation >= 0 ? artistModel.rowCount() : 0 }
 
     Flickable {
         id: flick
+        objectName: "settingsFlick"
         anchors.fill: parent
         contentHeight: content.height + 52 + page.bottomInset
         boundsBehavior: Flickable.StopAtBounds
@@ -191,7 +292,7 @@ Item {
             x: (page.width - page.contentW) / 2
             y: 52
             width: page.contentW
-            spacing: 14
+            spacing: 10
 
             // ======================= 顶栏 =======================
             Panel {
@@ -206,7 +307,7 @@ Item {
                         spacing: 12
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
-                            text: "Hi-Fi Player"
+                            text: qsTr("设置")
                             color: Theme.text
                             font.family: Theme.fontFamily
                             font.pixelSize: 16
@@ -216,7 +317,7 @@ Item {
                             anchors.verticalCenter: parent.verticalCenter
                             text: qsTr("%1 首  ·  %2 张专辑  ·  %3 位歌手")
                                     .arg(library.trackCount.toLocaleString(Qt.locale(), "f", 0))
-                                    .arg(library.albumCount).arg(artistModel.letters.length >= 0 ? artistCountOf() : 0)
+                                    .arg(library.albumCount).arg(artistModel.letters.length >= 0 ? page.artistCountOf() : 0)
                             color: Theme.textTertiary
                             font.family: Theme.fontFamily
                             font.pixelSize: 13
@@ -234,472 +335,425 @@ Item {
             }
 
             // ======================= 播放 =======================
+            SectionTitle { text: qsTr("播放") }
             Panel {
                 order: 1
-                OptionRow {
-                    label: qsTr("输出模式")
-                    options: [{ t: qsTr("共享"), v: false }, { t: qsTr("WASAPI 独占"), v: true }]
-                    value: player.exclusive
-                    hint: player.exclusive ? qsTr("绕过系统混音器") : qsTr("经过系统混音器")
-                    onPicked: (v) => player.exclusive = v
+                SettingRow {
+                    label: qsTr("WASAPI 独占")
+                    hint: player.exclusive ? qsTr("绕过系统混音器,直接送往设备;其他程序暂时没有声音") : qsTr("关闭时经过系统混音器,可与其他程序同时出声")
+                    Toggle { checked: player.exclusive; onToggled: (v) => player.exclusive = v }
                 }
-                CustomRow {
+                SettingRow {
+                    id: devRow
+                    noSep: devList.open
                     label: qsTr("输出设备")
+                    hint: qsTr("切换时播放不中断")
                     Capsule {
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: (player.outputDevice || qsTr("系统默认")) + (devList.open ? "   ︿" : "   ﹀")
-                        width: Math.min(implicitWidth, 460)
+                        text: (player.outputDevice || qsTr("系统默认")) + (devList.open ? "  ︿" : "  ﹀")
+                        width: Math.min(implicitWidth, 340)
                         onClicked: { if (!devList.open) player.refreshDevices(); devList.open = !devList.open }
                     }
                 }
-                // 设备列表:就地展开,选中即切换 (播放不中断,位置保持)
-                Item {
+                PickList {
                     id: devList
-                    property bool open: false
-                    readonly property var names: [""].concat(player.outputDevices)
-                    width: parent.width
-                    height: open ? devCol.implicitHeight + 14 : 0
-                    clip: true
-                    visible: height > 0
-                    Behavior on height { NumberAnimation { duration: Theme.reduced ? 0 : 320; easing.type: Easing.OutQuint } }
-                    Column {
-                        id: devCol
-                        x: 140
-                        y: 2
-                        spacing: 4
-                        opacity: devList.open ? 1 : 0
-                        Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
-                        Repeater {
-                            model: devList.names
-                            Rectangle {
-                                readonly property bool cur: modelData === player.outputDevice
-                                width: Math.min(460, Math.max(220, devText.implicitWidth + 36))
-                                height: page.optH
-                                radius: height / 2
-                                color: cur ? Theme.accent : Qt.rgba(1, 0.96, 0.9, dm.containsMouse ? 0.09 : 0.05)
-                                Behavior on color { ColorAnimation { duration: Theme.fast } }
-                                Text {
-                                    id: devText
-                                    anchors.fill: parent
-                                    anchors.leftMargin: 18
-                                    anchors.rightMargin: 18
-                                    verticalAlignment: Text.AlignVCenter
-                                    elide: Text.ElideRight
-                                    text: modelData || qsTr("系统默认")
-                                    color: parent.cur ? Theme.onAccent : Theme.textSecondary
-                                    font.family: Theme.fontFamily
-                                    font.pixelSize: 13
-                                    font.weight: parent.cur ? Font.DemiBold : Font.Normal
-                                }
-                                MouseArea {
-                                    id: dm
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: { player.outputDevice = modelData; devList.open = false }
-                                }
-                            }
-                        }
+                    items: [{ t: qsTr("系统默认"), v: "" }].concat(player.outputDevices.map(d => ({ t: d, v: d })))
+                    current: player.outputDevice
+                    onPicked: (v) => player.outputDevice = v
+                }
+                SettingRow {
+                    label: qsTr("无缝播放")
+                    hint: qsTr("曲目之间不留空隙,适合现场专辑与古典")
+                    Toggle { checked: player.gapless; onToggled: (v) => player.gapless = v }
+                }
+                SettingRow {
+                    label: qsTr("音量标准化")
+                    hint: qsTr("读取 ReplayGain 让不同歌曲音量接近,不会削波")
+                    Segmented {
+                        options: [{ t: qsTr("关闭"), v: 0 }, { t: qsTr("按曲目"), v: 1 }, { t: qsTr("按专辑"), v: 2 }]
+                        value: player.replayGain
+                        onPicked: (v) => player.replayGain = v
                     }
                 }
-                OptionRow {
-                    label: qsTr("无缝播放")
-                    options: [{ t: qsTr("开启"), v: true }, { t: qsTr("关闭"), v: false }]
-                    value: player.gapless
-                    hint: qsTr("曲目之间不留空隙")
-                    onPicked: (v) => player.gapless = v
-                }
-                OptionRow {
-                    label: qsTr("音量标准化")
-                    options: [{ t: qsTr("关闭"), v: 0 }, { t: qsTr("按曲目"), v: 1 }, { t: qsTr("按专辑"), v: 2 }]
-                    value: player.replayGain
-                    hint: qsTr("读取 ReplayGain,不削波")
-                    onPicked: (v) => player.replayGain = v
-                }
-                OptionRow {
-                    label: qsTr("歌词")
-                    options: [{ t: qsTr("LRC 优先"), v: 0 }, { t: qsTr("内嵌优先"), v: 1 }]
-                    value: settings.lyricsSource
-                    hint: qsTr("同名 .lrc 与文件内嵌歌词")
-                    onPicked: (v) => { settings.lyricsSource = v; player.reloadLyrics() }
-                }
-                OptionRow {
-                    label: qsTr("桌面歌词")
-                    options: [{ t: qsTr("显示"), v: true }, { t: qsTr("关闭"), v: false }]
-                    value: settings.desktopLyrics
-                    hint: qsTr("置顶显示在桌面上 · Ctrl D")
-                    onPicked: (v) => settings.desktopLyrics = v
-                }
-                OptionRow {
-                    visible: settings.desktopLyrics
-                    label: qsTr("歌词锁定")
-                    options: [{ t: qsTr("锁定"), v: true }, { t: qsTr("可拖动"), v: false }]
-                    value: settings.lyricsLocked
-                    hint: qsTr("锁定后鼠标可以穿过歌词")
-                    onPicked: (v) => settings.lyricsLocked = v
-                }
-                OptionRow {
+                SettingRow {
                     label: qsTr("淡入淡出")
-                    options: [{ t: qsTr("开启"), v: true }, { t: qsTr("关闭"), v: false }]
-                    value: settings.fade
-                    hint: qsTr("暂停与继续时")
-                    onPicked: (v) => settings.fade = v
+                    hint: qsTr("暂停时淡出、继续时淡入,避免突然截断")
+                    Segmented {
+                        options: [{ t: qsTr("关闭"), v: 0 }, { t: qsTr("短"), v: 1 }, { t: qsTr("标准"), v: 2 }, { t: qsTr("长"), v: 3 }]
+                        value: settings.fadeLevel
+                        onPicked: (v) => settings.fadeLevel = v
+                    }
                 }
-                OptionRow {
+                SettingRow {
                     label: qsTr("定时关闭")
-                    options: [{ t: qsTr("关闭"), v: 0 }, { t: qsTr("15 分钟"), v: 15 }, { t: qsTr("30 分钟"), v: 30 },
-                              { t: qsTr("60 分钟"), v: 60 }, { t: qsTr("播完本首"), v: -1 }]
-                    value: player.sleepMinutes
                     hint: player.sleepMinutes > 0
-                          ? qsTr("%1 后暂停").arg(Math.floor(player.sleepRemaining / 60) + ":" + String(player.sleepRemaining % 60).padStart(2, "0"))
+                          ? qsTr("还剩 %1,到点后淡出暂停").arg(Math.floor(player.sleepRemaining / 60) + ":" + String(player.sleepRemaining % 60).padStart(2, "0"))
                           : player.sleepMinutes === -1 ? qsTr("当前歌曲播完后停止") : qsTr("到点后淡出暂停")
-                    onPicked: (v) => player.setSleepTimer(v)
+                    Segmented {
+                        options: [{ t: qsTr("关闭"), v: 0 }, { t: "15", v: 15 }, { t: "30", v: 30 }, { t: "60", v: 60 }, { t: "90", v: 90 }, { t: qsTr("播完本首"), v: -1 }]
+                        value: player.sleepMinutes
+                        onPicked: (v) => player.setSleepTimer(v)
+                    }
                 }
-                OptionRow {
-                    label: qsTr("启动时")
-                    options: [{ t: qsTr("恢复上次播放"), v: true }, { t: qsTr("从头开始"), v: false }]
-                    value: settings.resume
-                    onPicked: (v) => settings.resume = v
+                SettingRow {
+                    label: qsTr("启动时恢复播放")
+                    hint: qsTr("打开软件时回到上次的队列和位置 (暂停状态)")
+                    Toggle { checked: settings.resume; onToggled: (v) => settings.resume = v }
+                }
+                SettingRow {
+                    label: qsTr("播放时不睡眠")
+                    hint: qsTr("播放期间电脑不会自动睡眠,显示器照常关闭")
+                    Toggle { checked: settings.keepAwake; onToggled: (v) => settings.keepAwake = v }
+                }
+            }
+
+            // ======================= 歌词 =======================
+            SectionTitle { text: qsTr("歌词") }
+            Panel {
+                order: 2
+                SettingRow {
+                    label: qsTr("歌词来源")
+                    hint: qsTr("同名 .lrc 文件与歌曲内嵌歌词都有时用哪个")
+                    Segmented {
+                        options: [{ t: qsTr("LRC 优先"), v: 0 }, { t: qsTr("内嵌优先"), v: 1 }]
+                        value: settings.lyricsSource
+                        onPicked: (v) => { settings.lyricsSource = v; player.reloadLyrics() }
+                    }
+                }
+                SettingRow {
+                    label: qsTr("在线查找")
+                    hint: qsTr("本地没有歌词时从酷狗查找并缓存")
+                    Toggle { checked: settings.onlineLyrics; onToggled: (v) => { settings.onlineLyrics = v; player.reloadLyrics() } }
+                }
+                SettingRow {
+                    label: qsTr("桌面歌词")
+                    hint: qsTr("置顶显示在桌面上,也可以按 Ctrl D")
+                    Toggle { checked: settings.desktopLyrics; onToggled: (v) => settings.desktopLyrics = v }
+                }
+                SettingRow {
+                    visible: settings.desktopLyrics
+                    label: qsTr("锁定位置")
+                    hint: qsTr("锁定后鼠标可以穿过歌词,悬停时出现解锁按钮")
+                    Toggle { checked: settings.lyricsLocked; onToggled: (v) => settings.lyricsLocked = v }
+                }
+                SettingRow {
+                    visible: settings.desktopLyrics
+                    label: qsTr("字号")
+                    Segmented {
+                        options: [{ t: qsTr("小"), v: 26 }, { t: qsTr("中"), v: 34 }, { t: qsTr("大"), v: 44 }, { t: qsTr("特大"), v: 56 }]
+                        value: settings.lyricsFontSize
+                        onPicked: (v) => settings.lyricsFontSize = v
+                    }
+                }
+                SettingRow {
+                    visible: settings.desktopLyrics
+                    label: qsTr("双行显示")
+                    hint: qsTr("有翻译时显示翻译,没有时交替显示下一句")
+                    Toggle { checked: settings.lyricsTwoLine; onToggled: (v) => settings.lyricsTwoLine = v }
+                }
+                SettingRow {
+                    visible: settings.desktopLyrics
+                    label: qsTr("配色")
+                    hint: Theme.lyricPresets[Math.max(0, Math.min(Theme.lyricPresets.length - 1, settings.lyricsColor))].name
+                    Repeater {
+                        model: Theme.lyricPresets
+                        Swatch { swatch: modelData.c; on: settings.lyricsColor === index; onClicked: settings.lyricsColor = index }
+                    }
                 }
             }
 
             // ======================= 曲库 =======================
+            SectionTitle { text: qsTr("曲库") }
             Panel {
-                order: 2
-                CustomRow {
+                order: 3
+                SettingRow {
                     label: qsTr("音乐文件夹")
-                    height: Math.max(54, folderFlow.implicitHeight + 22)
-                    Flow {
-                        id: folderFlow
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: parent.width
-                        spacing: 8
-                        Repeater {
-                            model: library.folders
-                            Rectangle {
-                                readonly property bool kg: library.isKugouFolder(modelData)
-                                height: 32
-                                radius: 16
-                                width: Math.min(360, fname.x + fname.width + (fm.containsMouse ? 52 : 14))
-                                Behavior on width { NumberAnimation { duration: Theme.fast } }
-                                color: Qt.rgba(1, 0.96, 0.9, fm.containsMouse ? 0.09 : 0.05)
-                                clip: true
-                                Text {
-                                    id: kgTag
-                                    x: 14
-                                    visible: parent.kg
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: qsTr("酷狗")
-                                    color: Theme.accent
-                                    font.family: Theme.fontFamily
-                                    font.pixelSize: 12
-                                    font.weight: Font.DemiBold
-                                }
-                                Text {
-                                    id: fname
-                                    x: parent.kg ? kgTag.x + kgTag.implicitWidth + 8 : 14
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    width: Math.min(implicitWidth, 270)
-                                    text: modelData
-                                    elide: Text.ElideMiddle
-                                    color: Theme.textSecondary
-                                    font.family: Theme.fontFamily
-                                    font.pixelSize: 13
-                                }
-                                Text {
-                                    anchors.right: parent.right
-                                    anchors.rightMargin: 14
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: qsTr("移除")
-                                    color: Theme.accent
-                                    font.family: Theme.fontFamily
-                                    font.pixelSize: 12
-                                    opacity: fm.containsMouse ? 1 : 0
-                                    Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
-                                }
-                                MouseArea {
-                                    id: fm
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: library.removeFolder(modelData)
-                                }
+                    noSep: library.folders.length > 0
+                    hint: library.folders.length > 0 ? qsTr("%1 个文件夹,悬停可移除").arg(library.folders.length) : qsTr("还没有添加")
+                    Capsule { accent: true; text: qsTr("添加文件夹"); onClicked: addFolder.open() }
+                }
+                // 已添加的文件夹:每个一行,路径在左,标记与移除在右
+                Repeater {
+                    model: library.folders
+                    Item {
+                        width: parent ? parent.width : 0
+                        height: 40
+                        readonly property bool noSep: index < library.folders.length - 1
+                        readonly property bool kg: library.isKugouFolder(modelData)
+                        readonly property bool hid: library.hiddenFolders.indexOf(modelData) >= 0
+                        Rectangle {
+                            x: 14
+                            width: parent.width - 28
+                            height: 34
+                            anchors.verticalCenter: parent.verticalCenter
+                            radius: 17
+                            color: Qt.rgba(1, 0.96, 0.9, fm.containsMouse ? 0.05 : 0)
+                        }
+                        MouseArea { id: fm; anchors.fill: parent; hoverEnabled: true }
+                        Text {
+                            x: 22
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - 44 - tagRow.width - 16
+                            elide: Text.ElideMiddle
+                            text: modelData
+                            color: parent.hid ? Theme.textTertiary : Theme.textSecondary
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 13
+                        }
+                        Row {
+                            id: tagRow
+                            anchors.right: parent.right
+                            anchors.rightMargin: 22
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 8
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: parent.parent.kg
+                                text: qsTr("酷狗")
+                                color: Theme.accent
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 12
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: parent.parent.hid
+                                text: qsTr("已隐藏")
+                                color: Theme.textTertiary
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 12
+                            }
+                            Capsule {
+                                height: 28
+                                text: parent.parent.hid ? qsTr("显示") : qsTr("隐藏")
+                                opacity: fm.containsMouse || hovered ? 1 : 0
+                                Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+                                onClicked: library.setFolderHidden(modelData, !parent.parent.hid)
+                            }
+                            Capsule {
+                                height: 28
+                                text: qsTr("移除")
+                                opacity: fm.containsMouse || hovered ? 1 : 0
+                                Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+                                onClicked: library.removeFolder(modelData)
                             }
                         }
-                        Capsule { accent: true; text: qsTr("添加"); onClicked: addFolder.open() }
                     }
                 }
-                CustomRow {
-                    label: qsTr("酷狗音乐")
+                SettingRow {
                     visible: page.kgCands.length > 0
-                    height: visible ? 54 : 0
-                    Row {
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 8
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: Math.min(implicitWidth, 360)
-                            elide: Text.ElideMiddle
-                            text: qsTr("发现酷狗下载目录 %1").arg(page.kgCands.join("、"))
-                            color: Theme.textSecondary
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 13
-                        }
-                        Capsule {
-                            accent: true
-                            text: qsTr("加入")
-                            onClicked: { library.addKugouFolders(page.kgCands); page.kgTick++ }
-                        }
-                        Capsule {
-                            text: qsTr("忽略")
-                            onClicked: { library.dismissKugouCandidates(page.kgCands); page.kgTick++ }
-                        }
-                    }
+                    label: qsTr("发现酷狗下载目录")
+                    hint: page.kgCands.join("、")
+                    Capsule { accent: true; text: qsTr("加入"); onClicked: { library.addKugouFolders(page.kgCands); page.kgTick++ } }
+                    Capsule { text: qsTr("忽略"); onClicked: { library.dismissKugouCandidates(page.kgCands); page.kgTick++ } }
                 }
-                CustomRow {
-                    label: qsTr("单独加入")
+                SettingRow {
                     visible: library.extraFileCount > 0
-                    height: visible ? 54 : 0
-                    Row {
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 12
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: qsTr("%1 首不在音乐文件夹里的歌 (拖入或从转换页加入)").arg(library.extraFileCount)
-                            color: Theme.textSecondary
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 13
-                        }
-                        Capsule { text: qsTr("全部移出曲库"); onClicked: library.clearExtraFiles() }
+                    label: qsTr("单独加入的歌")
+                    hint: qsTr("%1 首不在音乐文件夹里 (拖入或从转换页加入)").arg(library.extraFileCount)
+                    Capsule { text: qsTr("全部移出"); onClicked: library.clearExtraFiles() }
+                }
+                SettingRow {
+                    visible: library.excludedFileCount > 0
+                    label: qsTr("已从曲库移除的文件")
+                    hint: qsTr("%1 个文件在查重时选了「只从曲库移除」,磁盘上还在").arg(library.excludedFileCount)
+                    Capsule { text: qsTr("恢复显示"); onClicked: library.clearExcludedFiles() }
+                }
+                SettingRow {
+                    label: qsTr("歌单去重")
+                    hint: qsTr("同一首歌的多个副本只显示音质最好的一份,不动文件")
+                    Toggle { checked: library.displayDedupe; onToggled: (v) => library.displayDedupe = v }
+                }
+                SettingRow {
+                    label: qsTr("实时监控")
+                    hint: qsTr("文件夹里有新歌、删除或改名时自动更新")
+                    Toggle { checked: library.watchFolders; onToggled: (v) => library.watchFolders = v }
+                }
+                SettingRow {
+                    label: qsTr("扫描线程")
+                    hint: qsTr("机械硬盘建议 4,固态硬盘用自动")
+                    Segmented {
+                        options: [{ t: qsTr("自动"), v: 0 }, { t: "4", v: 4 }, { t: "8", v: 8 }, { t: "16", v: 16 }]
+                        value: settings.scanThreads
+                        onPicked: (v) => settings.scanThreads = v
                     }
                 }
-                OptionRow {
-                    label: qsTr("实时监控")
-                    options: [{ t: qsTr("开启"), v: true }, { t: qsTr("关闭"), v: false }]
-                    value: library.watchFolders
-                    hint: qsTr("文件夹里有新歌、删除或改名时自动更新")
-                    onPicked: (v) => library.watchFolders = v
-                }
-                OptionRow {
-                    label: qsTr("扫描线程")
-                    options: [{ t: qsTr("自动"), v: 0 }, { t: "4", v: 4 }, { t: "8", v: 8 }, { t: "16", v: 16 }]
-                    value: settings.scanThreads
-                    hint: qsTr("机械硬盘建议 4")
-                    onPicked: (v) => settings.scanThreads = v
-                }
-                OptionRow {
+                SettingRow {
                     label: qsTr("CUE 分轨")
-                    options: [{ t: qsTr("开启"), v: true }, { t: qsTr("关闭"), v: false }]
-                    value: settings.splitCue
-                    hint: qsTr("整轨按 CUE 拆分为独立曲目")
-                    onPicked: (v) => settings.splitCue = v
+                    hint: qsTr("整轨文件按 CUE 拆成独立曲目 · 改后需重扫")
+                    Toggle { checked: settings.splitCue; onToggled: (v) => settings.splitCue = v }
                 }
-                OptionRow {
+                SettingRow {
                     label: qsTr("旧编码标签")
-                    options: [{ t: qsTr("简体 GBK"), v: 936 }, { t: qsTr("繁体 Big5"), v: 950 }, { t: qsTr("日文 Shift-JIS"), v: 932 }]
-                    value: settings.codePage
-                    hint: qsTr("非 Unicode 标签乱码时切换")
-                    onPicked: (v) => settings.codePage = v
+                    hint: qsTr("非 Unicode 标签乱码时切换 · 改后需重扫")
+                    Segmented {
+                        options: [{ t: qsTr("简体"), v: 936 }, { t: qsTr("繁体"), v: 950 }, { t: qsTr("日文"), v: 932 }]
+                        value: settings.codePage
+                        onPicked: (v) => settings.codePage = v
+                    }
                 }
-                OptionRow {
-                    label: qsTr("MP3 尾部标签")
-                    options: [{ t: qsTr("读取"), v: true }, { t: qsTr("忽略"), v: false }]
-                    value: settings.readId3v1
-                    hint: qsTr("ID3v1 / APEv2")
-                    onPicked: (v) => settings.readId3v1 = v
+                SettingRow {
+                    label: qsTr("读取 MP3 尾部标签")
+                    hint: qsTr("ID3v1 / APEv2 · 改后需重扫")
+                    Toggle { checked: settings.readId3v1; onToggled: (v) => settings.readId3v1 = v }
                 }
-                // 解析相关设置改动后:立即重扫
-                CustomRow {
-                    label: qsTr("重新扫描")
+                SettingRow {
                     visible: settings.needRescan
-                    height: visible ? 54 : 0
-                    Row {
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 12
-                        Capsule {
-                            filled: true
-                            text: library.scanning ? qsTr("扫描中…") : qsTr("立即重扫")
-                            interactive: !library.scanning
-                            onClicked: settings.rebuildLibrary()
-                        }
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: qsTr("以上设置改动后需要重扫才生效")
-                            color: Theme.textTertiary
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 12
-                        }
+                    label: qsTr("需要重新扫描")
+                    hint: qsTr("上面的解析设置改过,重扫后才生效")
+                    Capsule {
+                        filled: true
+                        text: library.scanning ? qsTr("扫描中…") : qsTr("立即重扫")
+                        interactive: !library.scanning
+                        onClicked: settings.rebuildLibrary()
                     }
                 }
             }
 
             // ======================= 转换 =======================
+            SectionTitle { text: qsTr("加密歌曲转换") }
             Panel {
-                order: 3
-                OptionRow {
-                    label: qsTr("加密歌曲")
-                    options: [{ t: qsTr("询问"), v: 0 }, { t: qsTr("自动转换"), v: 1 }, { t: qsTr("不转换"), v: 2 }]
-                    value: decrypt.policy
+                order: 4
+                SettingRow {
+                    label: qsTr("发现加密歌曲时")
                     hint: qsTr("音乐文件夹里的 KGM / NCM / KGG")
-                    onPicked: (v) => decrypt.policy = v
+                    Segmented {
+                        options: [{ t: qsTr("询问"), v: 0 }, { t: qsTr("自动转换"), v: 1 }, { t: qsTr("不转换"), v: 2 }]
+                        value: decrypt.policy
+                        onPicked: (v) => decrypt.policy = v
+                    }
                 }
-                CustomRow {
+                SettingRow {
                     label: qsTr("输出目录")
-                    Row {
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 8
-                        // 路径太长时只留开头盘符和结尾几级,避免压到左边的标题
-                        Capsule {
-                            readonly property string full: decrypt.outputDir
-                            text: full.length > 46 ? full.slice(0, 3) + "…" + full.slice(full.length - 40) : full
-                            onClicked: outPicker.open()
-                        }
-                        Capsule { text: qsTr("打开"); onClicked: decrypt.openOutputFolder() }
-                    }
+                    hint: decrypt.outputDir
+                    Capsule { text: qsTr("更改"); onClicked: outPicker.open() }
+                    Capsule { text: qsTr("打开"); onClicked: decrypt.openOutputFolder() }
                 }
-                OptionRow {
+                SettingRow {
                     label: qsTr("写回标签")
-                    options: [{ t: qsTr("开启"), v: true }, { t: qsTr("关闭"), v: false }]
-                    value: settings.writeTags
-                    hint: qsTr("NCM 转换后写入歌名、歌手、封面")
-                    onPicked: (v) => settings.writeTags = v
+                    hint: qsTr("NCM 转换后写入歌名、歌手和封面")
+                    Toggle { checked: settings.writeTags; onToggled: (v) => settings.writeTags = v }
                 }
-                CustomRow {
+                SettingRow {
                     label: qsTr("转换工具")
-                    Text {
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: decrypt.decoders.map(d => d.id.toUpperCase() + " " + (d.available ? qsTr("就绪") : d.reason)).join("   ·   ")
-                        color: Theme.textSecondary
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 13
-                    }
+                    hint: decrypt.decoders.map(d => d.id.toUpperCase() + " " + (d.available ? qsTr("就绪") : d.reason)).join("  ·  ")
                 }
             }
 
             // ======================= 外观 =======================
+            SectionTitle { text: qsTr("外观") }
             Panel {
-                order: 4
-                CustomRow {
+                order: 5
+                SettingRow {
                     label: qsTr("强调色")
-                    Row {
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 10
-                        Capsule {
-                            anchors.verticalCenter: parent.verticalCenter
-                            filled: settings.accent < 0
-                            text: qsTr("跟随封面")
-                            onClicked: settings.accent = -1
-                        }
-                        Repeater {
-                            model: settings.accentPresets
-                            Item {
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: 30; height: 30
-                                readonly property bool on: settings.accent === index
-                                Rectangle {
-                                    anchors.fill: parent
-                                    radius: 15
-                                    color: "transparent"
-                                    border.width: 1.5
-                                    border.color: modelData
-                                    opacity: parent.on ? 1 : 0
-                                    scale: parent.on ? 1 : 0.7
-                                    Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
-                                    Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutBack } }
-                                }
-                                Rectangle {
-                                    anchors.centerIn: parent
-                                    width: 20; height: 20; radius: 10
-                                    color: modelData
-                                    scale: sw.containsMouse ? 1.12 : 1
-                                    Behavior on scale { ScaleAnimator { duration: Theme.fast } }
-                                }
-                                MouseArea { id: sw; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: settings.accent = index }
-                            }
-                        }
+                    hint: settings.accent < 0 ? qsTr("跟随当前专辑封面") : qsTr("固定颜色")
+                    Capsule { accent: settings.accent < 0; text: qsTr("跟随封面"); onClicked: settings.accent = -1 }
+                    Repeater {
+                        model: settings.accentPresets
+                        Swatch { swatch: modelData; on: settings.accent === index; onClicked: settings.accent = index }
                     }
                 }
-                OptionRow {
+                SettingRow {
                     label: qsTr("背景")
-                    options: [{ t: qsTr("流动"), v: 0 }, { t: qsTr("静止"), v: 1 }, { t: qsTr("纯色"), v: 2 }]
-                    value: settings.background
                     hint: qsTr("静止与纯色更省电")
-                    onPicked: (v) => settings.background = v
+                    Segmented {
+                        options: [{ t: qsTr("流动"), v: 0 }, { t: qsTr("静止"), v: 1 }, { t: qsTr("纯色"), v: 2 }]
+                        value: settings.background
+                        onPicked: (v) => settings.background = v
+                    }
                 }
-                OptionRow {
-                    label: qsTr("动效")
-                    options: [{ t: qsTr("完整"), v: false }, { t: qsTr("减弱"), v: true }]
-                    value: settings.reducedMotion
-                    onPicked: (v) => settings.reducedMotion = v
+                SettingRow {
+                    label: qsTr("减弱动效")
+                    hint: qsTr("缩短过渡动画,背景停止流动")
+                    Toggle { checked: settings.reducedMotion; onToggled: (v) => settings.reducedMotion = v }
                 }
-                OptionRow {
+                SettingRow {
                     label: qsTr("界面缩放")
-                    options: [{ t: "90%", v: 0.9 }, { t: "100%", v: 1.0 }, { t: "110%", v: 1.1 }, { t: "125%", v: 1.25 }]
-                    value: settings.uiScale
-                    hint: settings.restartNeeded ? qsTr("重启后生效") : ""
-                    onPicked: (v) => settings.uiScale = v
+                    hint: settings.restartNeeded ? qsTr("重启后生效") : qsTr("文字和控件整体放大或缩小")
+                    Segmented {
+                        options: [{ t: "90%", v: 0.9 }, { t: "100%", v: 1.0 }, { t: "110%", v: 1.1 }, { t: "125%", v: 1.25 }, { t: "150%", v: 1.5 }]
+                        value: settings.uiScale
+                        onPicked: (v) => settings.uiScale = v
+                    }
                 }
             }
 
             // ======================= 存储 =======================
+            SectionTitle { text: qsTr("存储与记录") }
             Panel {
-                order: 5
-                CustomRow {
+                order: 6
+                SettingRow {
                     label: qsTr("封面缓存")
-                    Row {
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 12
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: 80
-                            text: Theme.formatBytes(settings.coverCacheBytes)
-                            color: Theme.textSecondary
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 13
-                        }
-                        Capsule { text: qsTr("清除"); onClicked: settings.clearCoverCache() }
+                    hint: Theme.formatBytes(settings.coverCacheBytes)
+                    Capsule { text: qsTr("清除"); onClicked: settings.clearCoverCache() }
+                }
+                SettingRow {
+                    label: qsTr("扫描缓存")
+                    hint: Theme.formatBytes(settings.scanCacheBytes) + qsTr(" · 重建会重新读取全部文件")
+                    Capsule {
+                        text: library.scanning ? qsTr("扫描中…") : qsTr("重建")
+                        interactive: !library.scanning
+                        onClicked: settings.rebuildLibrary()
                     }
                 }
-                CustomRow {
-                    label: qsTr("扫描缓存")
-                    Row {
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 12
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: 80
-                            text: Theme.formatBytes(settings.scanCacheBytes)
-                            color: Theme.textSecondary
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 13
-                        }
-                        Capsule {
-                            text: library.scanning ? qsTr("扫描中…") : qsTr("重建")
-                            interactive: !library.scanning
-                            onClicked: settings.rebuildLibrary()
-                        }
-                    }
+                SettingRow {
+                    id: histRow
+                    property bool cleared: false
+                    label: qsTr("播放记录")
+                    hint: cleared ? qsTr("已清空") : qsTr("「最近播放」与播放次数")
+                    Capsule { text: qsTr("清空"); onClicked: { playlists.clearHistory(); histRow.cleared = true } }
                 }
             }
 
             // ======================= 快捷键 =======================
+            SectionTitle { text: qsTr("快捷键") }
             Panel {
-                order: 6
-                CustomRow {
-                    label: qsTr("快捷键")
-                    Text {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: parent.width
-                        elide: Text.ElideRight
-                        text: qsTr("空格 播放 / 暂停   ·   Ctrl K 搜索   ·   Ctrl ← → 切歌   ·   Ctrl D 桌面歌词   ·   Alt ← 返回   ·   直接打字即搜索")
-                        color: Theme.textSecondary
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 13
+                order: 7
+                Grid {
+                    id: keys
+                    width: parent.width
+                    columns: 2
+                    topPadding: 6
+                    bottomPadding: 6
+                    readonly property var list: [
+                        { k: qsTr("空格"), t: qsTr("播放 / 暂停") }, { k: "Ctrl K", t: qsTr("搜索") },
+                        { k: "Ctrl ←  →", t: qsTr("上一首 / 下一首") }, { k: "Ctrl D", t: qsTr("桌面歌词") },
+                        { k: "Alt ←", t: qsTr("返回") }, { k: qsTr("直接打字"), t: qsTr("开始搜索") }
+                    ]
+                    Repeater {
+                        model: keys.list
+                        Item {
+                            width: keys.width / 2
+                            height: 40
+                            Text {
+                                x: 22
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: modelData.t
+                                color: Theme.textSecondary
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 13
+                            }
+                            Rectangle {
+                                anchors.right: parent.right
+                                anchors.rightMargin: 22
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: keyText.implicitWidth + 20
+                                height: 26
+                                radius: 8
+                                color: Qt.rgba(1, 0.96, 0.9, 0.06)
+                                border.width: 1
+                                border.color: Theme.hairline
+                                Text {
+                                    id: keyText
+                                    anchors.centerIn: parent
+                                    text: modelData.k
+                                    color: Theme.text
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: 12
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     }
-
-    function artistCountOf() { return library.generation >= 0 ? artistModel.rowCount() : 0 }
 }

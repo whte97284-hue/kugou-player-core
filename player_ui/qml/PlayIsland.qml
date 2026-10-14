@@ -288,6 +288,18 @@ Item {
                 onClicked: island.chainClicked()
             }
         }
+        // 桌面歌词开关 (同 Ctrl D)
+        IconButton {
+            anchors.verticalCenter: parent.verticalCenter
+            width: 34; height: 34
+            icon: "lyrics"
+            iconSize: 16
+            tip: settings.desktopLyrics ? qsTr("关闭桌面歌词") : qsTr("桌面歌词")
+            iconTint: settings.desktopLyrics ? Theme.accent : "transparent"
+            restOpacity: settings.desktopLyrics ? 1 : 0.6
+            popOnChange: true
+            onClicked: settings.desktopLyrics = !settings.desktopLyrics
+        }
         VolumeControl { anchors.verticalCenter: parent.verticalCenter; pinned: !island.compact }
     }
 

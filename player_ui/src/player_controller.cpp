@@ -1,4 +1,5 @@
 #include "player_controller.h"
+#include "settings_service.h"
 
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -621,16 +622,17 @@ void PlayerController::toggle() {
         if (!queue_.empty()) openIndex(std::max(0, queueIndex_), true);
         return;
     }
-    const bool useFade = QSettings().value("player/fade", true).toBool();
+    const int fadeOut = SettingsService::FadeOutMs(), fadeIn = SettingsService::FadeInMs();
+    const bool useFade = fadeOut > 0;
     if (playing_) {
         setPlaying(false);
         if (!useFade) {
             engine_->Pause();
             return;
         }
-        // 淡出 180ms 后真正暂停,避免「咔」的一声截断
+        // 淡出后再真正暂停,避免「咔」的一声截断 (时长见设置里的淡入淡出)
         fade_.stop();
-        fade_.setDuration(180);
+        fade_.setDuration(fadeOut);
         fade_.setStartValue(gain_);
         fade_.setEndValue(0.0);
         disconnect(&fade_, &QVariantAnimation::finished, nullptr, nullptr);
@@ -650,7 +652,7 @@ void PlayerController::toggle() {
             applyVolume();
             return;
         }
-        fade_.setDuration(280);
+        fade_.setDuration(fadeIn);
         fade_.setStartValue(engine_->GetState() == PlaybackState::Playing && gain_ < 1.0 ? gain_ : 0.0);
         fade_.setEndValue(1.0);
         fade_.start();

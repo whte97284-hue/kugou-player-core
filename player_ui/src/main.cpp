@@ -211,6 +211,14 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         window->resize(1320, 1180);
         call("automationGo", QStringLiteral("settings"));
     }, 1600});
+    // 设置页往下翻两屏 (检查各分组的对齐)
+    for (int k = 1; k <= 3; ++k)
+        steps->push_back({QStringLiteral("19%1_settings_scroll").arg(QChar('a' + k)), [window, k] {
+            if (auto* f = window->findChild<QObject*>("settingsFlick")) {
+                const double maxY = std::max(0.0, f->property("contentHeight").toDouble() - f->property("height").toDouble());
+                f->setProperty("contentY", std::min(maxY, 900.0 * k));
+            }
+        }, 700});
     steps->push_back({"14_small_window", [window, call] {
         call("automationHideChain");
         window->resize(980, 640);
@@ -369,6 +377,14 @@ int main(int argc, char* argv[]) {
     taskbar.attach(qobject_cast<QQuickWindow*>(engine.rootObjects().value(0)));
     QObject::connect(&taskbar, &TaskbarHelper::toggleDesktopLyrics, &settings,
                      [&settings]() { settings.setDesktopLyrics(!settings.desktopLyrics()); });
+#ifdef Q_OS_WIN
+    // 播放时不让电脑自动睡眠 (显示器照常关闭);暂停或关掉这项后恢复
+    auto keepAwake = [&player, &settings]() {
+        SetThreadExecutionState(player.playing() && settings.keepAwake() ? (ES_CONTINUOUS | ES_SYSTEM_REQUIRED) : ES_CONTINUOUS);
+    };
+    QObject::connect(&player, &PlayerController::playingChanged, &settings, keepAwake);
+    QObject::connect(&settings, &SettingsService::changed, &settings, keepAwake);
+#endif
 
     if (!libraryArg.isEmpty()) library.addFolder(libraryArg);
     else library.rescan();

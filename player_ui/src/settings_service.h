@@ -13,6 +13,9 @@ class SettingsService : public QObject {
     Q_OBJECT
     // ---- 播放 ----
     Q_PROPERTY(bool fade READ fade WRITE setFade NOTIFY changed)            // 暂停 / 继续时淡出淡入
+    Q_PROPERTY(int fadeLevel READ fadeLevel WRITE setFadeLevel NOTIFY changed) // 0 关 / 1 短 / 2 标准 / 3 长
+    Q_PROPERTY(bool onlineLyrics READ onlineLyrics WRITE setOnlineLyrics NOTIFY changed) // 本地没有歌词时联网查找
+    Q_PROPERTY(bool keepAwake READ keepAwake WRITE setKeepAwake NOTIFY changed) // 播放时不让电脑自动睡眠
     Q_PROPERTY(bool resume READ resume WRITE setResume NOTIFY changed)      // 启动时恢复上次的队列与位置
     Q_PROPERTY(int lyricsSource READ lyricsSource WRITE setLyricsSource NOTIFY changed) // 0 .lrc 优先 / 1 内嵌优先
     // ---- 桌面歌词 ----
@@ -47,8 +50,18 @@ class SettingsService : public QObject {
 public:
     explicit SettingsService(LibraryService* lib, QObject* parent = nullptr);
 
-    bool fade() const { return get("player/fade", true).toBool(); }
-    void setFade(bool v) { put("player/fade", v); }
+    bool fade() const { return fadeLevel() > 0; }
+    void setFade(bool v) { setFadeLevel(v ? 2 : 0); }
+    int fadeLevel() const { return FadeLevel(); }
+    void setFadeLevel(int v);
+    // 暂停淡出 / 继续淡入的时长 (毫秒),0 = 不淡
+    static int FadeLevel();
+    static int FadeOutMs();
+    static int FadeInMs();
+    bool onlineLyrics() const { return get("player/onlineLyrics", true).toBool(); }
+    void setOnlineLyrics(bool v) { put("player/onlineLyrics", v); }
+    bool keepAwake() const { return get("power/keepAwake", true).toBool(); }
+    void setKeepAwake(bool v) { put("power/keepAwake", v); }
     bool resume() const { return get("player/resume", true).toBool(); }
     void setResume(bool v) { put("player/resume", v); }
     int lyricsSource() const { return get("player/lyricsSource", 0).toInt(); }
