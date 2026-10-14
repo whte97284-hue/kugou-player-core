@@ -138,6 +138,9 @@ public:
     Q_INVOKABLE bool isKugouFolder(const QString& path) const;
     Q_INVOKABLE void setFolderHidden(const QString& path, bool hidden);
     Q_INVOKABLE void rescan();
+    // 整理 / 撤销移动了文件:把扫描缓存里的解析结果挪到新路径,随后的重扫不必再逐个解析这些文件。
+    // 正在扫描时不做 (扫描结束会覆盖缓存文件)
+    void carryScanCache(const std::vector<std::pair<std::wstring, std::wstring>>& moves, bool keepSource);
     Q_INVOKABLE void cancelScan();
     Q_INVOKABLE QString qualityBadge(int albumIndex) const;
     // 今日推荐:有封面的 Hi-Res 专辑优先,按日期稳定挑选 (同一天内不变)

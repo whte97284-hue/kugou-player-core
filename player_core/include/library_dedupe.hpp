@@ -48,6 +48,7 @@ struct DupTrack {
     int track_no = 0;
     bool has_cover = false;
     bool cue_track = false;  // CUE 分轨:不参与查重
+    uint64_t size = 0;       // 扫描时记下的文件大小 (0 = 未知,查重时自己读取);省掉逐个文件查询大小
 };
 
 enum class MatchKind { Identical, SameAudio, SameSong, SameName, Versions };

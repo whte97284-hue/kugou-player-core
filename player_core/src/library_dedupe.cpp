@@ -5,8 +5,11 @@
 #include "../include/audio_tag_parser.hpp"
 #include "../include/platform_io.hpp"
 #include "../include/song_cleaner.hpp"
+#include "../include/xxhash64.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <thread>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -125,6 +128,38 @@ bool SameFileObject(const std::wstring& a, const std::wstring& b) {
     return r && !ec;
 }
 
+// 文件身份 (卷 + 文件编号):判断两个路径是不是同一个文件 (硬链接)。
+// fs::equivalent 在 Windows 上每次比较都要打开两个文件,查重时按需取一次缓存起来
+struct FileId {
+    uint64_t volume = 0, index = 0;
+    bool ok = false;
+    bool operator==(const FileId& o) const { return ok && o.ok && volume == o.volume && index == o.index; }
+};
+
+FileId GetFileId(const std::wstring& p) {
+    FileId id;
+#ifdef _WIN32
+    HANDLE h = CreateFileW(platform::LongPath(p).c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return id;
+    BY_HANDLE_FILE_INFORMATION fi;
+    if (GetFileInformationByHandle(h, &fi)) {
+        id.volume = fi.dwVolumeSerialNumber;
+        id.index = (static_cast<uint64_t>(fi.nFileIndexHigh) << 32) | fi.nFileIndexLow;
+        id.ok = true;
+    }
+    CloseHandle(h);
+#else
+    struct stat st;
+    if (::stat(platform::NativePath(p).c_str(), &st) == 0) {
+        id.volume = static_cast<uint64_t>(st.st_dev);
+        id.index = static_cast<uint64_t>(st.st_ino);
+        id.ok = true;
+    }
+#endif
+    return id;
+}
+
 bool Stat(const std::wstring& p, uint64_t& size, int64_t& mtime) {
     uint64_t s = 0, m = 0;
     if (!platform::GetFileInfo(p, s, m)) return false;
@@ -146,35 +181,80 @@ std::wstring UniqueFree(const std::wstring& path) {
 }
 
 // ---------------------------------------------------------------- 哈希与比对
-struct Fnv {
-    uint64_t h = 1469598103934665603ull;
-    void Add(const uint8_t* p, size_t n) {
-        for (size_t i = 0; i < n; ++i) {
-            h ^= p[i];
-            h *= 1099511628211ull;
-        }
+std::vector<uint8_t>& ReadBuffer() {
+    thread_local std::vector<uint8_t> buf(1 << 20);
+    return buf;
+}
+
+bool HashOpen(const platform::ReadOnlyFile& f, uint64_t begin, uint64_t end, kp::Xxh64& h, const std::atomic<bool>* cancel,
+              const std::function<void(uint64_t)>& onBytes) {
+    if (end > f.Size()) return false;
+    std::vector<uint8_t>& buf = ReadBuffer();
+    for (uint64_t off = begin; off < end;) {
+        if (cancel && cancel->load()) return false;
+        size_t want = static_cast<size_t>(std::min<uint64_t>(buf.size(), end - off));
+        size_t n = f.ReadAt(off, buf.data(), want);
+        if (n == 0) return false;
+        h.Add(buf.data(), n);
+        off += n;
+        if (onBytes) onBytes(n);
     }
-};
+    return true;
+}
 
 // 对 [begin, end) 范围求哈希;cancel 时返回 false
 bool HashRange(const std::wstring& path, uint64_t begin, uint64_t end, uint64_t& out, const std::atomic<bool>* cancel,
                const std::function<void(uint64_t)>& onBytes) {
     platform::ReadOnlyFile f;
     if (!f.Open(path, false)) return false;
-    if (end > f.Size()) return false;
-    std::vector<uint8_t> buf(1 << 20);
-    Fnv fnv;
-    for (uint64_t off = begin; off < end;) {
-        if (cancel && cancel->load()) return false;
-        size_t want = static_cast<size_t>(std::min<uint64_t>(buf.size(), end - off));
-        size_t n = f.ReadAt(off, buf.data(), want);
-        if (n == 0) return false;
-        fnv.Add(buf.data(), n);
-        off += n;
-        if (onBytes) onBytes(n);
-    }
-    out = fnv.h;
+    kp::Xxh64 h;
+    if (!HashOpen(f, begin, end, h, cancel, onBytes)) return false;
+    out = h.Digest();
     return true;
+}
+
+// 快速指纹:范围的头尾各 64KB (只打开一次文件)。范围小于 128KB 时就是整段
+bool QuickHash(const std::wstring& path, uint64_t begin, uint64_t end, uint64_t& out) {
+    platform::ReadOnlyFile f;
+    if (!f.Open(path, true) || end > f.Size() || end < begin) return false;
+    const uint64_t q = 64 << 10;
+    kp::Xxh64 h(0x9E3779B97F4A7C15ull);
+    if (end - begin <= 2 * q) {
+        if (!HashOpen(f, begin, end, h, nullptr, nullptr)) return false;
+    } else if (!HashOpen(f, begin, begin + q, h, nullptr, nullptr) || !HashOpen(f, end - q, end, h, nullptr, nullptr)) {
+        return false;
+    }
+    out = h.Digest();
+    return true;
+}
+
+// 在若干线程上并行处理 0..n-1 (读文件头这类小块随机读,并行能明显缩短等待磁盘与杀毒软件的时间);
+// 进度回调只在调用线程上触发
+void ParallelFor(size_t n, unsigned threads, const std::function<void(size_t)>& fn, const std::function<void()>& tick,
+                 const std::atomic<bool>* cancel) {
+    if (n == 0) return;
+    threads = std::max(1u, std::min<unsigned>(threads, static_cast<unsigned>(n)));
+    std::atomic<size_t> next{0};
+    auto worker = [&]() {
+        for (size_t i; (i = next.fetch_add(1)) < n;) {
+            if (cancel && cancel->load()) return;
+            fn(i);
+        }
+    };
+    std::vector<std::thread> pool;
+    for (unsigned t = 1; t < threads; ++t) pool.emplace_back(worker);
+    for (size_t i; (i = next.fetch_add(1)) < n;) {
+        if (cancel && cancel->load()) break;
+        fn(i);
+        if (tick) tick();
+    }
+    for (auto& th : pool) th.join();
+    if (tick) tick();
+}
+
+unsigned IoThreads() {
+    const unsigned hw = std::thread::hardware_concurrency();
+    return std::max(2u, std::min(8u, hw ? hw : 4u));
 }
 
 bool SameRange(const std::wstring& a, uint64_t ab, const std::wstring& b, uint64_t bb, uint64_t len) {
@@ -449,12 +529,21 @@ FindResult FindDuplicates(const std::vector<DupTrack>& tracks, const FindOptions
     FindResult res;
     auto cancelled = [&]() { return cancel && cancel->load(); };
     FindProgress prog;
+    // 并行阶段的计数 (工作线程累加,调用线程汇报)
+    std::atomic<size_t> doneCount{0};
+    std::atomic<uint64_t> bytesCount{0};
+    auto tick = [&]() {
+        prog.done = doneCount.load();
+        prog.bytes_done = bytesCount.load();
+        if (onProgress) onProgress(prog);
+    };
 
-    // ---- 0. 去掉重复路径、CUE 分轨、不存在的文件,记下大小与修改时间
+    // ---- 0. 去掉重复路径、CUE 分轨;大小优先用扫描时记下的 (不逐个查询文件),修改时间只给最终分组里的成员取
     struct Info {
         uint64_t size = 0;
         int64_t mtime = 0;
         bool ok = false;
+        bool statted = false;
     };
     std::vector<Info> info(tracks.size());
     std::vector<size_t> live;
@@ -462,13 +551,35 @@ FindResult FindDuplicates(const std::vector<DupTrack>& tracks, const FindOptions
     for (size_t i = 0; i < tracks.size(); ++i) {
         const DupTrack& t = tracks[i];
         if (t.cue_track || t.path.empty() || !seen.insert(Key(t.path)).second) continue;
-        if (!Stat(t.path, info[i].size, info[i].mtime) || info[i].size == 0) continue;
+        if (t.size > 0) {
+            info[i].size = t.size;
+        } else {
+            if (!Stat(t.path, info[i].size, info[i].mtime) || info[i].size == 0) continue;
+            info[i].statted = true;
+        }
         info[i].ok = true;
         live.push_back(i);
     }
     std::vector<char> claimed(tracks.size(), 0); // 已被更严格的分组处理掉 (非保留成员)
 
+    // 文件身份:只给进入候选的文件取,缓存
+    std::unordered_map<size_t, FileId> ids;
+    auto sameFile = [&](size_t a, size_t b) {
+        if (info[a].size != info[b].size) return false;
+        auto get = [&](size_t i) -> const FileId& {
+            auto it = ids.find(i);
+            if (it == ids.end()) it = ids.emplace(i, GetFileId(tracks[i].path)).first;
+            return it->second;
+        };
+        return get(a) == get(b);
+    };
+
     auto makeMember = [&](size_t i) {
+        if (!info[i].statted) {
+            uint64_t size = 0;
+            if (Stat(tracks[i].path, size, info[i].mtime)) info[i].size = size;
+            info[i].statted = true;
+        }
         DupMember m;
         m.track = i;
         m.size = info[i].size;
@@ -482,7 +593,7 @@ FindResult FindDuplicates(const std::vector<DupTrack>& tracks, const FindOptions
         for (size_t i : all) {
             bool linked = false;
             for (size_t j : idx)
-                if (info[i].size == info[j].size && SameFileObject(tracks[i].path, tracks[j].path)) linked = true;
+                if (sameFile(i, j)) linked = true;
             if (!linked) idx.push_back(i);
         }
         if (idx.size() < 2) return false;
@@ -499,111 +610,151 @@ FindResult FindDuplicates(const std::vector<DupTrack>& tracks, const FindOptions
         return true;
     };
 
-    // 把一组哈希相同的候选按真实内容再分一次 (排除哈希碰撞,也排除已是硬链接的同一个文件)
-    auto confirm = [&](std::vector<size_t> cand, const std::function<bool(size_t, size_t)>& same, MatchKind kind) {
-        while (cand.size() >= 2) {
-            std::vector<size_t> group{cand[0]}, rest;
-            for (size_t k = 1; k < cand.size(); ++k) {
-                if (SameFileObject(tracks[cand[0]].path, tracks[cand[k]].path)) continue; // 硬链接:本来就只占一份空间
-                (same(cand[0], cand[k]) ? group : rest).push_back(cand[k]);
+    // 范围 [b, e) 的内容指纹:先比头尾 64KB,相同的再比整段 XXH64 (64 位,配合大小相同,误判概率可忽略;
+    // 永久删除前还会逐字节确认)。返回按整段哈希分好的组
+    struct Range {
+        size_t i;
+        uint64_t b, e;
+    };
+    auto groupByContent = [&](std::vector<Range> cand) {
+        std::vector<std::vector<size_t>> out;
+        if (cand.size() < 2) return out;
+        std::vector<uint64_t> quick(cand.size(), 0);
+        std::vector<char> qok(cand.size(), 0);
+        ParallelFor(cand.size(), IoThreads(), [&](size_t k) {
+            qok[k] = QuickHash(tracks[cand[k].i].path, cand[k].b, cand[k].e, quick[k]);
+        }, nullptr, cancel);
+        std::map<uint64_t, std::vector<size_t>> byQuick;
+        for (size_t k = 0; k < cand.size(); ++k)
+            if (qok[k]) byQuick[quick[k]].push_back(k);
+        std::vector<size_t> needFull;
+        for (auto& q : byQuick)
+            if (q.second.size() >= 2) needFull.insert(needFull.end(), q.second.begin(), q.second.end());
+        std::vector<uint64_t> full(cand.size(), 0);
+        std::vector<char> fok(cand.size(), 0);
+        for (auto& q : byQuick)
+            if (q.second.size() < 2) {
+                doneCount += q.second.size();
+                for (size_t k : q.second) bytesCount += cand[k].e - cand[k].b;
             }
-            if (group.size() >= 2) addGroup(kind, group);
-            cand.swap(rest);
+        // 整段读取:两个线程 (再多会让机械硬盘来回寻道)
+        ParallelFor(needFull.size(), 2, [&](size_t n) {
+            const size_t k = needFull[n];
+            const Range& r = cand[k];
+            if (r.e - r.b <= 2 * (64 << 10)) {
+                full[k] = quick[k]; // 头尾指纹已经覆盖整段
+                fok[k] = 1;
+                bytesCount += r.e - r.b;
+            } else {
+                fok[k] = HashRange(tracks[r.i].path, r.b, r.e, full[k], cancel, [&](uint64_t bytes) { bytesCount += bytes; });
+            }
+            ++doneCount;
+        }, tick, cancel);
+        for (size_t k : needFull) {
+            if (!fok[k]) continue;
+            ++res.files_hashed;
+            res.bytes_hashed += cand[k].e - cand[k].b;
         }
+        std::map<std::tuple<uint64_t, uint64_t, uint64_t>, std::vector<size_t>> byFull;
+        for (size_t k : needFull)
+            if (fok[k]) byFull[{cand[k].e - cand[k].b, quick[k], full[k]}].push_back(cand[k].i);
+        for (auto& f : byFull)
+            if (f.second.size() >= 2) out.push_back(std::move(f.second));
+        return out;
     };
 
-    // ---- 1. Identical:大小相同 → 头尾 64KB 哈希 → 整文件哈希 → 逐字节确认
+    // ---- 1. Identical:大小相同 → 头尾指纹 → 整文件指纹
     if (opt.identical) {
         std::map<uint64_t, std::vector<size_t>> bySize;
         for (size_t i : live) bySize[info[i].size].push_back(i);
+        std::vector<Range> cand;
         for (auto& kv : bySize)
-            if (kv.second.size() >= 2) {
-                prog.total += kv.second.size();
-                prog.bytes_total += kv.first * kv.second.size();
-            }
-        for (auto& kv : bySize) {
-            if (kv.second.size() < 2) continue;
+            if (kv.second.size() >= 2)
+                for (size_t i : kv.second) {
+                    cand.push_back({i, 0, kv.first});
+                    ++prog.total;
+                    prog.bytes_total += kv.first;
+                }
+        tick();
+        // 不同大小的文件哈希值碰巧相同也不会混到一组:分组键里再带上大小
+        std::map<uint64_t, std::vector<Range>> sized;
+        for (const Range& r : cand) sized[r.e].push_back(r);
+        std::vector<Range> flat;
+        for (auto& kv : sized) flat.insert(flat.end(), kv.second.begin(), kv.second.end());
+        for (auto& grp : groupByContent(flat)) {
             if (cancelled()) break;
-            const uint64_t size = kv.first;
-            std::map<uint64_t, std::vector<size_t>> byQuick;
-            for (size_t i : kv.second) {
-                uint64_t h1 = 0, h2 = 0;
-                const uint64_t q = std::min<uint64_t>(size, 64 << 10);
-                if (!HashRange(tracks[i].path, 0, q, h1, cancel, nullptr) ||
-                    !HashRange(tracks[i].path, size - q, size, h2, cancel, nullptr))
-                    continue;
-                byQuick[h1 * 31 + h2].push_back(i);
-            }
-            for (auto& q : byQuick) {
-                if (q.second.size() < 2) {
-                    ++prog.done;
-                    prog.bytes_done += size;
-                    continue;
-                }
-                std::map<uint64_t, std::vector<size_t>> byFull;
-                for (size_t i : q.second) {
-                    if (cancelled()) break;
-                    prog.current = tracks[i].path;
-                    uint64_t h = 0;
-                    bool ok = HashRange(tracks[i].path, 0, size, h, cancel, [&](uint64_t n) {
-                        prog.bytes_done += n;
-                        res.bytes_hashed += n;
-                        if (onProgress) onProgress(prog);
-                    });
-                    ++prog.done;
-                    ++res.files_hashed;
-                    if (ok) byFull[h].push_back(i);
-                }
-                for (auto& f : byFull)
-                    confirm(f.second, [&](size_t a, size_t b) { return SameRange(tracks[a].path, 0, tracks[b].path, 0, size); },
-                            MatchKind::Identical);
-            }
-            if (onProgress) onProgress(prog);
+            std::map<uint64_t, std::vector<size_t>> bySz;
+            for (size_t i : grp) bySz[info[i].size].push_back(i);
+            for (auto& kv : bySz)
+                if (kv.second.size() >= 2) addGroup(MatchKind::Identical, kv.second);
         }
     }
 
     // ---- 2. SameAudio:FLAC PCM MD5;MP3 去标签后的音频帧
     if (opt.same_audio && !cancelled()) {
-        std::map<std::string, std::vector<size_t>> byMd5;
-        struct Mp3 {
-            size_t i;
-            uint64_t b, e;
-        };
-        std::map<uint64_t, std::vector<Mp3>> byPayloadSize;
+        // FLAC:同样的 PCM 采样数必然相同,时长 (由采样数算出) 也就相同;只读时长撞车的那些文件的头
+        std::vector<size_t> flacs, mp3s;
+        std::map<std::pair<uint32_t, int>, std::vector<size_t>> flacByDur;
         for (size_t i : live) {
             if (claimed[i]) continue;
             std::wstring ext = Lower(FormatLabel(tracks[i].path));
-            if (ext == L"flac") {
-                std::string md5;
-                if (FlacPcmMd5(tracks[i].path, md5)) byMd5[md5].push_back(i);
-            } else if (ext == L"mp3") {
-                Mp3 m{i, 0, 0};
-                if (Mp3Payload(tracks[i].path, m.b, m.e)) byPayloadSize[m.e - m.b].push_back(m);
-            }
+            if (ext == L"flac") flacByDur[{tracks[i].duration_ms, tracks[i].sample_rate}].push_back(i);
+            else if (ext == L"mp3") mp3s.push_back(i);
         }
-        // 已经是 Identical 的保留成员也可能和别的文件只差标签;把同一 Identical 组只算一次即可
-        for (auto& kv : byMd5)
-            if (kv.second.size() >= 2) confirm(kv.second, [](size_t, size_t) { return true; }, MatchKind::SameAudio);
-        for (auto& kv : byPayloadSize) {
-            if (kv.second.size() < 2 || cancelled()) continue;
-            std::map<uint64_t, std::vector<size_t>> byHash;
-            std::unordered_map<size_t, Mp3> range;
-            for (const auto& m : kv.second) {
-                uint64_t h = 0;
-                prog.current = tracks[m.i].path;
-                if (!HashRange(tracks[m.i].path, m.b, m.e, h, cancel, [&](uint64_t n) { res.bytes_hashed += n; })) continue;
-                ++res.files_hashed;
-                byHash[h].push_back(m.i);
-                range[m.i] = m;
+        for (auto& kv : flacByDur)
+            if (kv.second.size() >= 2 || kv.first.first == 0) flacs.insert(flacs.end(), kv.second.begin(), kv.second.end());
+        prog.total += flacs.size() + mp3s.size();
+        tick();
+
+        std::vector<std::string> md5(flacs.size());
+        std::vector<char> mok(flacs.size(), 0);
+        ParallelFor(flacs.size(), IoThreads(), [&](size_t k) {
+            mok[k] = FlacPcmMd5(tracks[flacs[k]].path, md5[k]);
+            ++doneCount;
+        }, tick, cancel);
+        std::map<std::string, std::vector<size_t>> byMd5;
+        for (size_t k = 0; k < flacs.size(); ++k)
+            if (mok[k]) byMd5[md5[k]].push_back(flacs[k]);
+        for (auto& kv : byMd5) {
+            if (kv.second.size() < 2) continue;
+            // 硬链接只算一份
+            std::vector<size_t> distinct;
+            for (size_t i : kv.second) {
+                bool linked = false;
+                for (size_t j : distinct) linked = linked || sameFile(i, j);
+                if (!linked) distinct.push_back(i);
             }
-            for (auto& h : byHash)
-                confirm(h.second,
-                        [&](size_t a, size_t b) {
-                            return SameRange(tracks[a].path, range[a].b, tracks[b].path, range[b].b, range[a].e - range[a].b);
-                        },
-                        MatchKind::SameAudio);
+            if (distinct.size() >= 2) addGroup(MatchKind::SameAudio, distinct);
+        }
+
+        // MP3:读出去掉标签后的音频范围 (并行),范围长度相同的再比内容
+        std::vector<Range> ranges(mp3s.size());
+        std::vector<char> rok(mp3s.size(), 0);
+        ParallelFor(mp3s.size(), IoThreads(), [&](size_t k) {
+            ranges[k].i = mp3s[k];
+            rok[k] = Mp3Payload(tracks[mp3s[k]].path, ranges[k].b, ranges[k].e);
+            ++doneCount;
+        }, tick, cancel);
+        std::map<uint64_t, std::vector<Range>> byPayloadSize;
+        for (size_t k = 0; k < mp3s.size(); ++k)
+            if (rok[k]) byPayloadSize[ranges[k].e - ranges[k].b].push_back(ranges[k]);
+        std::vector<Range> cand;
+        for (auto& kv : byPayloadSize)
+            if (kv.second.size() >= 2) cand.insert(cand.end(), kv.second.begin(), kv.second.end());
+        prog.total += cand.size();
+        for (const Range& r : cand) prog.bytes_total += r.e - r.b;
+        for (auto& grp : groupByContent(cand)) {
+            if (cancelled()) break;
+            std::vector<size_t> distinct;
+            for (size_t i : grp) {
+                bool linked = false;
+                for (size_t j : distinct) linked = linked || sameFile(i, j);
+                if (!linked) distinct.push_back(i);
+            }
+            if (distinct.size() >= 2) addGroup(MatchKind::SameAudio, distinct);
         }
     }
+    tick();
 
     // ---- 3. SameSong / SameName / Versions:规范化的歌手 + 歌名,再按时长聚类
     if ((opt.same_song || opt.same_name || opt.versions) && !cancelled()) {
@@ -1065,6 +1216,11 @@ ApplyResult ApplySelection(const std::vector<DupGroup>& groups, const std::vecto
                 ok = true;
                 break;
             case DupAction::DeletePermanently:
+                // 查找时按指纹判定「完全相同」;永久删除无法撤销,删之前逐字节再确认一次
+                if (task.kind == MatchKind::Identical && !task.keeper.empty() && !SameContent(path, task.keeper)) {
+                    err = L"与保留的那份内容不一致,未删除";
+                    break;
+                }
                 ok = DeleteOne(path);
                 if (ok) journal.Line("D", path);
                 else err = L"删除失败 (可能正被占用)";

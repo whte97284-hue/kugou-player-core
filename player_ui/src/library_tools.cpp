@@ -529,9 +529,15 @@ void LibraryTools::execute() {
         },
         [this](std::shared_ptr<organizer::OrganizeResult> r) {
             QHash<QString, QString> map;
-            for (const auto& c : r->changes)
+            std::vector<std::pair<std::wstring, std::wstring>> moved, copied;
+            for (const auto& c : r->changes) {
                 if (!c.copied) map.insert(PathKeyOf(Q(c.from)), Q(c.to));
+                (c.copied ? copied : moved).emplace_back(c.from, c.to);
+            }
             applyPathChanges(map);
+            // 文件内容没变,只是换了位置:沿用扫描缓存,重扫时不再逐个重新解析
+            lib_->carryScanCache(moved, false);
+            lib_->carryScanCache(copied, true);
             organizeResult_ = QVariantMap{
                 {"moved", static_cast<int>(r->moved)}, {"copied", static_cast<int>(r->copied)},
                 {"failed", static_cast<int>(r->failed)}, {"skipped", static_cast<int>(r->skipped)},
@@ -563,9 +569,14 @@ void LibraryTools::undoOrganize() {
     run("undoOrganize", [journal]() { return std::make_shared<organizer::OrganizeResult>(organizer::Undo(journal)); },
         [this](std::shared_ptr<organizer::OrganizeResult> r) {
             QHash<QString, QString> map;
+            std::vector<std::pair<std::wstring, std::wstring>> moved;
             for (const auto& c : r->changes)
-                if (!c.to.empty()) map.insert(PathKeyOf(Q(c.from)), Q(c.to));
+                if (!c.to.empty()) {
+                    map.insert(PathKeyOf(Q(c.from)), Q(c.to));
+                    moved.emplace_back(c.from, c.to);
+                }
             applyPathChanges(map);
+            lib_->carryScanCache(moved, false);
             lib_->rescan();
             organizeResult_.clear();
             emit organizeDone();
@@ -598,6 +609,7 @@ void LibraryTools::findDuplicates() {
         d.bitrate_kbps = static_cast<int>(t.bitrate_kbps);
         d.track_no = t.track_no;
         d.has_cover = t.has_cover;
+        d.size = t.file_size;
         tracks->push_back(std::move(d));
     }
     dedupe::FindOptions opt;

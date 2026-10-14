@@ -1,4 +1,5 @@
 #include "library_service.h"
+#include "scan_cache.hpp"
 
 #include <QClipboard>
 #include <QCoreApplication>
@@ -142,6 +143,14 @@ public:
     QStringList hidden;   // 本次聚合时要隐藏的文件夹
     QStringList excluded; // 只从曲库移除的单个文件
 };
+
+void LibraryService::carryScanCache(const std::vector<std::pair<std::wstring, std::wstring>>& moves, bool keepSource) {
+    if (moves.empty() || scanning()) return;
+    const std::wstring path = (dataDir() + "/scan.cache").toStdWString();
+    ScanCache cache;
+    if (!cache.Load(path)) return;
+    if (cache.Carry(moves, keepSource) > 0) cache.Save(path);
+}
 
 QString LibraryService::dataDir() {
     QString d = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);

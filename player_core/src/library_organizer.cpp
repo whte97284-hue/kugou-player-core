@@ -5,6 +5,7 @@
 #include "../include/audio_tag_parser.hpp"
 #include "../include/cue_sheet.hpp"
 #include "../include/decryptor.hpp"
+#include "../include/xxhash64.hpp"
 #include "../include/platform_io.hpp"
 
 #include <algorithm>
@@ -149,6 +150,21 @@ bool SameContent(const std::wstring& a, const std::wstring& b) {
         off += na;
     }
     return true;
+}
+
+// 文件内容的 XXH64 是否等于给定值 (复制后校验目标文件)
+bool SameHash(const std::wstring& path, uint64_t expected) {
+    platform::ReadOnlyFile f;
+    if (!f.Open(path, false)) return false;
+    std::vector<uint8_t> buf(4 << 20);
+    kp::Xxh64 h;
+    for (uint64_t off = 0; off < f.Size();) {
+        size_t n = f.ReadAt(off, buf.data(), buf.size());
+        if (n == 0) return false;
+        h.Add(buf.data(), n);
+        off += n;
+    }
+    return h.Digest() == expected;
 }
 
 // 所在卷:用来判断能否直接改名 (同盘) 以及统计每个盘需要多少空间
@@ -580,8 +596,11 @@ std::wstring WithSuffix(const std::wstring& dir, const std::wstring& stem, const
 }
 
 // ---------------------------------------------------------------- 目录内容缓存
+// 每个目录只列一次:文件名与大小都从目录列表里拿 (Windows 上一次 FindNextFile 就带回大小),
+// 不再对每个源文件、每个候选目标路径单独查询文件系统
 struct DirListing {
-    std::vector<std::wstring> names;  // 仅文件
+    std::vector<std::wstring> names;                  // 仅文件
+    std::unordered_map<std::wstring, uint64_t> sizes; // Key(文件名) → 大小
 };
 
 const DirListing& ListDir(std::unordered_map<std::wstring, DirListing>& cache, const std::wstring& dir) {
@@ -591,9 +610,22 @@ const DirListing& ListDir(std::unordered_map<std::wstring, DirListing>& cache, c
     std::error_code ec;
     for (fs::directory_iterator di(FsPath(dir), ec), end; !ec && di != end; di.increment(ec)) {
         std::error_code fec;
-        if (di->is_regular_file(fec)) l.names.push_back(FromFs(di->path().filename()));
+        if (!di->is_regular_file(fec)) continue;
+        const std::wstring name = FromFs(di->path().filename());
+        const uintmax_t size = di->file_size(fec);
+        l.names.push_back(name);
+        l.sizes[Key(name)] = fec ? 0 : static_cast<uint64_t>(size);
     }
     return cache.emplace(Key(dir), std::move(l)).first->second;
+}
+
+// 路径对应的文件是否在 (缓存的) 目录列表里;size 可选带回大小
+bool Listed(std::unordered_map<std::wstring, DirListing>& cache, const std::wstring& path, uint64_t* size = nullptr) {
+    const DirListing& l = ListDir(cache, ParentOf(path));
+    auto it = l.sizes.find(Key(NameOf(path)));
+    if (it == l.sizes.end()) return false;
+    if (size) *size = it->second;
+    return true;
 }
 
 // ---------------------------------------------------------------- 日志
@@ -685,6 +717,7 @@ struct Mover {
             return false;
         }
         bool ok = true;
+        kp::Xxh64 srcHash; // 边复制边算源文件指纹,校验时只需再读一遍目标文件
         {
             platform::WritableFile out;
             if (!out.Create(part)) {
@@ -704,6 +737,7 @@ struct Mover {
                     ok = false;
                     break;
                 }
+                srcHash.Add(buf.data(), n);
                 off += n;
                 if (onBytes) onBytes(n);
             }
@@ -713,7 +747,7 @@ struct Mover {
             ok = false;
         }
         in.Close();
-        if (ok && opt.verify_copy && !SameContent(from, part)) {
+        if (ok && opt.verify_copy && !SameHash(part, srcHash.Digest())) {
             err = L"复制后校验不一致";
             ok = false;
         }
@@ -901,7 +935,7 @@ OrganizePlan BuildPlan(const std::vector<OrganizeTrack>& tracks, const OrganizeO
         const std::wstring fromKey = Key(op.from);
         if (!seenSources.insert(fromKey).second) continue; // 同一个文件出现两次 (整轨的多首 CUE 分轨)
         uint64_t mtime = 0;
-        if (!platform::GetFileInfo(op.from, op.size, mtime)) {
+        if (!Listed(dirs, op.from, &op.size) && !platform::GetFileInfo(op.from, op.size, mtime)) {
             op.action = OpAction::Skip;
             op.state = OpState::Error;
             op.note = L"源文件不存在";
@@ -996,7 +1030,8 @@ OrganizePlan BuildPlan(const std::vector<OrganizeTrack>& tracks, const OrganizeO
                 }
                 continue;
             }
-            if (Exists(cand)) {
+            uint64_t candSize = 0;
+            if (Listed(dirs, cand, &candSize)) {
                 auto mv = movingSources.find(ck);
                 if (mv != movingSources.end() && mv->second != idx) {
                     // 目标此刻被另一首要搬走的歌占着:先搬到临时名,最后再改成正式名字
@@ -1006,7 +1041,7 @@ OrganizePlan BuildPlan(const std::vector<OrganizeTrack>& tracks, const OrganizeO
                     claimed[ck] = idx;
                     break;
                 }
-                if (n == 1 && opt.duplicates == DuplicatePolicy::Skip && SizeOf(cand) == op.size && SameContent(op.from, cand)) {
+                if (n == 1 && opt.duplicates == DuplicatePolicy::Skip && candSize == op.size && SameContent(op.from, cand)) {
                     op.action = OpAction::Skip;
                     op.state = OpState::Duplicate;
                     op.to = cand;
@@ -1045,14 +1080,14 @@ OrganizePlan BuildPlan(const std::vector<OrganizeTrack>& tracks, const OrganizeO
         c.to = to;
         c.track = track;
         c.action = action;
-        c.size = SizeOf(from);
+        if (!Listed(dirs, from, &c.size)) c.size = SizeOf(from);
         c.note = note;
         const std::wstring tk = Key(to);
         if (Key(from) == tk && from == to) {
             c.action = OpAction::Skip;
             c.state = OpState::Unchanged;
-        } else if (claimed.count(tk) || (Exists(to) && !SameFileObject(from, to))) {
-            if (Exists(to) && SameContent(from, to)) {
+        } else if (claimed.count(tk) || (Listed(dirs, to) && !SameFileObject(from, to))) {
+            if (Listed(dirs, to) && SameContent(from, to)) {
                 c.action = OpAction::Skip;
                 c.state = OpState::Duplicate;
                 c.note = L"目标位置已有相同文件";
