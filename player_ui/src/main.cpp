@@ -21,6 +21,14 @@
 #include "window_helper.h"
 #include "library_tools.h"
 #include "taskbar_helper.h"
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <dbghelp.h>
+#include <cwchar>
+#endif
 #include <QIcon>
 
 // 离屏截图驱动 (开发验证用):--screenshot <输出目录>
@@ -56,6 +64,19 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         steps->push_back({"o6_dedupe", [tools, call] { call("automationGo", QStringLiteral("dedupe")); tools()->findDuplicates(); }, 6000});
         steps->push_back({"o7_applied", [tools] { tools()->applyDedupe(1); }, 6000});
         steps->push_back({"o8_play_after", [&player] { player.playAlbum(1, 0); player.next(); }, 2000});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_FINDPLAY")) {
+        // 回归:只查找重复、只预览整理 (不动文件),然后点播放
+        auto tools = [&engine]() { return qobject_cast<LibraryTools*>(engine.rootContext()->contextProperty("libtools").value<QObject*>()); };
+        steps->push_back({"p1_dedupe", [tools, call] { call("automationGo", QStringLiteral("dedupe")); tools()->findDuplicates(); }, 8000});
+        steps->push_back({"p2_organize", [tools, call, outDir] {
+            call("automationGo", QStringLiteral("organize"));
+            tools()->setTargetUrl(QDir(outDir).absoluteFilePath("organized"));
+            tools()->buildPlan();
+        }, 4000});
+        steps->push_back({"p3_play", [&player, call] { call("automationGo", QStringLiteral("albums")); player.playAlbum(0, 0); }, 1500});
+        steps->push_back({"p4_next", [&player] { player.next(); player.playAlbum(3, 2); }, 1500});
+        steps->push_back({"p5_dedupe_again", [tools, call] { call("automationGo", QStringLiteral("dedupe")); tools()->autoSelect(1); }, 1500});
+        steps->push_back({"p6_play_again", [&player] { player.playAlbum(5, 0); }, 1500});
     } else if (!flowDir.isEmpty()) {
         steps->push_back({"f1_empty", [] {}, 1200});
         steps->push_back({"f2_importing", [&lib, flowDir] { lib.addFolder(flowDir); }, 1100});
@@ -220,6 +241,42 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
     else QTimer::singleShot(800, once);
 }
 
+#ifdef Q_OS_WIN
+// 崩溃诊断:未处理的异常 (访问越界等) 发生时,在数据目录 crashes\ 下写一个 minidump,
+// 用调试器打开即可看到崩溃时每个线程的调用栈
+static wchar_t g_dumpDir[MAX_PATH] = {0};
+
+static LONG WINAPI WriteCrashDump(EXCEPTION_POINTERS* ep) {
+    if (!g_dumpDir[0]) return EXCEPTION_CONTINUE_SEARCH;
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    wchar_t path[MAX_PATH + 64];
+    swprintf(path, sizeof(path) / sizeof(path[0]), L"%ls\\crash-%04d%02d%02d-%02d%02d%02d.dmp", g_dumpDir, st.wYear, st.wMonth,
+             st.wDay, st.wHour, st.wMinute, st.wSecond);
+    HANDLE f = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f != INVALID_HANDLE_VALUE) {
+        MINIDUMP_EXCEPTION_INFORMATION mi;
+        mi.ThreadId = GetCurrentThreadId();
+        mi.ExceptionPointers = ep;
+        mi.ClientPointers = FALSE;
+        MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), f,
+                          static_cast<MINIDUMP_TYPE>(MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo), &mi, nullptr,
+                          nullptr);
+        CloseHandle(f);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+static void InstallCrashDump() {
+    const QString dir = LibraryService::dataDir() + "/crashes";
+    QDir().mkpath(dir);
+    const std::wstring w = QDir::toNativeSeparators(dir).toStdWString();
+    if (w.size() >= MAX_PATH) return;
+    wcsncpy(g_dumpDir, w.c_str(), MAX_PATH - 1);
+    SetUnhandledExceptionFilter(WriteCrashDump);
+}
+#endif
+
 int main(int argc, char* argv[]) {
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
     QCoreApplication::setOrganizationName("KugouPlayer");
@@ -230,6 +287,9 @@ int main(int argc, char* argv[]) {
         qputenv("QT_SCALE_FACTOR", QByteArray::number(scale, 'f', 2));
     QGuiApplication app(argc, argv);
     app.setWindowIcon(QIcon(QStringLiteral(":/images/app_icon_256.png")));
+#ifdef Q_OS_WIN
+    InstallCrashDump();
+#endif
     QQuickStyle::setStyle("Basic");
 
     QString screenshotDir, libraryArg, flowArg;
