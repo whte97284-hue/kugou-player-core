@@ -182,7 +182,15 @@ signals:
     // 定时关闭到点并已暂停 (界面据此提示)
     void sleepFired();
 
+public:
+    // 整理 / 查重移动了文件:下一次曲库刷新时按映射把播放队列接到新快照上 (正在播放的那首不会被移动)
+    void remapPathsOnNextScan(const QHash<QString, QString>& pathMap);
+    // 正在播放的文件路径 (整理时排除)
+    QString currentPath() const;
+
 private:
+    void applyPendingRemap();
+    QHash<QString, QString> pendingRemap_;
     bool openIndex(int index, bool autoPlay);
     void setQueue(std::vector<uint64_t> ids, int start);
     void queueContentChanged();

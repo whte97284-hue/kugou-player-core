@@ -270,6 +270,32 @@ void PlaylistService::save() const {
     }
 }
 
+int PlaylistService::remapPaths(const QHash<QString, QString>& pathMap) {
+    if (pathMap.isEmpty()) return 0;
+    int changed = 0;
+    auto remapList = [&](std::vector<QString>& keys) {
+        std::vector<QString> out;
+        out.reserve(keys.size());
+        for (const QString& k : keys) {
+            QString n = RemapTrackKey(k, pathMap);
+            if (!n.isEmpty()) ++changed;
+            const QString& use = n.isEmpty() ? k : n;
+            if (std::find(out.begin(), out.end(), use) == out.end()) out.push_back(use);
+        }
+        keys.swap(out);
+    };
+    for (List& l : lists_) remapList(l.keys);
+    remapList(history_);
+    if (changed) {
+        saveTimer_.start();
+        ++revision_;
+        emit playlistsChanged();
+        for (const List& l : lists_) emit contentChanged(l.id);
+        emit historyChanged();
+    }
+    return changed;
+}
+
 void PlaylistService::recordPlay(double trackId) {
     QString k = keyOf(trackId);
     if (k.isEmpty() || (!history_.empty() && history_.front() == k)) return;

@@ -176,7 +176,7 @@ Item {
                 bars: 24
                 opacity: page.isCurrentAlbum ? 0.9 : 0
                 visible: opacity > 0 && parent.width > 900
-                Behavior on opacity { OpacityAnimator { duration: Theme.slow } }
+                Behavior on opacity { NumberAnimation { duration: Theme.slow } }
             }
 
             Rectangle {

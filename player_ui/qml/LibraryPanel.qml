@@ -1,11 +1,14 @@
 import QtQuick
 import PlayerUi
 
-// 音乐文件夹管理:从侧栏弹出的卡片。列出已添加的文件夹 (可移除),添加 / 重新扫描,显示上次扫描结果
+// 音乐文件夹管理:从侧栏弹出的卡片。列出已添加的文件夹 (可移除),添加 / 重新扫描,整理曲库 / 查找重复
+// 打开:卡片从下方 10px 处浮上来并轻微放大 (透明度用 NumberAnimation,随帧更新,
+// 否则 visible 绑定在 Animator 结束前一直读到 0,卡片会在动画结束时才突然出现);文件夹行依次浮现
 Item {
     id: lp
     property bool shown: false
     signal pickFolder()
+    signal openTool(string key)
     anchors.fill: parent
     visible: card.opacity > 0
 
@@ -32,10 +35,11 @@ Item {
         border.width: 1
         border.color: Qt.rgba(1, 0.96, 0.9, 0.1)
         opacity: lp.shown ? 1 : 0
-        scale: lp.shown ? 1 : 0.97
+        scale: lp.shown ? 1 : 0.96
         transformOrigin: Item.BottomLeft
-        Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
-        Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
+        transform: Translate { y: lp.shown ? 0 : 10; Behavior on y { NumberAnimation { duration: lp.shown ? 380 : 140; easing.type: lp.shown ? Easing.OutQuint : Easing.InCubic } } }
+        Behavior on opacity { NumberAnimation { duration: lp.shown ? 160 : 120; easing.type: Easing.OutCubic } }
+        Behavior on scale { ScaleAnimator { duration: lp.shown ? 380 : 140; easing.type: lp.shown ? Easing.OutQuint : Easing.InCubic } }
         // 吞掉卡片内的点击,避免穿透到背后的关闭区域
         MouseArea { anchors.fill: parent }
 
@@ -73,6 +77,17 @@ Item {
                 delegate: Item {
                     width: body.width
                     height: 44
+                    // 依次浮现:每行晚 25ms;收起时一起淡出
+                    opacity: lp.shown ? 1 : 0
+                    Behavior on opacity { SequentialAnimation {
+                        PauseAnimation { duration: lp.shown ? 40 + index * 25 : 0 }
+                        NumberAnimation { duration: lp.shown ? 220 : 100; easing.type: Easing.OutCubic } } }
+                    transform: Translate {
+                        y: lp.shown ? 0 : 6
+                        Behavior on y { SequentialAnimation {
+                            PauseAnimation { duration: lp.shown ? 40 + index * 25 : 0 }
+                            NumberAnimation { duration: 320; easing.type: Easing.OutQuint } } }
+                    }
                     Rectangle {
                         anchors.fill: parent
                         anchors.leftMargin: -8
@@ -174,6 +189,52 @@ Item {
                     icon: library.scanning ? "close" : "refresh"
                     iconSize: 16
                     onClicked: library.scanning ? library.cancelScan() : library.rescan()
+                }
+                Rectangle { visible: library.folders.length > 0; anchors.verticalCenter: parent.verticalCenter; width: 1; height: 20; color: Theme.hairline }
+                // 整理曲库 / 查找重复:各自进入单独的页面 (先预览,确认后才动文件)
+                Repeater {
+                    model: library.folders.length > 0 ? [
+                        { key: "organize", icon: "organize", text: qsTr("整理曲库") },
+                        { key: "dedupe", icon: "duplicate", text: qsTr("查找重复") }
+                    ] : []
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: 40
+                        width: toolRow.implicitWidth + 30
+                        radius: 20
+                        color: toolMouse.containsMouse ? Theme.pressed : Theme.hover
+                        border.width: 1
+                        border.color: Theme.hairline
+                        scale: toolMouse.pressed ? 0.96 : 1
+                        Behavior on scale { ScaleAnimator { duration: Theme.fast; easing.type: Easing.OutCubic } }
+                        Row {
+                            id: toolRow
+                            anchors.centerIn: parent
+                            spacing: 7
+                            Icon { anchors.verticalCenter: parent.verticalCenter; name: modelData.icon; size: 15; opacity: 0.75 }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: modelData.text
+                                color: Theme.textSecondary
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 13
+                            }
+                        }
+                        // 后台任务进行中:右上角一个强调色小点
+                        Rectangle {
+                            visible: libtools.busy && (modelData.key === "organize" ? ["plan", "organize", "undoOrganize"] : ["find", "apply", "undoDedupe"]).indexOf(libtools.task) >= 0
+                            x: parent.width - 12; y: 6
+                            width: 6; height: 6; radius: 3
+                            color: Theme.accent
+                        }
+                        MouseArea {
+                            id: toolMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: { lp.close(); lp.openTool(modelData.key) }
+                        }
+                    }
                 }
             }
         }

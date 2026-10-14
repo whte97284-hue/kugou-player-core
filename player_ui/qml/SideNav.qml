@@ -144,7 +144,9 @@ Item {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: nav.navigate(modelData.key)
+                // 弹出类 (音乐文件夹) 按下就响应,不等松开
+                onPressed: if (modelData.key === "folder") nav.navigate(modelData.key)
+                onClicked: if (modelData.key !== "folder") nav.navigate(modelData.key)
                 onContainsMouseChanged: {
                     if (containsMouse) { tip.target = btn; tip.text = modelData.tip; tipDelay.restart() }
                     else if (tip.target === btn) { tipDelay.stop(); tip.target = null }
@@ -171,7 +173,7 @@ Item {
         border.color: Qt.rgba(1, 0.96, 0.9, 0.08)
         opacity: target && !tipDelay.running ? 1 : 0
         visible: opacity > 0
-        Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+        Behavior on opacity { NumberAnimation { duration: Theme.fast } }
         Text {
             id: tipText
             anchors.centerIn: parent

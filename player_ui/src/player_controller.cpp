@@ -82,7 +82,62 @@ PlayerController::PlayerController(LibraryService* lib, QObject* parent) : QObje
             restored_ = true;
             restoreSession();
         }
+        if (!pendingRemap_.isEmpty()) applyPendingRemap();
     });
+}
+
+void PlayerController::remapPathsOnNextScan(const QHash<QString, QString>& pathMap) {
+    for (auto it = pathMap.constBegin(); it != pathMap.constEnd(); ++it) pendingRemap_.insert(it.key(), it.value());
+}
+
+QString PlayerController::currentPath() const { return current_ ? QString::fromStdWString(current_->file_path) : QString(); }
+
+void PlayerController::applyPendingRemap() {
+    const QHash<QString, QString> map = pendingRemap_;
+    pendingRemap_.clear();
+    if (!snap_ || queue_.empty()) return;
+    auto snap = lib_->snapshot();
+    if (snap == snap_) return;
+    std::unordered_map<QString, uint64_t> byKey;
+    byKey.reserve(snap->catalog.GetAllTracks().size());
+    for (const TrackItem& t : snap->catalog.GetAllTracks()) byKey.emplace(TrackKeyOf(t), t.id);
+    // 旧快照里的曲目 → 新快照里的曲目 ID (路径按映射替换);找不到返回 false
+    auto mapId = [&](uint64_t id, uint64_t& out) {
+        const TrackItem* t = snap_->catalog.FindById(id);
+        if (!t) return false;
+        QString key = TrackKeyOf(*t);
+        QString moved = RemapTrackKey(key, map);
+        auto it = byKey.find(moved.isEmpty() ? key : moved);
+        if (it == byKey.end()) return false;
+        out = it->second;
+        return true;
+    };
+    uint64_t curNew = 0;
+    if (current_ && !mapId(current_->id, curNew)) return; // 正在播放的那首在新曲库里找不到:保持原样
+    auto remapVec = [&](std::vector<uint64_t>& v) {
+        std::vector<uint64_t> out;
+        out.reserve(v.size());
+        for (uint64_t id : v) {
+            uint64_t n = 0;
+            if (mapId(id, n)) out.push_back(n);
+        }
+        v.swap(out);
+    };
+    remapVec(queue_);
+    remapVec(unshuffled_);
+    remapVec(context_);
+    snap_ = snap;
+    if (current_) {
+        current_ = snap_->catalog.FindById(curNew);
+        auto it = std::find(queue_.begin(), queue_.end(), curNew);
+        queueIndex_ = it == queue_.end() ? -1 : static_cast<int>(it - queue_.begin());
+    }
+    nextId_ = 0;
+    nextIndex_ = -1;
+    if (engine_) engine_->ClearNext();
+    queueContentChanged();
+    emit trackChanged();
+    saveSession();
 }
 
 void PlayerController::applyVolume() {

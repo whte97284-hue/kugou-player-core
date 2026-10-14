@@ -74,7 +74,7 @@ Item {
         border.color: Qt.rgba(1, 0.96, 0.9, 0.09)
         opacity: dlg.shown ? 1 : 0
         scale: dlg.shown ? 1 : 0.97
-        Behavior on opacity { OpacityAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
+        Behavior on opacity { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
         Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
         MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
 

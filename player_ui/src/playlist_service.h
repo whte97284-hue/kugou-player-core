@@ -47,6 +47,10 @@ public:
     std::vector<const TrackItem*> historyTracks() const;
     static constexpr int kHistoryMax = 300;
 
+    // 整理 / 查重之后:把歌单、收藏、播放历史里的曲目按「旧路径 → 新路径」改过去 (键用 PathKeyOf)。
+    // 同一歌单里新旧两份都在时只留一份。返回改动的条目数
+    int remapPaths(const QHash<QString, QString>& pathMap);
+
     // 解析后的曲目 (仅包含当前曲库中存在的)
     std::vector<const TrackItem*> tracksOf(const QString& id) const;
 

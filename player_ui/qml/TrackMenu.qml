@@ -99,7 +99,7 @@ Item {
         opacity: menu.shown ? 1 : 0
         scale: menu.shown ? 1 : 0.96
         transformOrigin: Item.TopLeft
-        Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+        Behavior on opacity { NumberAnimation { duration: Theme.fast } }
         Behavior on scale { ScaleAnimator { duration: Theme.fast; easing.type: Easing.OutCubic } }
         MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
 
@@ -179,7 +179,7 @@ Item {
         border.color: Qt.rgba(1, 0.96, 0.9, 0.09)
         opacity: menu.shown && menu.subShown ? 1 : 0
         visible: opacity > 0
-        Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+        Behavior on opacity { NumberAnimation { duration: Theme.fast } }
         MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; hoverEnabled: true }
 
         ListView {

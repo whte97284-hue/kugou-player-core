@@ -458,7 +458,7 @@ Item {
         visible: opacity > 0
         scale: shown ? 1 : 0.96
         transformOrigin: Item.TopLeft
-        Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+        Behavior on opacity { NumberAnimation { duration: Theme.fast } }
         Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
         Column {
             id: pmCol

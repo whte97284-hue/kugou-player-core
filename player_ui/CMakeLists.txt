@@ -12,6 +12,7 @@ qt_add_executable(KugouPlayer
     src/decrypt_service.h src/decrypt_service.cpp
     src/folder_watcher.h src/folder_watcher.cpp
     src/settings_service.h src/settings_service.cpp
+    src/library_tools.h src/library_tools.cpp
 )
 
 set_source_files_properties(qml/Theme.qml qml/Nav.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -69,6 +70,8 @@ qt_add_qml_module(KugouPlayer
         qml/SettingsPage.qml
         qml/DecryptPrompt.qml
         qml/DecryptToast.qml
+        qml/OrganizePage.qml
+        qml/DedupePage.qml
 )
 
 qt_add_shaders(KugouPlayer "shaders"

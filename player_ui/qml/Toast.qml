@@ -16,7 +16,7 @@ Rectangle {
     opacity: hold.running ? 1 : 0
     visible: opacity > 0
     scale: hold.running ? 1 : 0.94
-    Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+    Behavior on opacity { NumberAnimation { duration: Theme.normal } }
     Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
     Timer { id: hold; interval: 1800 }
     Row {

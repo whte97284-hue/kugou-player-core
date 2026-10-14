@@ -34,7 +34,7 @@ Window {
         opacity: current && status === Loader.Ready ? 1 : 0
         visible: opacity > 0
         scale: current ? 1 : 0.985
-        Behavior on opacity { OpacityAnimator { duration: current ? 300 : 150; easing.type: Easing.OutCubic } }
+        Behavior on opacity { NumberAnimation { duration: current ? 300 : 150; easing.type: Easing.OutCubic } }
         Behavior on scale { ScaleAnimator { duration: current ? 460 : 150; easing.type: Easing.OutQuint } }
     }
 
@@ -167,7 +167,7 @@ Window {
                 opacity: active ? 1 : 0
                 visible: opacity > 0
                 scale: active ? 1 : 0.985
-                Behavior on opacity { OpacityAnimator { duration: wall.active ? 300 : 150; easing.type: Easing.OutCubic } }
+                Behavior on opacity { NumberAnimation { duration: wall.active ? 300 : 150; easing.type: Easing.OutCubic } }
                 Behavior on scale { ScaleAnimator { duration: wall.active ? 460 : 150; easing.type: Easing.OutQuint } }
                 onOpenAlbum: (index, coverItem) => root.openAlbum(index, coverItem)
             }
@@ -180,7 +180,7 @@ Window {
                 opacity: active ? 1 : 0
                 visible: opacity > 0
                 scale: active ? 1 : 1.015
-                Behavior on opacity { OpacityAnimator { duration: detail.active ? 300 : 150; easing.type: Easing.OutCubic } }
+                Behavior on opacity { NumberAnimation { duration: detail.active ? 300 : 150; easing.type: Easing.OutCubic } }
                 Behavior on scale { ScaleAnimator { duration: detail.active ? 460 : 150; easing.type: Easing.OutQuint } }
                 onBack: root.back()
             }
@@ -197,6 +197,8 @@ Window {
             }
             PageLoader { id: settingsLoader; key: "settings"; allowEmpty: true; sourceComponent: SettingsPage { bottomInset: pages.inset } }
             PageLoader { id: toolsLoader; key: "tools"; allowEmpty: true; sourceComponent: ToolsPage { bottomInset: pages.inset } }
+            PageLoader { id: organizeLoader; key: "organize"; sourceComponent: OrganizePage { bottomInset: pages.inset; onBack: root.back() } }
+            PageLoader { id: dedupeLoader; key: "dedupe"; sourceComponent: DedupePage { bottomInset: pages.inset; onBack: root.back() } }
             PageLoader {
                 id: artistLoader
                 key: "artist"
@@ -228,7 +230,7 @@ Window {
                 anchors.fill: parent
                 visible: opacity > 0
                 opacity: pages.libraryEmpty && ["playlist", "playlists", "search", "tools", "settings"].indexOf(root.view) < 0 ? 1 : 0
-                Behavior on opacity { OpacityAnimator { duration: Theme.slow; easing.type: Easing.OutCubic } }
+                Behavior on opacity { NumberAnimation { duration: Theme.slow; easing.type: Easing.OutCubic } }
                 onPickFolder: folderDialog.open()
             }
         }
@@ -574,7 +576,7 @@ Window {
         color: Qt.rgba(0.25, 0.1, 0.08, 0.92)
         opacity: errTimer.running ? 1 : 0
         visible: opacity > 0
-        Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+        Behavior on opacity { NumberAnimation { duration: Theme.normal } }
         Text {
             id: errText
             anchors.centerIn: parent
@@ -626,6 +628,7 @@ Window {
         id: libraryPanel
         z: 40
         onPickFolder: folderDialog.open()
+        onOpenTool: (key) => root.go(key)
     }
 
     FolderDialog {
@@ -666,7 +669,7 @@ Window {
             border.color: Theme.accentAlpha(0.6)
             opacity: drop.containsDrag ? 1 : 0
             visible: opacity > 0
-            Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+            Behavior on opacity { NumberAnimation { duration: Theme.fast } }
             Icon { anchors.centerIn: parent; name: "folder"; size: 44; opacity: 0.9 }
         }
     }

@@ -13,7 +13,7 @@ Rectangle {
     border.color: Theme.hairline
     opacity: shown ? 1 : 0
     visible: opacity > 0
-    Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+    Behavior on opacity { NumberAnimation { duration: Theme.normal } }
 
     Timer { id: hold; interval: 3200 }
     Connections {

@@ -1,4 +1,5 @@
 #pragma once
+#include <QHash>
 #include <QObject>
 #include <QString>
 #include <QStringList>
@@ -57,6 +58,10 @@ QString SortKeyOf(const std::wstring& text);
 QString LetterOf(const QString& sortKey);
 // 曲目的持久化标识:路径 + CUE 起点 (曲目 ID 每次扫描重新分配,不能用于持久化)
 QString TrackKeyOf(const TrackItem& t);
+// 路径比较键 (分隔符统一为 /,Windows 不分大小写),用于整理 / 查重后的「旧路径 → 新路径」映射
+QString PathKeyOf(const QString& path);
+// 把曲目标识 (路径#CUE 起点) 里的路径按映射替换;不在映射里返回空
+QString RemapTrackKey(const QString& key, const QHash<QString, QString>& pathMap);
 
 class LibraryService : public QObject {
     Q_OBJECT
@@ -79,6 +84,8 @@ class LibraryService : public QObject {
     Q_PROPERTY(int extraFileCount READ extraFileCount NOTIFY foldersChanged)
     // 实时监控音乐文件夹:有新歌、删除、改名时自动重扫 (增量,几乎不读盘)
     Q_PROPERTY(bool watchFolders READ watchFolders WRITE setWatchFolders NOTIFY watchFoldersChanged)
+    // 「只从曲库移除」的文件 (查找重复时选择不动磁盘):扫描照常,但不出现在专辑 / 歌手 / 歌曲 / 搜索里
+    Q_PROPERTY(int excludedFileCount READ excludedFileCount NOTIFY foldersChanged)
 
 public:
     explicit LibraryService(QObject* parent = nullptr);
@@ -103,6 +110,11 @@ public:
     int extraFileCount() const { return static_cast<int>(extraFiles_.size()); }
     const QStringList& extraFiles() const { return extraFiles_; }
     bool watchFolders() const { return watch_; }
+    int excludedFileCount() const { return static_cast<int>(excludedFiles_.size()); }
+    const QStringList& excludedFiles() const { return excludedFiles_; }
+    void excludeFiles(const QStringList& paths);
+    void includeFiles(const QStringList& paths);
+    Q_INVOKABLE void clearExcludedFiles();
     void setWatchFolders(bool on);
     static QString dataDir();
     // 全部转换产物的唯一输出目录 (设置项 decrypt/outputDir,默认 我的音乐\Decrypted)
@@ -161,7 +173,8 @@ private:
     void startScan();
     void finishScan(std::shared_ptr<LibrarySnapshot> snap, const IngestionSummary& sum);
     void saveFolders();
-    static std::shared_ptr<LibrarySnapshot> BuildAlbums(std::unique_ptr<MusicCatalog> catalog, const QStringList& hidden = {});
+    static std::shared_ptr<LibrarySnapshot> BuildAlbums(std::unique_ptr<MusicCatalog> catalog, const QStringList& hidden = {},
+                                                        const QStringList& excluded = {});
     static void ReleaseFreeHeap();
 
     mutable std::mutex snap_mutex_;
@@ -178,6 +191,7 @@ private:
     QVariantMap lastScan_;
     bool rescanPending_ = false;
     QStringList extraFiles_;
+    QStringList excludedFiles_;
     QStringList kugouFolders_;
     bool watch_ = true;
     class FolderWatcher* watcher_ = nullptr;

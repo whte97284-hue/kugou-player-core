@@ -16,6 +16,7 @@
 #include "settings_service.h"
 #include "decryptor.hpp"
 #include "window_helper.h"
+#include "library_tools.h"
 
 // 离屏截图驱动 (开发验证用):--screenshot <输出目录>
 // 依次调用 QML 根对象上的自动化函数并截图,用于在无显示器环境下检查排版与配色
@@ -102,6 +103,25 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
     }, 2400});
     steps->push_back({"12_wall", [call] { call("automationNowPlaying", false); }, 1400});
     steps->push_back({"13_wall_end", [call] { call("automationScrollEnd"); }, 1500});
+    // 文件夹面板:打开途中与落定,以及面板里进入的整理 / 查重页
+    steps->push_back({"20_panel_mid", [call] { call("automationLibraryPanel", true); }, 90});
+    steps->push_back({"20b_panel", [] {}, 800});
+    steps->push_back({"21_organize", [call] {
+        call("automationLibraryPanel", false);
+        call("automationGo", QStringLiteral("organize"));
+    }, 1200});
+    steps->push_back({"21b_organize_plan", [&engine, outDir] {
+        auto* t = qobject_cast<LibraryTools*>(engine.rootContext()->contextProperty("libtools").value<QObject*>());
+        if (!t) return;
+        t->setTargetUrl(QDir(outDir).absoluteFilePath("organized"));
+        t->buildPlan();
+    }, 3000});
+    steps->push_back({"22_dedupe", [&engine, call] {
+        call("automationGo", QStringLiteral("dedupe"));
+        auto* t = qobject_cast<LibraryTools*>(engine.rootContext()->contextProperty("libtools").value<QObject*>());
+        if (t) t->findDuplicates();
+    }, 400});
+    steps->push_back({"22b_dedupe_done", [] {}, 14000});
     steps->push_back({"15_tools", [call] { call("automationGo", QStringLiteral("tools")); }, 1400});
     steps->push_back({"16_tools_decrypting", [&engine] {
         auto* d = qobject_cast<DecryptService*>(engine.rootContext()->contextProperty("decrypt").value<QObject*>());
@@ -191,6 +211,7 @@ int main(int argc, char* argv[]) {
     QObject::connect(&player, &PlayerController::trackChanged, &playlists, recordPlay);
     QObject::connect(&player, &PlayerController::playingChanged, &playlists, recordPlay);
     WindowHelper windowHelper;
+    LibraryTools libtools(&library, &playlists, &player);
 
     QQmlApplicationEngine engine;
     engine.addImageProvider("cover", new CoverProvider);
@@ -209,6 +230,7 @@ int main(int argc, char* argv[]) {
     ctx->setContextProperty("playlistTracks", &playlistTracks);
     ctx->setContextProperty("historyTracks", &historyTracks);
     ctx->setContextProperty("windowHelper", &windowHelper);
+    ctx->setContextProperty("libtools", &libtools);
 
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, []() { QCoreApplication::exit(1); },
                      Qt::QueuedConnection);

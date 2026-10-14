@@ -77,7 +77,7 @@ Item {
             iconSize: 15
             opacity: input.text.length ? 1 : 0
             visible: opacity > 0
-            Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+            Behavior on opacity { NumberAnimation { duration: Theme.fast } }
             onClicked: { input.text = ""; input.forceActiveFocus() }
         }
         // 下划线:聚焦时从中间向两侧展开为强调色
