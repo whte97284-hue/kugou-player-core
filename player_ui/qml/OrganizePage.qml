@@ -318,7 +318,9 @@ Item {
                     Rectangle {
                         visible: page.working
                         height: parent.height
-                        width: parent.width * libtools.progress
+                        // clip 不会按圆角裁剪:进度条自己做成胶囊,最短也是一个圆
+                        radius: height / 2
+                        width: Math.max(height, parent.width * libtools.progress)
                         color: Theme.accentAlpha(0.3)
                         Behavior on width { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
                     }

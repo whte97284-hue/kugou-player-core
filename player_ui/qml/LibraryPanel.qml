@@ -3,7 +3,7 @@ import PlayerUi
 
 // 音乐文件夹管理:从侧栏弹出的卡片。列出已添加的文件夹 (可移除),添加 / 重新扫描,整理曲库 / 查找重复
 // 打开:卡片从下方 10px 处浮上来并轻微放大 (透明度用 NumberAnimation,随帧更新,
-// 否则 visible 绑定在 Animator 结束前一直读到 0,卡片会在动画结束时才突然出现);文件夹行依次浮现
+// 否则 visible 绑定在 Animator 结束前一直读到 0,卡片会在动画结束时才突然出现)
 Item {
     id: lp
     property bool shown: false
@@ -35,11 +35,13 @@ Item {
         border.width: 1
         border.color: Qt.rgba(1, 0.96, 0.9, 0.1)
         opacity: lp.shown ? 1 : 0
-        scale: lp.shown ? 1 : 0.96
+        scale: lp.shown ? 1 : 0.97
         transformOrigin: Item.BottomLeft
-        transform: Translate { y: lp.shown ? 0 : 10; Behavior on y { NumberAnimation { duration: lp.shown ? 380 : 140; easing.type: lp.shown ? Easing.OutQuint : Easing.InCubic } } }
-        Behavior on opacity { NumberAnimation { duration: lp.shown ? 160 : 120; easing.type: Easing.OutCubic } }
-        Behavior on scale { ScaleAnimator { duration: lp.shown ? 380 : 140; easing.type: lp.shown ? Easing.OutQuint : Easing.InCubic } }
+        // 透明度、缩放、位移全部用同一种动画、同一时长与曲线,在同一线程上逐帧推进;
+        // 混用 ScaleAnimator (渲染线程) 和 NumberAnimation (主线程) 时两者不同步,结束时会跳一下
+        transform: Translate { y: lp.shown ? 0 : 8; Behavior on y { NumberAnimation { duration: lp.shown ? 260 : 140; easing.type: lp.shown ? Easing.OutCubic : Easing.InCubic } } }
+        Behavior on opacity { NumberAnimation { duration: lp.shown ? 200 : 120; easing.type: Easing.OutCubic } }
+        Behavior on scale { NumberAnimation { duration: lp.shown ? 260 : 140; easing.type: lp.shown ? Easing.OutCubic : Easing.InCubic } }
         // 吞掉卡片内的点击,避免穿透到背后的关闭区域
         MouseArea { anchors.fill: parent }
 
@@ -77,17 +79,6 @@ Item {
                 delegate: Item {
                     width: body.width
                     height: 44
-                    // 依次浮现:每行晚 25ms;收起时一起淡出
-                    opacity: lp.shown ? 1 : 0
-                    Behavior on opacity { SequentialAnimation {
-                        PauseAnimation { duration: lp.shown ? 40 + index * 25 : 0 }
-                        NumberAnimation { duration: lp.shown ? 220 : 100; easing.type: Easing.OutCubic } } }
-                    transform: Translate {
-                        y: lp.shown ? 0 : 6
-                        Behavior on y { SequentialAnimation {
-                            PauseAnimation { duration: lp.shown ? 40 + index * 25 : 0 }
-                            NumberAnimation { duration: 320; easing.type: Easing.OutQuint } } }
-                    }
                     Rectangle {
                         anchors.fill: parent
                         anchors.leftMargin: -8

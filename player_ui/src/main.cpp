@@ -42,7 +42,21 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         if (arg.isValid()) QMetaObject::invokeMethod(window, fn, Q_ARG(QVariant, arg));
         else QMetaObject::invokeMethod(window, fn);
     };
-    if (!flowDir.isEmpty()) {
+    if (qEnvironmentVariableIsSet("KP_TEST_ORGANIZE")) {
+        // 回归:整理 (移动) 后立即点播放、切歌、查重处理后再播放,不应崩溃
+        auto tools = [&engine]() { return qobject_cast<LibraryTools*>(engine.rootContext()->contextProperty("libtools").value<QObject*>()); };
+        steps->push_back({"o1_playing", [&player] { player.playAlbum(0, 0); }, 800});
+        steps->push_back({"o2_planned", [tools, outDir] {
+            tools()->setTargetUrl(QDir(outDir).absoluteFilePath("organized"));
+            tools()->buildPlan();
+        }, 3000});
+        steps->push_back({"o3_executed", [tools] { tools()->execute(); }, 8000});
+        steps->push_back({"o4_play_after", [&player] { player.playAlbum(2, 1); }, 1500});
+        steps->push_back({"o5_next", [&player] { player.next(); player.next(); }, 1500});
+        steps->push_back({"o6_dedupe", [tools, call] { call("automationGo", QStringLiteral("dedupe")); tools()->findDuplicates(); }, 6000});
+        steps->push_back({"o7_applied", [tools] { tools()->applyDedupe(1); }, 6000});
+        steps->push_back({"o8_play_after", [&player] { player.playAlbum(1, 0); player.next(); }, 2000});
+    } else if (!flowDir.isEmpty()) {
         steps->push_back({"f1_empty", [] {}, 1200});
         steps->push_back({"f2_importing", [&lib, flowDir] { lib.addFolder(flowDir); }, 1100});
         steps->push_back({"f3_imported", [] {}, 4000});
