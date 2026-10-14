@@ -288,17 +288,62 @@ Item {
                 onClicked: island.chainClicked()
             }
         }
-        // 桌面歌词开关 (同 Ctrl D)
-        IconButton {
+        // 桌面歌词开关 (同 Ctrl D):用「词」字小方块,和播放列表的线条图标一眼分开;
+        // 关闭时细描边,开启时填满强调色
+        Item {
+            id: lyricBtn
             anchors.verticalCenter: parent.verticalCenter
-            width: 34; height: 34
-            icon: "lyrics"
-            iconSize: 16
-            tip: settings.desktopLyrics ? qsTr("关闭桌面歌词") : qsTr("桌面歌词")
-            iconTint: settings.desktopLyrics ? Theme.accent : "transparent"
-            restOpacity: settings.desktopLyrics ? 1 : 0.6
-            popOnChange: true
-            onClicked: settings.desktopLyrics = !settings.desktopLyrics
+            width: 30; height: 26
+            readonly property bool on: settings.desktopLyrics
+            Rectangle {
+                id: lyricChip
+                anchors.fill: parent
+                radius: 8
+                color: lyricBtn.on ? Theme.accent : (lyricMouse.containsMouse ? Theme.pressed : Qt.rgba(1, 1, 1, 0.05))
+                border.width: lyricBtn.on ? 0 : 1.5
+                border.color: lyricMouse.containsMouse ? Theme.textSecondary : Theme.textTertiary
+                scale: lyricMouse.pressed ? 0.92 : 1
+                Behavior on color { ColorAnimation { duration: Theme.fast } }
+                Behavior on scale { ScaleAnimator { duration: 160; easing.type: Easing.OutCubic } }
+                Text {
+                    anchors.centerIn: parent
+                    text: qsTr("词")
+                    color: lyricBtn.on ? Theme.onAccent : (lyricMouse.containsMouse ? Theme.text : Theme.textSecondary)
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 14
+                    font.weight: Font.Bold
+                }
+            }
+            MouseArea {
+                id: lyricMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: settings.desktopLyrics = !settings.desktopLyrics
+            }
+            // 悬停说明:浮在按钮上方
+            Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.top
+                anchors.bottomMargin: 12
+                width: lyricTip.implicitWidth + 18
+                height: 26
+                radius: 8
+                color: Theme.tooltip
+                border.width: 1
+                border.color: Theme.hairline
+                opacity: lyricMouse.containsMouse ? 1 : 0
+                visible: opacity > 0
+                Behavior on opacity { NumberAnimation { duration: Theme.fast } }
+                Text {
+                    id: lyricTip
+                    anchors.centerIn: parent
+                    text: (lyricBtn.on ? qsTr("关闭桌面歌词") : qsTr("打开桌面歌词")) + "  Ctrl+D"
+                    color: Theme.text
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12
+                }
+            }
         }
         VolumeControl { anchors.verticalCenter: parent.verticalCenter; pinned: !island.compact }
     }

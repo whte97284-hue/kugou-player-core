@@ -144,10 +144,10 @@ uint64_t SizeOf(const std::wstring& p) {
 bool SameHash(const std::wstring& path, uint64_t expected) {
     platform::ReadOnlyFile f;
     if (!f.Open(path, false)) return false;
-    std::vector<uint8_t> buf(4 << 20);
+    std::vector<uint8_t>& buf = kp::ScratchBuffer(0, 4 << 20);
     kp::Xxh64 h;
     for (uint64_t off = 0; off < f.Size();) {
-        size_t n = f.ReadAt(off, buf.data(), buf.size());
+        size_t n = f.ReadAt(off, buf.data(), 4 << 20);
         if (n == 0) return false;
         h.Add(buf.data(), n);
         off += n;
@@ -712,14 +712,14 @@ struct Mover {
                 err = L"无法写入目标位置";
                 return false;
             }
-            std::vector<uint8_t> buf(4 << 20);
+            std::vector<uint8_t>& buf = kp::ScratchBuffer(0, 4 << 20);
             for (uint64_t off = 0; off < in.Size();) {
                 if (Cancelled()) {
                     err = L"已取消";
                     ok = false;
                     break;
                 }
-                size_t n = in.ReadAt(off, buf.data(), buf.size());
+                size_t n = in.ReadAt(off, buf.data(), 4 << 20);
                 if (n == 0 || !out.Write(buf.data(), n)) {
                     err = L"复制时读写失败 (磁盘已满或设备断开?)";
                     ok = false;

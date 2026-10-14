@@ -40,6 +40,16 @@ inline void ParallelFor(size_t n, unsigned threads, const std::function<void(siz
     if (tick) tick();
 }
 
+// 线程内复用的大块读写缓冲 (slot 0 / 1 各一块,两文件比对时各用一块):
+// 复制、校验、比对每个文件都要 MB 级缓冲,反复申请释放既费时又容易把堆撑大。
+// 后台任务跑在各自的线程上,线程结束时缓冲随之释放
+inline std::vector<uint8_t>& ScratchBuffer(int slot, size_t size) {
+    thread_local std::vector<uint8_t> bufs[2];
+    std::vector<uint8_t>& b = bufs[slot & 1];
+    if (b.size() < size) b.resize(size);
+    return b;
+}
+
 // 整个文件的抽样指纹:头、尾和中间均匀 5 处,各 64KB (约 448KB),文件不大于这些时哈希全文。
 // 大小相同、7 处内容都一样的不同音乐文件几乎不可能出现;只用于「不搬 / 标成重复」这类可回退的判断,
 // 不可撤销的操作仍要逐字节确认

@@ -171,6 +171,9 @@ public:
     static QString formatDuration(uint64_t ms);
     static QString trackQuality(const TrackItem& t);
 
+    // 把堆里的空闲块交还系统 (载入曲库、查重整理这类重活之后调用)
+    static void ReleaseFreeHeap();
+
 signals:
     void scanningChanged();
     void progressChanged();
@@ -187,7 +190,6 @@ private:
     static std::shared_ptr<LibrarySnapshot> BuildAlbums(std::unique_ptr<MusicCatalog> catalog, const QStringList& hidden = {},
                                                         const QStringList& excluded = {}, bool collapseCopies = false,
                                                         const QStringList& folderOrder = {});
-    static void ReleaseFreeHeap();
 
     mutable std::mutex snap_mutex_;
     std::shared_ptr<const LibrarySnapshot> snap_;

@@ -185,6 +185,8 @@ void LibraryTools::setProgress(double v, const QString& text) {
 void LibraryTools::finishTask() {
     task_.clear();
     emit stateChanged();
+    // 查重 / 整理是一次性的重活,跑完把堆里空出来的大块还给系统,别一直挂在进程名下
+    LibraryService::ReleaseFreeHeap();
 }
 
 void LibraryTools::cancel() { cancel_ = true; }

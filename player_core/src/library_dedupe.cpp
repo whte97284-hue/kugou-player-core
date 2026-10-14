@@ -247,9 +247,12 @@ bool SameRange(const std::wstring& a, uint64_t ab, const std::wstring& b, uint64
     platform::ReadOnlyFile fa, fb;
     if (!fa.Open(a, false) || !fb.Open(b, false)) return false;
     if (ab + len > fa.Size() || bb + len > fb.Size()) return false;
-    std::vector<uint8_t> x(1 << 20), y(1 << 20);
+    // 每次各读 4MB 再比:机械盘上两个文件之间来回寻道的次数是 1MB 时的四分之一
+    constexpr size_t kChunk = 4 << 20;
+    std::vector<uint8_t>& x = kp::ScratchBuffer(0, kChunk);
+    std::vector<uint8_t>& y = kp::ScratchBuffer(1, kChunk);
     for (uint64_t off = 0; off < len;) {
-        size_t want = static_cast<size_t>(std::min<uint64_t>(x.size(), len - off));
+        size_t want = static_cast<size_t>(std::min<uint64_t>(kChunk, len - off));
         size_t na = fa.ReadAt(ab + off, x.data(), want);
         size_t nb = fb.ReadAt(bb + off, y.data(), want);
         if (na != want || nb != want || std::memcmp(x.data(), y.data(), want) != 0) return false;
