@@ -195,7 +195,6 @@ Item {
                 height: np.coverSize
                 radius: 12
                 source: player.cover
-                decodeSize: 1024
             }
         }
 

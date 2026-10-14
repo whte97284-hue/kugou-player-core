@@ -30,6 +30,7 @@
 #include <cwchar>
 #endif
 #include <QIcon>
+#include <QThreadPool>
 
 // 离屏截图驱动 (开发验证用):--screenshot <输出目录>
 // 依次调用 QML 根对象上的自动化函数并截图,用于在无显示器环境下检查排版与配色
@@ -169,10 +170,14 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
     steps->push_back({"23_desktop_lyrics", [&engine, &player] {
         // 从头播放,给这首写一份短 LRC (测试曲目只有 2 秒);锁定以显示不悬停时的样子
         player.playAlbum(0, 0);
+        // 同一目录的每首都写 (曲目很短,截图时可能已经播到后面几首);同时间戳的第二行是翻译
         const QString path = player.currentPath();
-        QFile f(QFileInfo(path).path() + "/" + QFileInfo(path).completeBaseName() + ".lrc");
-        if (f.open(QIODevice::WriteOnly)) {
-            f.write(QStringLiteral("[00:00.00]風が吹いている\n[00:00.60]遠くの空へ 届くように\n[00:01.20]桌面歌词 · 逐字高亮测试\n[00:01.90]下一句\n").toUtf8());
+        const QDir dir = QFileInfo(path).dir();
+        for (const QFileInfo& fi : dir.entryInfoList({"*.flac", "*.mp3", "*.wav"}, QDir::Files)) {
+            QFile f(fi.path() + "/" + fi.completeBaseName() + ".lrc");
+            if (!f.open(QIODevice::WriteOnly)) continue;
+            f.write(QStringLiteral("[00:00.00]風が吹いている\n[00:00.00]风在吹\n[00:00.60]遠くの空へ 届くように\n[00:00.60]愿能传到远方的天空\n"
+                                   "[00:01.20]夢の続きを 歩いていく\n[00:01.20]继续走在梦的路上\n[00:01.90]下一句\n").toUtf8());
             f.close();
         }
         auto* st = qobject_cast<SettingsService*>(engine.rootContext()->contextProperty("settings").value<QObject*>());
@@ -298,6 +303,8 @@ int main(int argc, char* argv[]) {
     if (scale > 0.5 && scale < 3.0 && std::abs(scale - 1.0) > 0.01 && qEnvironmentVariableIsEmpty("QT_SCALE_FACTOR"))
         qputenv("QT_SCALE_FACTOR", QByteArray::number(scale, 'f', 2));
     QGuiApplication app(argc, argv);
+    // 全局线程池只跑提取封面主色、加载歌词、统计缓存这类零星后台任务,默认按逻辑核数 (可达 20) 铺线程没有必要
+    QThreadPool::globalInstance()->setMaxThreadCount(4);
     app.setWindowIcon(QIcon(QStringLiteral(":/images/app_icon_256.png")));
 #ifdef Q_OS_WIN
     InstallCrashDump();

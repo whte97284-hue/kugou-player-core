@@ -3,7 +3,7 @@ import QtQuick.Window
 import PlayerUi
 
 // 桌面歌词:置顶、透明、无边框的独立窗口。
-//  · 双行交替 (酷狗式:上一行靠左、下一行靠右),当前句逐字高亮;有翻译时下一行显示翻译
+//  · 双行交替 (酷狗式:上一行靠左、下一行靠右),当前句逐字高亮;有翻译时每句原文下面带一行小字翻译
 //  · 悬停显示半透明底板与工具条:上一首 / 播放 / 下一首 · 字号 · 配色 · 单双行 · 锁定 · 关闭
 //  · 锁定后鼠标穿透 (不挡桌面操作);鼠标移到歌词上时只露出一个「解锁」小按钮,只有它能点
 //  · 拖动任意空白处移动,位置记住
@@ -33,7 +33,10 @@ Window {
     transientParent: null
     title: qsTr("桌面歌词")
     width: Math.min(Screen.width - 40, Math.max(640, fs * 26))
-    height: toolbarH + fs * (settings.lyricsTwoLine ? 2.75 : 1.6) + 28
+    // 高度按整首歌是否带翻译固定下来,不随某一句有没有翻译跳动
+    height: toolbarH + Math.ceil(fs * 1.35) * (settings.lyricsTwoLine ? 2 : 1)
+            + (anyTrans ? Math.ceil(transSize * 1.35) * (settings.lyricsTwoLine ? 2 : 1) : 0)
+            + Math.round(fs * 0.12) * (settings.lyricsTwoLine ? 1 : 0) + 28
     readonly property int toolbarH: 44
 
     function placeDefault() {
@@ -58,9 +61,12 @@ Window {
     readonly property bool synced: player.lyricsSynced && lines.length > 0
     readonly property int cur: synced ? Math.max(0, player.lyricIndex) : -1
     readonly property var curLine: cur >= 0 && cur < lines.length ? lines[cur] : null
-    readonly property bool hasTrans: curLine !== null && curLine.translation !== undefined && curLine.translation.length > 0
     readonly property string fallback: player.hasTrack ? player.title + (player.artist ? "  —  " + player.artist : "") : "Hi-Fi Player"
     function lineText(i) { return i >= 0 && i < lines.length ? lines[i].text : "" }
+    function transText(i) { return i >= 0 && i < lines.length && lines[i].translation ? lines[i].translation : "" }
+    // 这首歌有没有翻译 (有的话每句原文下面留一行给翻译)
+    readonly property bool anyTrans: { for (let i = 0; i < lines.length; ++i) if (lines[i].translation) return true; return false }
+    readonly property int transSize: Math.round(fs * 0.62)
     // 当前句演唱进度 0..1 (player.position 约 60Hz 更新,足够平滑)
     function progressOf(i) {
         if (!synced || i !== cur || !curLine) return i < cur ? 1 : 0
@@ -250,6 +256,29 @@ Window {
         }
     }
 
+    // 一句:原文 + (有翻译时) 下方小一号的翻译,两者对齐方式相同
+    component LyricBlock: Column {
+        id: lb
+        property int idx: -1
+        property int align: Text.AlignHCenter
+        width: parent ? parent.width : 0
+        LyricLine {
+            width: lb.width
+            align: lb.align
+            text: dl.lineText(lb.idx)
+            active: lb.idx === dl.cur
+            progress: dl.progressOf(lb.idx)
+        }
+        LyricLine {
+            visible: dl.anyTrans
+            width: lb.width
+            align: lb.align
+            size: dl.transSize
+            text: dl.transText(lb.idx)
+            active: lb.idx === dl.cur
+        }
+    }
+
     Column {
         id: lyricCol
         x: 28
@@ -265,36 +294,21 @@ Window {
             text: dl.fallback
             active: true
         }
-        // 单行,或当前句有翻译:当前句居中,翻译在下
-        LyricLine {
-            visible: dl.synced && (!settings.lyricsTwoLine || dl.hasTrans)
-            width: parent.width
-            text: dl.lineText(dl.cur)
-            active: true
-            progress: dl.progressOf(dl.cur)
+        // 单行:当前句居中 (有翻译时翻译在下)
+        LyricBlock {
+            visible: dl.synced && !settings.lyricsTwoLine
+            idx: dl.cur
         }
-        LyricLine {
-            visible: dl.synced && settings.lyricsTwoLine && dl.hasTrans
-            width: parent.width
-            size: Math.round(dl.fs * 0.7)
-            text: dl.hasTrans ? dl.curLine.translation : ""
-        }
-        // 双行交替
-        LyricLine {
-            visible: dl.synced && settings.lyricsTwoLine && !dl.hasTrans
-            width: parent.width
+        // 双行交替:偶数句在上靠左,奇数句在下靠右,另一行预告下一句;每句各带自己的翻译
+        LyricBlock {
+            visible: dl.synced && settings.lyricsTwoLine
             align: Text.AlignLeft
-            text: dl.lineText(dl.topIdx)
-            active: dl.topIdx === dl.cur
-            progress: dl.progressOf(dl.topIdx)
+            idx: dl.topIdx
         }
-        LyricLine {
-            visible: dl.synced && settings.lyricsTwoLine && !dl.hasTrans
-            width: parent.width
+        LyricBlock {
+            visible: dl.synced && settings.lyricsTwoLine
             align: Text.AlignRight
-            text: dl.lineText(dl.botIdx)
-            active: dl.botIdx === dl.cur
-            progress: dl.progressOf(dl.botIdx)
+            idx: dl.botIdx
         }
     }
 

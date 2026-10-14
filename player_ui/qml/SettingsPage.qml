@@ -447,7 +447,7 @@ Item {
                 SettingRow {
                     visible: settings.desktopLyrics
                     label: qsTr("双行显示")
-                    hint: qsTr("有翻译时显示翻译,没有时交替显示下一句")
+                    hint: qsTr("上下两句交替显示,有翻译时每句下面带翻译")
                     Toggle { checked: settings.lyricsTwoLine; onToggled: (v) => settings.lyricsTwoLine = v }
                 }
                 SettingRow {
