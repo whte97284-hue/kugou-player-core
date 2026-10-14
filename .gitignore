@@ -29,8 +29,6 @@ desktop.ini
 !tools/kgg/kgg-dec.exe
 !tools/kgg/infra.dll
 !tools/ncm/ncmdump.exe
-!tools/kgm/kgm-dec.exe
-!tools/kgm/kgm_decoder.cpp
 
 temp_kgm_process/
 player_core/test/*.obj
@@ -43,7 +41,6 @@ player_core/test/playlists.json
 player_core/test/audit_report.txt
 player_core/test/phase2_audit_report.txt
 player_core/test/hires_audit_report.txt
-tools/kgm/kgm.mask
 npm-debug.log*
 
 # 打包输出
