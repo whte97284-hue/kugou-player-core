@@ -121,7 +121,8 @@ Item {
         id: mouse
         width: coverBox.width
         height: coverBox.height + 52
-        hoverEnabled: true
+        // 滚动时卡片从鼠标下掠过,不逐张触发上浮与投影动画
+        hoverEnabled: !Theme.scrolling
         cursorShape: Qt.PointingHandCursor
         onClicked: card.open()
         z: -1

@@ -63,6 +63,10 @@ QtObject {
     readonly property int normal: reduced ? 140 : 260
     readonly property int slow: reduced ? 220 : 520
 
+    // 正在滚动的列表数 (SmoothScroll 维护):滚动期间暂停背景流动、呼吸点、悬停效果,把每一帧都留给滚动
+    property int scrollers: 0
+    readonly property bool scrolling: scrollers > 0
+
     readonly property int navWidth: 72
     readonly property int islandHeight: 84
 

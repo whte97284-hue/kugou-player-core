@@ -653,7 +653,7 @@ Item {
                 }
                 SettingRow {
                     label: qsTr("背景")
-                    hint: qsTr("静止与纯色更省电")
+                    hint: qsTr("没在播放时的背景;播放时会换成当前封面的模糊底图")
                     Segmented {
                         options: [{ t: qsTr("流动"), v: 0 }, { t: qsTr("静止"), v: 1 }, { t: qsTr("纯色"), v: 2 }]
                         value: settings.background
@@ -662,7 +662,7 @@ Item {
                 }
                 SettingRow {
                     label: qsTr("减弱动效")
-                    hint: qsTr("缩短过渡动画,背景停止流动")
+                    hint: qsTr("缩短过渡动画,停止流动背景和提示点的闪烁")
                     Toggle { checked: settings.reducedMotion; onToggled: (v) => settings.reducedMotion = v }
                 }
                 SettingRow {

@@ -44,7 +44,8 @@ Item {
     MouseArea {
         id: mouse
         anchors.fill: parent
-        hoverEnabled: true
+        // 滚动时行从鼠标下掠过,不逐行触发悬停高亮 (浏览器滚动时屏蔽 hover 的同一做法)
+        hoverEnabled: !Theme.scrolling
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         cursorShape: Qt.PointingHandCursor
         onClicked: (e) => {

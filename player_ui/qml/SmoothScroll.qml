@@ -42,14 +42,35 @@ WheelHandler {
 
     // 逐帧指数追随目标 (和浏览器的平滑滚动同一思路):
     //  · 连续滚动时只是把目标往前推,当前速度不会被打断重来,没有一格一格的顿挫;
-    //  · 按真实帧间隔计算,60 / 144Hz 下速度一致;
+    //  · 按显示器帧长计算,60 / 144Hz 下速度一致;
     //  · 内部用浮点位置,写回时对齐到物理像素,文字和封面不会在亚像素间抖动
     property real pos: 0
     readonly property real tau: duration / 4600   // 时间常数 (秒):340ms 约等于 74ms,约 0.3s 基本停稳
+    // 显示器一帧的时长。frameTime 是界面线程「被叫醒」的时刻差,会被同一帧里其他工作推迟或提前几毫秒,
+    // 而画面总是按刷新节拍显示:直接用它推进,每帧位移忽大忽小,看起来就是细碎的抖动。
+    // 所以把间隔对齐到整数帧 (掉帧时按掉了几帧算),和 Qt 自己的 vsync 动画驱动、浏览器的平滑滚动同一做法
+    property real vsync: 1 / 60
+    function frameStep(ft) {
+        const n = Math.max(1, Math.round(ft / vsync))
+        return Math.min(0.1, n * vsync)
+    }
+    // 滚动中 (滚轮动画或拖动 / 惯性) 时登记到 Theme.scrolling
+    readonly property bool active: anim.running || (flickable ? flickable.moving : false)
+    property bool counted: false
+    onActiveChanged: {
+        if (active === counted) return
+        counted = active
+        Theme.scrollers += active ? 1 : -1
+    }
+    Component.onDestruction: if (counted) Theme.scrollers -= 1
     property FrameAnimation anim: FrameAnimation {
+        onRunningChanged: if (running) {
+            const w = h.flickable ? h.flickable.Window.window : null
+            h.vsync = 1 / (w ? windowHelper.refreshRate(w) : 60)
+        }
         onTriggered: {
             const g = h.clamp(h.goal)
-            const k = 1 - Math.exp(-frameTime / h.tau)
+            const k = 1 - Math.exp(-h.frameStep(frameTime) / h.tau)
             h.pos += (g - h.pos) * k
             if (Math.abs(g - h.pos) < 0.25) { h.pos = g; stop() }
             // 注意: QQuickWindow / QWindow 在 QML 里 **没有** devicePixelRatio 属性,

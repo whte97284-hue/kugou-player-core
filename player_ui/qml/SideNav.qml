@@ -134,6 +134,7 @@ Item {
                 visible: modelData.key === "tools" && decrypt.policy !== 2 && (decrypt.pending.total || 0) > 0 && nav.current !== "tools"
                 SequentialAnimation on opacity {
                     running: parent.visible && !Theme.reduced
+                    paused: running && Theme.scrolling
                     loops: Animation.Infinite
                     OpacityAnimator { from: 1; to: 0.35; duration: 1400; easing.type: Easing.InOutSine }
                     OpacityAnimator { from: 0.35; to: 1; duration: 1400; easing.type: Easing.InOutSine }

@@ -44,7 +44,8 @@ Item {
             // 背景:0 流动 / 1 静止 / 2 纯色;减弱动效时也停止流动
             running: settings.background === 0 && !Theme.reduced
             // 被沉浸播放页完全盖住、或窗口不在前台时暂停,不再白白整屏重绘
-            paused: Qt.application.state !== Qt.ApplicationActive || !root.visible
+            // 列表滚动期间也暂停,整屏重绘的那份开销留给滚动
+            paused: running && (Qt.application.state !== Qt.ApplicationActive || !root.visible || Theme.scrolling)
         }
     }
 }

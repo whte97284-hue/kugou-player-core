@@ -1,6 +1,8 @@
 #include "window_helper.h"
 
 #include <QCursor>
+#include <QGuiApplication>
+#include <QScreen>
 
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
@@ -86,3 +88,9 @@ bool WindowHelper::isWindows() const {
 }
 
 QPoint WindowHelper::cursorPos() const { return QCursor::pos(); }
+
+double WindowHelper::refreshRate(QWindow* window) const {
+    QScreen* s = window && window->screen() ? window->screen() : QGuiApplication::primaryScreen();
+    const double hz = s ? s->refreshRate() : 0.0;
+    return hz >= 24.0 && hz <= 500.0 ? hz : 60.0;
+}

@@ -15,6 +15,8 @@ public:
     Q_INVOKABLE bool isWindows() const;
     // 鼠标在屏幕上的位置 (桌面歌词锁定后窗口不接收鼠标,靠它判断悬停)
     Q_INVOKABLE QPoint cursorPos() const;
+    // 窗口所在显示器的刷新率 (Hz);平滑滚动按它的整数倍推进,画面步长才均匀
+    Q_INVOKABLE double refreshRate(QWindow* window) const;
 
     // 向系统注册多媒体键 (被其他程序占用的键会注册失败,此时只在窗口前台时生效)
     void registerMediaKeys(QWindow* window);
