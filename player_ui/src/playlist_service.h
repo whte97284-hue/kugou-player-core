@@ -70,6 +70,8 @@ private:
     List* find(const QString& id);
     const List* find(const QString& id) const;
     const TrackItem* resolve(const QString& key) const;
+    // 列表里显示的存储下标:能在曲库里找到的;显示去重开着时,同一首歌的其他副本只留第一次出现的
+    std::vector<size_t> visibleSlots(const List& l) const;
     QString keyOf(double trackId) const;
     void rebuildIndex();
     void touch(const QString& id);

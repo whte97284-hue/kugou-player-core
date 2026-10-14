@@ -430,8 +430,28 @@ void LibraryTools::buildPlan() {
     auto tracks = std::make_shared<std::vector<organizer::OrganizeTrack>>(collectTracks(nullptr));
     const organizer::OrganizeOptions opt = organizeOptions();
     setProgress(0, tr("正在计算 %1 个文件的新位置…").arg(tracks->size()));
-    run("plan", [tracks, opt]() { return std::make_shared<organizer::OrganizePlan>(organizer::BuildPlan(*tracks, opt)); },
+    run("plan",
+        [this, tracks, opt]() {
+            QElapsedTimer clock;
+            clock.start();
+            qint64 last = -1000;
+            auto plan = organizer::BuildPlan(*tracks, opt, [&](const organizer::OrganizeProgress& p) {
+                if (clock.elapsed() - last < 80) return;
+                last = clock.elapsed();
+                // 算新位置很快 (占进度条前 20%),比对可能重复的文件要读盘
+                const double f = p.total ? std::min(1.0, double(p.done) / double(p.total)) : 1.0;
+                const double v = p.stage == 0 ? 0.2 * f : 0.2 + 0.8 * f;
+                const QString text = p.stage == 0 ? tr("正在计算新位置 %1 / %2").arg(p.done).arg(p.total)
+                                                  : tr("正在比对可能重复的文件 %1 / %2").arg(p.done).arg(p.total);
+                QMetaObject::invokeMethod(this, [this, v, text]() { setProgress(v, text); }, Qt::QueuedConnection);
+            }, &cancel_);
+            return std::make_shared<organizer::OrganizePlan>(std::move(plan));
+        },
         [this](std::shared_ptr<organizer::OrganizePlan> plan) {
+            if (plan->cancelled) {
+                setProgress(0, QString());
+                return;
+            }
             planData_ = plan;
             showPlan(*plan);
         });

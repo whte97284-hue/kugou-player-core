@@ -51,6 +51,9 @@ struct LibrarySnapshot {
     std::vector<ArtistInfo> artists;              // 按拼音排序
     std::vector<const TrackItem*> songs;          // 全部歌曲,按标题拼音排序
     std::vector<QString> songLetters;             // 与 songs 一一对应
+    // 显示去重 (只影响显示,不动文件):被收起的同一首歌的其他副本 → 显示的那份 (音质最好的)。
+    // 被收起的仍在 catalog 里,收藏 / 歌单里已有的照常能找到
+    std::unordered_map<uint64_t, uint64_t> shownCopy;
 };
 
 // 排序键 (拼音 + 小写原文) 与索引字母
@@ -86,6 +89,8 @@ class LibraryService : public QObject {
     Q_PROPERTY(bool watchFolders READ watchFolders WRITE setWatchFolders NOTIFY watchFoldersChanged)
     // 「只从曲库移除」的文件 (查找重复时选择不动磁盘):扫描照常,但不出现在专辑 / 歌手 / 歌曲 / 搜索里
     Q_PROPERTY(int excludedFileCount READ excludedFileCount NOTIFY foldersChanged)
+    // 显示去重:同一首歌 (歌手 + 歌名相同、时长相差不到 3 秒) 在专辑 / 歌手 / 歌曲 / 搜索 / 歌单里只显示音质最好的一份
+    Q_PROPERTY(bool displayDedupe READ displayDedupe WRITE setDisplayDedupe NOTIFY displayDedupeChanged)
 
 public:
     explicit LibraryService(QObject* parent = nullptr);
@@ -116,6 +121,8 @@ public:
     void includeFiles(const QStringList& paths);
     Q_INVOKABLE void clearExcludedFiles();
     void setWatchFolders(bool on);
+    bool displayDedupe() const { return displayDedupe_; }
+    void setDisplayDedupe(bool on);
     static QString dataDir();
     // 全部转换产物的唯一输出目录 (设置项 decrypt/outputDir,默认 我的音乐\Decrypted)
     static QString decryptOutputDir();
@@ -171,13 +178,15 @@ signals:
     void foldersChanged();
     void pendingEncryptedChanged();
     void watchFoldersChanged();
+    void displayDedupeChanged();
 
 private:
     void startScan();
     void finishScan(std::shared_ptr<LibrarySnapshot> snap, const IngestionSummary& sum);
     void saveFolders();
     static std::shared_ptr<LibrarySnapshot> BuildAlbums(std::unique_ptr<MusicCatalog> catalog, const QStringList& hidden = {},
-                                                        const QStringList& excluded = {});
+                                                        const QStringList& excluded = {}, bool collapseCopies = false,
+                                                        const QStringList& folderOrder = {});
     static void ReleaseFreeHeap();
 
     mutable std::mutex snap_mutex_;
@@ -197,6 +206,7 @@ private:
     QStringList excludedFiles_;
     QStringList kugouFolders_;
     bool watch_ = true;
+    bool displayDedupe_ = false;
     class FolderWatcher* watcher_ = nullptr;
     class QTimer* watchDebounce_ = nullptr;
     void updateWatcher();

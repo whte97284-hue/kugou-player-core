@@ -23,6 +23,7 @@
 
 #include "audio_ingestion_pipeline.hpp"
 #include "audio_tag_parser.hpp"
+#include "library_dedupe.hpp"
 #include "folder_watcher.h"
 #include "kugou_track_bridge.hpp"
 #ifdef Q_OS_WIN
@@ -142,6 +143,8 @@ public:
     QElapsedTimer clock;
     QStringList hidden;   // 本次聚合时要隐藏的文件夹
     QStringList excluded; // 只从曲库移除的单个文件
+    QStringList folders;  // 显示去重时,同等音质优先保留排在前面的文件夹里的
+    bool collapseCopies = false;
 };
 
 void LibraryService::carryScanCache(const std::vector<std::pair<std::wstring, std::wstring>>& moves, bool keepSource) {
@@ -169,6 +172,7 @@ LibraryService::LibraryService(QObject* parent) : QObject(parent) {
     excludedFiles_ = s.value("library/excludedFiles").toStringList();
     kugouFolders_ = s.value("library/kugouFolders").toStringList();
     watch_ = s.value("library/watch", true).toBool();
+    displayDedupe_ = s.value("library/displayDedupe", false).toBool();
     // 文件夹有变化后等 3 秒:期间又有变化就重新计时,酷狗还在下载 (文件不断变大) 时不会去扫半截文件
     watchDebounce_ = new QTimer(this);
     watchDebounce_->setSingleShot(true);
@@ -300,6 +304,15 @@ void LibraryService::saveFolders() {
     QSettings().setValue("library/excludedFiles", excludedFiles_);
     updateWatcher();
     emit foldersChanged();
+}
+
+void LibraryService::setDisplayDedupe(bool on) {
+    if (on == displayDedupe_) return;
+    displayDedupe_ = on;
+    QSettings().setValue("library/displayDedupe", on);
+    emit displayDedupeChanged();
+    // 和隐藏文件夹一样:增量扫描几乎全部命中缓存,只是重新聚合
+    rescan();
 }
 
 void LibraryService::setFolderHidden(const QString& path, bool hidden) {
@@ -443,6 +456,8 @@ void LibraryService::startScan() {
         if (QFileInfo(f).isFile()) job->pipeline.AddInputPath(f.toStdWString());
     job->hidden = hiddenFolders_;
     job->excluded = excludedFiles_;
+    job->folders = folders_;
+    job->collapseCopies = displayDedupe_;
     job->clock.start();
 
     scanning_ = true;
@@ -476,7 +491,7 @@ void LibraryService::startScan() {
         },
         [this, job](const IngestionSummary& sum) {
             // 专辑聚合同样在后台线程完成,界面线程只做指针交换
-            auto snap = BuildAlbums(std::move(job->catalog), job->hidden, job->excluded);
+            auto snap = BuildAlbums(std::move(job->catalog), job->hidden, job->excluded, job->collapseCopies, job->folders);
             QMetaObject::invokeMethod(this, [this, snap, sum]() { finishScan(snap, sum); }, Qt::QueuedConnection);
         });
 }
@@ -545,7 +560,8 @@ void LibraryService::ReleaseFreeHeap() {
 }
 
 std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<MusicCatalog> catalog, const QStringList& hidden,
-                                                            const QStringList& excluded) {
+                                                            const QStringList& excluded, bool collapseCopies,
+                                                            const QStringList& folderOrder) {
     auto snap = std::make_shared<LibrarySnapshot>();
     snap->catalog = std::move(*catalog);
     const auto& tracks = snap->catalog.GetAllTracks();
@@ -563,7 +579,7 @@ std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<Mus
         for (wchar_t& c : p) if (c == L'\\') c = L'/';
         excludedKeys.insert(p);
     }
-    auto isHidden = [&](const TrackItem& t) {
+    auto isHiddenBase = [&](const TrackItem& t) {
         if (!excludedKeys.empty()) {
             std::wstring p;
             p.reserve(t.file_path.size());
@@ -580,6 +596,60 @@ std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<Mus
             if (p.compare(0, h.size(), h) == 0) return true;
         return false;
     };
+
+    // 显示去重:歌手 + 歌名规范化后相同、时长相差不到 3 秒的算同一首,只显示音质最好的一份
+    // (Live、伴奏等规范化后仍不同,不会被收起;没有歌手或歌名标签的不参与)
+    if (collapseCopies) {
+        std::vector<std::wstring> folderKeys;
+        for (const QString& f : folderOrder) {
+            std::wstring k = QDir::cleanPath(f).toLower().toStdWString();
+            for (wchar_t& c : k) if (c == L'\\') c = L'/';
+            if (!k.empty() && k.back() != L'/') k += L'/';
+            folderKeys.push_back(k);
+        }
+        auto folderRank = [&](const TrackItem& t) {
+            std::wstring p;
+            p.reserve(t.file_path.size());
+            for (wchar_t c : t.file_path) p += c == L'\\' ? L'/' : static_cast<wchar_t>(towlower(c));
+            for (size_t i = 0; i < folderKeys.size(); ++i)
+                if (p.compare(0, folderKeys[i].size(), folderKeys[i]) == 0) return static_cast<int>(i);
+            return static_cast<int>(folderKeys.size());
+        };
+        auto better = [&](const TrackItem* a, const TrackItem* b) {
+            if (a->is_lossless != b->is_lossless) return a->is_lossless;
+            if (a->bits_per_sample != b->bits_per_sample) return a->bits_per_sample > b->bits_per_sample;
+            if (a->sample_rate != b->sample_rate) return a->sample_rate > b->sample_rate;
+            if (a->bitrate_kbps != b->bitrate_kbps) return a->bitrate_kbps > b->bitrate_kbps;
+            const int ra = folderRank(*a), rb = folderRank(*b);
+            if (ra != rb) return ra < rb;
+            return a->file_path < b->file_path;
+        };
+        std::unordered_map<std::wstring, std::vector<const TrackItem*>> byKey;
+        for (const auto& t : tracks) {
+            if (t.duration_ms == 0 || isHiddenBase(t)) continue;
+            const std::wstring artist = dedupe::NormalizeArtist(t.artist), title = dedupe::NormalizeTitle(t.title);
+            if (artist.empty() || title.empty()) continue;
+            byKey[artist + L"\x1f" + title].push_back(&t);
+        }
+        for (auto& kv : byKey) {
+            auto& v = kv.second;
+            if (v.size() < 2) continue;
+            std::sort(v.begin(), v.end(), [](const TrackItem* a, const TrackItem* b) { return a->duration_ms < b->duration_ms; });
+            for (size_t i = 0; i < v.size();) {
+                size_t j = i + 1;
+                while (j < v.size() && v[j]->duration_ms - v[i]->duration_ms <= 3000) ++j;
+                if (j - i >= 2) {
+                    const TrackItem* best = v[i];
+                    for (size_t k = i + 1; k < j; ++k)
+                        if (better(v[k], best)) best = v[k];
+                    for (size_t k = i; k < j; ++k)
+                        if (v[k] != best) snap->shownCopy[v[k]->id] = best->id;
+                }
+                i = j;
+            }
+        }
+    }
+    auto isHidden = [&](const TrackItem& t) { return isHiddenBase(t) || (!snap->shownCopy.empty() && snap->shownCopy.count(t.id)); };
 
     std::map<std::wstring, int> index;
     for (const auto& t : tracks) {

@@ -1,4 +1,5 @@
 #include "playlist_service.h"
+#include <unordered_set>
 
 #include <QDateTime>
 #include <QDir>
@@ -70,13 +71,27 @@ const PlaylistService::List* PlaylistService::find(const QString& id) const {
     return nullptr;
 }
 
+std::vector<size_t> PlaylistService::visibleSlots(const List& l) const {
+    std::vector<size_t> out;
+    out.reserve(l.keys.size());
+    const bool collapse = snap_ && !snap_->shownCopy.empty();
+    std::unordered_set<uint64_t> seen;
+    for (size_t i = 0; i < l.keys.size(); ++i) {
+        const TrackItem* t = resolve(l.keys[i]);
+        if (!t) continue;
+        if (collapse) {
+            auto it = snap_->shownCopy.find(t->id);
+            if (!seen.insert(it == snap_->shownCopy.end() ? t->id : it->second).second) continue;
+        }
+        out.push_back(i);
+    }
+    return out;
+}
+
 std::vector<const TrackItem*> PlaylistService::tracksOf(const QString& id) const {
     std::vector<const TrackItem*> out;
-    if (const List* l = find(id)) {
-        out.reserve(l->keys.size());
-        for (const QString& k : l->keys)
-            if (const TrackItem* t = resolve(k)) out.push_back(t);
-    }
+    if (const List* l = find(id))
+        for (size_t i : visibleSlots(*l)) out.push_back(resolve(l->keys[i]));
     return out;
 }
 
@@ -174,10 +189,8 @@ void PlaylistService::removeTrack(const QString& id, double trackId) {
 void PlaylistService::move(const QString& id, int from, int to) {
     List* l = find(id);
     if (!l) return;
-    // from / to 是可见行号 (只含能解析的曲目),换算为存储下标
-    std::vector<size_t> visible;
-    for (size_t i = 0; i < l->keys.size(); ++i)
-        if (resolve(l->keys[i])) visible.push_back(i);
+    // from / to 是可见行号 (只含能解析、没被显示去重收起的曲目),换算为存储下标
+    const std::vector<size_t> visible = visibleSlots(*l);
     if (from < 0 || to < 0 || from >= static_cast<int>(visible.size()) || to >= static_cast<int>(visible.size()) || from == to)
         return;
     // 只在可见槽位之间重排,曲库中暂时缺失的曲目保持原位

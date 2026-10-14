@@ -28,7 +28,7 @@ Item {
         x: Theme.navWidth + 12
         // 从侧栏底部的文件夹按钮旁弹出
         y: lp.height - height - 76 - 14 // 停在底部播放条上方
-        width: 420
+        width: 540
         height: body.implicitHeight + 36
         radius: Theme.radiusL
         color: Theme.panel
@@ -225,6 +225,51 @@ Item {
                             cursorShape: Qt.PointingHandCursor
                             onClicked: { lp.close(); lp.openTool(modelData.key) }
                         }
+                    }
+                }
+                // 歌单去重:只影响显示 (同一首歌的多个副本只显示音质最好的一份),不动任何文件
+                Rectangle {
+                    id: dedupeToggle
+                    visible: library.folders.length > 0
+                    anchors.verticalCenter: parent.verticalCenter
+                    readonly property bool on: library.displayDedupe
+                    height: 40
+                    width: toggleRow.implicitWidth + 28
+                    radius: 20
+                    color: toggleMouse.containsMouse ? Theme.pressed : Theme.hover
+                    border.width: 1
+                    border.color: Theme.hairline
+                    Row {
+                        id: toggleRow
+                        anchors.centerIn: parent
+                        spacing: 8
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: qsTr("歌单去重")
+                            color: dedupeToggle.on ? Theme.text : Theme.textSecondary
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 13
+                        }
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 30; height: 18; radius: 9
+                            color: dedupeToggle.on ? Theme.accent : Qt.rgba(1, 0.96, 0.9, 0.12)
+                            Behavior on color { ColorAnimation { duration: Theme.fast } }
+                            Rectangle {
+                                width: 14; height: 14; radius: 7
+                                y: 2
+                                x: dedupeToggle.on ? parent.width - width - 2 : 2
+                                color: dedupeToggle.on ? Theme.onAccent : Theme.textSecondary
+                                Behavior on x { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+                            }
+                        }
+                    }
+                    MouseArea {
+                        id: toggleMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: library.displayDedupe = !library.displayDedupe
                     }
                 }
             }

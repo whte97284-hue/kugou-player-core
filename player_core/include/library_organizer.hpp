@@ -106,6 +106,7 @@ struct OrganizePlan {
     std::vector<VolumeNeed> volumes;
     std::vector<std::wstring> warnings;  // 截断、缺标签等
     size_t to_move = 0, to_copy = 0, unchanged = 0, duplicates = 0, renamed = 0, errors = 0, excluded = 0;
+    bool cancelled = false;  // 计算计划时被取消:内容不完整,不能执行
     bool ok() const;  // 没有空间不足
 };
 
@@ -115,6 +116,7 @@ struct OrganizeProgress {
     uint64_t bytes_done = 0;
     uint64_t bytes_total = 0;
     std::wstring current;
+    int stage = 0;  // 计算计划时:0 = 算新位置,1 = 比对可能重复的文件
 };
 
 struct PathChange {
@@ -137,7 +139,11 @@ std::wstring FormatPattern(const std::wstring& pattern, const OrganizeTrack& t, 
 // 检查模板语法,出错返回 false 并说明原因
 bool ValidatePattern(const std::wstring& pattern, std::wstring* error = nullptr);
 
-OrganizePlan BuildPlan(const std::vector<OrganizeTrack>& tracks, const OrganizeOptions& opt);
+// 计算整理计划 (不动任何文件)。目标处撞名、大小相同的文件用抽样指纹判断是否重复 (多线程读取);
+// cancel 时返回 cancelled = true 的不完整计划
+OrganizePlan BuildPlan(const std::vector<OrganizeTrack>& tracks, const OrganizeOptions& opt,
+                       std::function<void(const OrganizeProgress&)> onProgress = nullptr,
+                       const std::atomic<bool>* cancel = nullptr);
 
 // 执行计划。journalPath 为空时不写日志 (不能撤销)。cancel 在两个文件之间与复制过程中检查
 OrganizeResult Execute(const OrganizePlan& plan, const OrganizeOptions& opt, const std::wstring& journalPath,

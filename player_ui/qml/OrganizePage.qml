@@ -277,7 +277,7 @@ Item {
                     Capsule {
                         visible: modelData.show
                         accent: libtools.planItems.filter === modelData.f
-                        text: "# " + modelData.label + "  " + modelData.n
+                        text: modelData.label + "  " + modelData.n
                         onClicked: libtools.planItems.filter = modelData.f
                     }
                 }
@@ -330,7 +330,7 @@ Item {
                         width: page.working ? parent.width - 24 : implicitWidth
                         horizontalAlignment: Text.AlignHCenter
                         elide: Text.ElideRight
-                        text: page.working ? (actMouse.containsMouse && libtools.task === "organize" ? qsTr("取消") : libtools.progressText || qsTr("请稍候…"))
+                        text: page.working ? (actMouse.containsMouse && (libtools.task === "organize" || libtools.task === "plan") ? qsTr("取消") : libtools.progressText || qsTr("请稍候…"))
                             : page.hasPlan ? (page.plan.actionable > 0 ? qsTr("开始整理 · %1 个").arg(page.plan.actionable) : qsTr("都已整理好"))
                             : qsTr("预览")
                         color: page.working ? Theme.text : Theme.onAccent
@@ -342,7 +342,7 @@ Item {
                         id: actMouse
                         anchors.fill: parent
                         hoverEnabled: true
-                        enabled: page.working ? libtools.task === "organize" : !libtools.busy && (!page.hasPlan || mainAct.ready)
+                        enabled: page.working ? libtools.task === "organize" || libtools.task === "plan" : !libtools.busy && (!page.hasPlan || mainAct.ready)
                         cursorShape: Qt.PointingHandCursor
                         onClicked: page.working ? libtools.cancel() : page.hasPlan ? libtools.execute() : libtools.buildPlan()
                     }

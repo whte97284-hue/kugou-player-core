@@ -6,6 +6,7 @@
 #include "../include/platform_io.hpp"
 #include "../include/song_cleaner.hpp"
 #include "../include/xxhash64.hpp"
+#include "../include/file_sampling.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -239,34 +240,8 @@ bool SampleHash(const std::wstring& path, uint64_t begin, uint64_t end, uint64_t
     return true;
 }
 
-// 在若干线程上并行处理 0..n-1 (读文件头这类小块随机读,并行能明显缩短等待磁盘与杀毒软件的时间);
-// 进度回调只在调用线程上触发
-void ParallelFor(size_t n, unsigned threads, const std::function<void(size_t)>& fn, const std::function<void()>& tick,
-                 const std::atomic<bool>* cancel) {
-    if (n == 0) return;
-    threads = std::max(1u, std::min<unsigned>(threads, static_cast<unsigned>(n)));
-    std::atomic<size_t> next{0};
-    auto worker = [&]() {
-        for (size_t i; (i = next.fetch_add(1)) < n;) {
-            if (cancel && cancel->load()) return;
-            fn(i);
-        }
-    };
-    std::vector<std::thread> pool;
-    for (unsigned t = 1; t < threads; ++t) pool.emplace_back(worker);
-    for (size_t i; (i = next.fetch_add(1)) < n;) {
-        if (cancel && cancel->load()) break;
-        fn(i);
-        if (tick) tick();
-    }
-    for (auto& th : pool) th.join();
-    if (tick) tick();
-}
-
-unsigned IoThreads() {
-    const unsigned hw = std::thread::hardware_concurrency();
-    return std::max(2u, std::min(8u, hw ? hw : 4u));
-}
+using kp::IoThreads;
+using kp::ParallelFor;
 
 bool SameRange(const std::wstring& a, uint64_t ab, const std::wstring& b, uint64_t bb, uint64_t len) {
     platform::ReadOnlyFile fa, fb;

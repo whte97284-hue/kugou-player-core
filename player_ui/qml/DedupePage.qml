@@ -5,7 +5,7 @@ import PlayerUi
 // 查找重复歌曲:按「完全相同 → 只是标签不同 → 同一首不同音质 → 文件名相同 → 不同版本」分组,
 // 每组自动建议保留一份;勾选要处理的,再选怎么处理 (回收站 / 隔离文件夹 / 只从曲库移除 / 硬链接 / 永久删除)。
 //  ┌ 顶栏长胶囊:‹ 查找重复 · 同一首不同音质 · 无标签按文件名 · 时长 ±3 秒 ………… 撤销上次 [开始查找] ┐
-//  # 全部 · 完全相同 · 只是标签不同 …        勾选规则 ▾      [处理 N 个 · 腾出 X ▾]
+//  全部 · 完全相同 · 只是标签不同 …        勾选规则 ▾      [处理 N 个 · 腾出 X ▾]
 //  ┌ 分组卡片列表 ┐
 Item {
     id: page
@@ -175,10 +175,24 @@ Item {
             transform: Translate { id: toolsT }
             width: parent.width
             height: 34
+            // 分类胶囊放不下时横向滚动,不压到右边的按钮
+            Flickable {
+                id: catFlick
+                anchors.left: parent.left
+                anchors.right: actRow.left
+                anchors.rightMargin: 12
+                height: parent.height
+                contentWidth: catRow.width
+                contentHeight: height
+                flickableDirection: Flickable.HorizontalFlick
+                boundsBehavior: Flickable.StopAtBounds
+                interactive: contentWidth > width
+                clip: true
+                visible: page.hasResult && page.sum.groups > 0
             Row {
+                id: catRow
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 8
-                visible: page.hasResult && page.sum.groups > 0
                 Repeater {
                     model: [
                         { f: "", label: qsTr("全部"), k: "" },
@@ -192,12 +206,14 @@ Item {
                         readonly property int n: modelData.k === "" ? (page.sum.groups || 0) : ((page.sum.byCat || {})[modelData.k] || 0)
                         visible: n > 0
                         accent: libtools.dupGroups.filter === modelData.f
-                        text: "# " + modelData.label + "  " + n
+                        text: modelData.label + "  " + n
                         onClicked: libtools.dupGroups.filter = modelData.f
                     }
                 }
             }
+            }
             Row {
+                id: actRow
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 8

@@ -6,6 +6,7 @@
 #include "../include/cue_sheet.hpp"
 #include "../include/decryptor.hpp"
 #include "../include/xxhash64.hpp"
+#include "../include/file_sampling.hpp"
 #include "../include/platform_io.hpp"
 
 #include <algorithm>
@@ -137,19 +138,6 @@ uint64_t SizeOf(const std::wstring& p) {
     uint64_t size = 0, mtime = 0;
     platform::GetFileInfo(p, size, mtime);
     return size;
-}
-
-bool SameContent(const std::wstring& a, const std::wstring& b) {
-    platform::ReadOnlyFile fa, fb;
-    if (!fa.Open(a, false) || !fb.Open(b, false) || fa.Size() != fb.Size()) return false;
-    std::vector<uint8_t> ba(1 << 20), bb(1 << 20);
-    for (uint64_t off = 0; off < fa.Size();) {
-        size_t na = fa.ReadAt(off, ba.data(), ba.size());
-        size_t nb = fb.ReadAt(off, bb.data(), bb.size());
-        if (na == 0 || na != nb || std::memcmp(ba.data(), bb.data(), na) != 0) return false;
-        off += na;
-    }
-    return true;
 }
 
 // 文件内容的 XXH64 是否等于给定值 (复制后校验目标文件)
@@ -884,8 +872,12 @@ std::wstring FormatPattern(const std::wstring& pattern, const OrganizeTrack& t, 
     return out;
 }
 
-OrganizePlan BuildPlan(const std::vector<OrganizeTrack>& tracks, const OrganizeOptions& opt) {
+OrganizePlan BuildPlan(const std::vector<OrganizeTrack>& tracks, const OrganizeOptions& opt,
+                       std::function<void(const OrganizeProgress&)> onProgress, const std::atomic<bool>* cancel) {
     OrganizePlan plan;
+    auto cancelled = [&]() { return cancel && cancel->load(); };
+    OrganizeProgress prog;
+    prog.total = tracks.size();
     const bool copyMode = opt.mode == Mode::Copy;
     const bool inPlace = opt.mode == Mode::RenameInPlace;
     std::wstring patErr;
@@ -926,7 +918,16 @@ OrganizePlan BuildPlan(const std::vector<OrganizeTrack>& tracks, const OrganizeO
 
     // ---- 1. 每首歌的目标路径
     for (size_t i = 0; i < tracks.size(); ++i) {
+        if (cancelled()) {
+            plan.cancelled = true;
+            return plan;
+        }
         const OrganizeTrack& t = tracks[i];
+        if (onProgress && (i & 31) == 0) {
+            prog.done = i;
+            prog.current = t.path;
+            onProgress(prog);
+        }
         OrganizeOp op;
         op.kind = OpKind::Audio;
         op.track = i;
@@ -989,6 +990,70 @@ OrganizePlan BuildPlan(const std::vector<OrganizeTrack>& tracks, const OrganizeO
         plan.ops.push_back(op);
     }
 
+    // ---- 1b. 内容比对:撞到同一个目标、或目标处已有同大小文件的,先并行算好抽样指纹。
+    // 判成重复的只是「不搬 / 不复制」,文件留在原处,计划列表里看得到,所以不必逐字节整读
+    // (曲库重复多时整读要读几十 GB,机械盘上要等几十分钟)
+    std::unordered_map<std::wstring, uint64_t> prints; // Key(路径) → 指纹 (算不出的不在表里)
+    {
+        std::vector<std::wstring> need;
+        std::unordered_set<std::wstring> needKeys;
+        auto want = [&](const std::wstring& p) {
+            if (needKeys.insert(Key(p)).second) need.push_back(p);
+        };
+        std::unordered_map<std::wstring, std::vector<size_t>> byTarget;
+        for (size_t idx : audioOps) byTarget[Key(plan.ops[idx].to)].push_back(idx);
+        if (opt.duplicates == DuplicatePolicy::Skip) {
+            for (auto& kv : byTarget) {
+                std::map<uint64_t, std::vector<size_t>> bySize;
+                for (size_t idx : kv.second) bySize[plan.ops[idx].size].push_back(idx);
+                uint64_t existing = 0;
+                const bool exists = Listed(dirs, plan.ops[kv.second[0]].to, &existing);
+                for (auto& b : bySize) {
+                    const bool hitsExisting = exists && existing == b.first;
+                    if (b.second.size() < 2 && !hitsExisting) continue;
+                    for (size_t idx : b.second) want(plan.ops[idx].from);
+                    if (hitsExisting) want(plan.ops[kv.second[0]].to);
+                }
+            }
+        }
+        std::vector<uint64_t> fp(need.size(), 0);
+        std::vector<char> ok(need.size(), 0);
+        std::atomic<size_t> done{0};
+        prog.stage = 1;
+        prog.done = 0;
+        prog.total = need.size();
+        prog.current.clear();
+        kp::ParallelFor(need.size(), kp::IoThreads(), [&](size_t k) {
+            ok[k] = kp::SampledFingerprint(need[k], fp[k]);
+            ++done;
+        }, [&]() {
+            if (!onProgress) return;
+            prog.done = done.load();
+            onProgress(prog);
+        }, cancel);
+        if (cancelled()) {
+            plan.cancelled = true;
+            return plan;
+        }
+        for (size_t k = 0; k < need.size(); ++k)
+            if (ok[k]) prints[Key(need[k])] = fp[k];
+    }
+    auto printOf = [&](const std::wstring& p, uint64_t& out) {
+        auto it = prints.find(Key(p));
+        if (it == prints.end()) {
+            if (!kp::SampledFingerprint(p, out)) return false;
+            prints.emplace(Key(p), out);
+            return true;
+        }
+        out = it->second;
+        return true;
+    };
+    // 调用方已确认两边大小相同
+    auto sameContent = [&](const std::wstring& a, const std::wstring& b) {
+        uint64_t x = 0, y = 0;
+        return printOf(a, x) && printOf(b, y) && x == y;
+    };
+
     // ---- 2. 冲突处理 (按顺序,先到先得)
     for (size_t idx : audioOps) {
         OrganizeOp& op = plan.ops[idx];
@@ -1021,7 +1086,7 @@ OrganizePlan BuildPlan(const std::vector<OrganizeTrack>& tracks, const OrganizeO
             auto c = claimed.find(ck);
             if (c != claimed.end()) {
                 const OrganizeOp& other = plan.ops[c->second];
-                if (n == 1 && opt.duplicates == DuplicatePolicy::Skip && other.size == op.size && SameContent(op.from, other.from)) {
+                if (n == 1 && opt.duplicates == DuplicatePolicy::Skip && other.size == op.size && sameContent(op.from, other.from)) {
                     op.action = OpAction::Skip;
                     op.state = OpState::Duplicate;
                     op.note = L"与 " + other.from + L" 内容相同";
@@ -1041,7 +1106,7 @@ OrganizePlan BuildPlan(const std::vector<OrganizeTrack>& tracks, const OrganizeO
                     claimed[ck] = idx;
                     break;
                 }
-                if (n == 1 && opt.duplicates == DuplicatePolicy::Skip && candSize == op.size && SameContent(op.from, cand)) {
+                if (n == 1 && opt.duplicates == DuplicatePolicy::Skip && candSize == op.size && sameContent(op.from, cand)) {
                     op.action = OpAction::Skip;
                     op.state = OpState::Duplicate;
                     op.to = cand;
@@ -1087,7 +1152,8 @@ OrganizePlan BuildPlan(const std::vector<OrganizeTrack>& tracks, const OrganizeO
             c.action = OpAction::Skip;
             c.state = OpState::Unchanged;
         } else if (claimed.count(tk) || (Listed(dirs, to) && !SameFileObject(from, to))) {
-            if (Listed(dirs, to) && SameContent(from, to)) {
+            uint64_t toSize = 0;
+            if (Listed(dirs, to, &toSize) && toSize == c.size && sameContent(from, to)) {
                 c.action = OpAction::Skip;
                 c.state = OpState::Duplicate;
                 c.note = L"目标位置已有相同文件";

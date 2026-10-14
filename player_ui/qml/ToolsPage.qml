@@ -189,7 +189,7 @@ Item {
                     Capsule {
                         visible: modelData.key === "" || modelData.n > 0
                         accent: page.q.filterKind === modelData.key
-                        text: "# " + modelData.label + "  " + modelData.n
+                        text: modelData.label + "  " + modelData.n
                         onClicked: page.q.filterKind = modelData.key
                     }
                 }

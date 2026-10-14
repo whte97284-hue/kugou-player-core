@@ -115,8 +115,14 @@ static void TestMoveUndo(const fs::path& work) {
     opt.protect_roots = {W(src)};
     std::vector<OrganizeTrack> tracks = {T(album / "05东风破.wav", L"周杰伦", L"叶惠美", L"东风破", 5, L"2003"),
                                          T(album / "01以父之名.wav", L"周杰伦", L"叶惠美", L"以父之名", 1, L"2003")};
-    OrganizePlan plan = BuildPlan(tracks, opt);
-    CHECK(plan.ok());
+    std::atomic<bool> stop{true};
+    CHECK(BuildPlan(tracks, opt, nullptr, &stop).cancelled);  // 计算计划也能取消
+    size_t planCalls = 0;
+    OrganizePlan plan = BuildPlan(tracks, opt, [&](const OrganizeProgress& p) {
+        ++planCalls;
+        CHECK(p.done <= p.total);
+    });
+    CHECK(plan.ok() && !plan.cancelled && planCalls > 0);
     CHECK(plan.to_move == 2);
     const fs::path dst = lib / "周杰伦" / "2003 - 叶惠美";
     const OrganizeOp* art = FindOp(plan, album / "cover.jpg");
