@@ -2,7 +2,7 @@ import QtQuick
 import PlayerUi
 
 // 歌词来源面板:从右下角的来源胶囊弹出,盖在歌词栏上
-//  当前来源 (强调色圆点 + 来源名 + 文件 / 歌名;可保存到本地、在文件夹中显示)
+//  当前来源 (强调色来源图标 + 来源名 + 文件 / 歌名;可保存到本地、在文件夹中显示)
 //  → 搜索框 (默认「歌名 歌手」,打开时自动搜一次) → 候选列表 (点一下立即换上,勾号标出正在用的)
 // 只用强调色与文字的明暗,不给各个来源配颜色
 Item {
@@ -27,6 +27,18 @@ Item {
     property int hoverRow: -1  // 截图用:模拟悬停
     function pick(i) { if (player.lyricPicked !== i) { pending = i; player.useLyricCandidate(i) } }
     function save() { player.saveLyrics() }
+    // 载入中:强调色细圆弧匀速旋转,停下时淡出
+    component Spinner: Icon {
+        id: sp
+        property bool running: false
+        name: "spinner"
+        size: 14
+        tint: Theme.accent
+        opacity: running ? 1 : 0
+        visible: opacity > 0
+        Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+        RotationAnimator on rotation { from: 0; to: 360; duration: 900; loops: Animation.Infinite; running: sp.visible }
+    }
     function close() { shown = false; query.focus = false }
     function fmt(sec) {
         if (!(sec > 0)) return ""
@@ -122,14 +134,13 @@ Item {
                     function onLyricSourceChanged() { if (panelRoot.shown) flashAnim.restart() }
                 }
 
-                Rectangle {
+                Icon {
                     id: dot
                     x: 16
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 8; height: 8; radius: 4
-                    color: Theme.accent
-                    opacity: panelRoot.hasSource ? 1 : 0.35
-                    Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+                    name: Nav.lyricIcon(panelRoot.hasSource ? panelRoot.src.kind : "none")
+                    size: 20
+                    tint: Theme.accent
                 }
                 Column {
                     anchors.left: dot.right
@@ -254,28 +265,12 @@ Item {
                     font.family: Theme.fontFamily
                     font.pixelSize: 12
                 }
-                // 搜索中:三个强调色小点依次呼吸
-                Row {
+                // 搜索中:细圆弧匀速旋转
+                Spinner {
                     anchors.left: statusText.right
                     anchors.leftMargin: 6
                     anchors.verticalCenter: parent.verticalCenter
-                    spacing: 4
-                    visible: player.lyricSearching
-                    Repeater {
-                        model: 3
-                        Rectangle {
-                            width: 4; height: 4; radius: 2
-                            color: Theme.accent
-                            SequentialAnimation on opacity {
-                                running: player.lyricSearching && panelRoot.shown
-                                loops: Animation.Infinite
-                                PauseAnimation { duration: index * 160 }
-                                NumberAnimation { from: 0.25; to: 1; duration: 360; easing.type: Easing.InOutSine }
-                                NumberAnimation { from: 1; to: 0.25; duration: 360; easing.type: Easing.InOutSine }
-                                PauseAnimation { duration: (2 - index) * 160 }
-                            }
-                        }
-                    }
+                    running: player.lyricSearching && panelRoot.shown
                 }
             }
 
@@ -350,7 +345,7 @@ Item {
                             font.pixelSize: 12
                         }
                     }
-                    // 右侧:来源 / 逐字 / 无时间轴 小标签 (同一种淡强调色);正在用的换成勾,拉取中换成呼吸点
+                    // 右侧:来源 / 逐字 / 无时间轴 小标签 (同一种淡强调色);正在用的换成勾,拉取中换成旋转的细圆弧
                     Row {
                         id: tags
                         anchors.right: parent.right
@@ -390,18 +385,7 @@ Item {
                                 Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
                                 Behavior on scale { ScaleAnimator { duration: 360; easing.type: Easing.OutBack } }
                             }
-                            Rectangle {
-                                anchors.centerIn: parent
-                                width: 6; height: 6; radius: 3
-                                color: Theme.accent
-                                visible: row.loading
-                                SequentialAnimation on opacity {
-                                    running: row.loading
-                                    loops: Animation.Infinite
-                                    NumberAnimation { from: 0.3; to: 1; duration: 420; easing.type: Easing.InOutSine }
-                                    NumberAnimation { from: 1; to: 0.3; duration: 420; easing.type: Easing.InOutSine }
-                                }
-                            }
+                            Spinner { anchors.centerIn: parent; running: row.loading }
                         }
                     }
                     MouseArea {

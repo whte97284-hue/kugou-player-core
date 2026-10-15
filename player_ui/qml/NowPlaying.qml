@@ -148,7 +148,7 @@ Item {
         z: 2
         opacity: np.shown ? 1 : 0
         Behavior on opacity { SequentialAnimation { PauseAnimation { duration: np.shown ? 260 : 0 } OpacityAnimator { duration: 360 } } }
-        // 歌词来源胶囊:强调色圆点 + 来源名;没有歌词时是「搜索歌词」。点开歌词来源面板
+        // 歌词来源胶囊:强调色来源图标 + 来源名;没有歌词时是「搜索歌词」。点开歌词来源面板
         Rectangle {
             id: sourceChip
             readonly property bool has: !!(player.lyricSource.kind && player.lyricSource.kind !== "none")
@@ -174,13 +174,12 @@ Item {
             Row {
                 id: chipRow
                 anchors.centerIn: parent
-                spacing: 8
-                Rectangle {
+                spacing: 6
+                Icon {
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 6; height: 6; radius: 3
-                    color: Theme.accent
-                    opacity: sourceChip.has ? 1 : 0.4
-                    Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+                    name: Nav.lyricIcon(player.lyricSource.kind)
+                    size: 14
+                    tint: Theme.accent
                 }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter

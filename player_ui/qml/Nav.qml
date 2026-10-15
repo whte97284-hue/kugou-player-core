@@ -14,6 +14,10 @@ QtObject {
     // 列表点歌 (player.pickTracks / pickAlbum) 的结果:没有立即播放时提示一下歌去了哪里
     // 右键菜单的「播放」走同一条点歌路径时置为 true:菜单的播放总是立即播放,不受点歌设置影响
     property bool pickNow: false
+    // 歌词来源对应的图标:同名歌词文件 / 内嵌 / 酷狗歌词库 / 在线;没有歌词时是搜索
+    function lyricIcon(kind) {
+        return ({ file: "lyric-file", embedded: "disc", library: "folder", online: "cloud" })[kind] || "search"
+    }
     function picked(result) {
         if (result === "next") toast("next-up", qsTr("下一首播放"))
         else if (result === "queued") toast("queue", qsTr("已加到播放队列"))
