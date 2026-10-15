@@ -21,9 +21,9 @@ g++ -std=c++17 -O2 -pthread tests/host/test_core_host.cpp $CORE -o "$OUT/core_ho
 # 播放引擎:miniaudio 只启用 null 虚拟声卡后端 (无需真实音频设备)
 g++ -std=c++17 $SAN -pthread -DMA_ENABLE_ONLY_SPECIFIC_BACKENDS -DMA_ENABLE_NULL tests/host/test_engine_host.cpp \
     src/audio_playback_engine.cpp src/fft_visualizer.cpp $CORE -o "$OUT/engine_host" -ldl -lm
-g++ -std=c++17 $SAN -pthread tests/host/test_lyric_host.cpp src/lyric_manager.cpp src/tinf.cpp $CORE -o "$OUT/lyric_host"
-g++ -std=c++17 $SAN -pthread tests/host/test_lyric_online_host.cpp src/lyric_manager.cpp src/tinf.cpp $CORE -o "$OUT/lyric_online_host"
-g++ -std=c++17 $SAN -pthread tests/host/test_kugou_bridge_host.cpp src/kugou_track_bridge.cpp src/lyric_manager.cpp src/tinf.cpp $CORE -o "$OUT/kugou_bridge_host"
+g++ -std=c++17 $SAN -pthread tests/host/test_lyric_host.cpp src/lyric_manager.cpp src/lyric_provider.cpp src/tinf.cpp $CORE -o "$OUT/lyric_host"
+g++ -std=c++17 $SAN -pthread tests/host/test_lyric_online_host.cpp src/lyric_manager.cpp src/lyric_provider.cpp src/tinf.cpp $CORE -o "$OUT/lyric_online_host"
+g++ -std=c++17 $SAN -pthread tests/host/test_kugou_bridge_host.cpp src/kugou_track_bridge.cpp src/lyric_manager.cpp src/lyric_provider.cpp src/tinf.cpp $CORE -o "$OUT/kugou_bridge_host"
 g++ -std=c++17 $SAN -pthread tests/host/test_organizer_host.cpp src/library_organizer.cpp $CORE -o "$OUT/organizer_host"
 g++ -std=c++17 $SAN -pthread tests/host/test_dedupe_host.cpp src/library_dedupe.cpp $CORE -o "$OUT/dedupe_host"
 

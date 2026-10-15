@@ -1,6 +1,7 @@
 // 歌词内核宿主测试 (在线部分): KRC [language:] 中文翻译 / LRC 解析 / 酷狗在线接口 (模拟 HTTP) 与缓存
 // 用法: test_lyric_online_host <work_dir>
 #include "../../include/lyric_manager.hpp"
+#include "../../include/lyric_provider.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -187,6 +188,71 @@ int main(int argc, char** argv) {
         ParsedLyrics l2;
         CHECK(mgr2.FetchOnline(L"/m/周杰伦 叶惠美/05东风破.wav", L"05东风破", L"未知艺术家", 315308, l2));
         CHECK(l2.artist == L"周杰伦" || l2.lines.size() == 1);
+    }
+
+    std::printf("[3c] 多源聚合:只采用歌名对得上的候选,缓存 .lrc 后本地直接命中,查不到的不重复请求\n");
+    {
+        int calls = 0;
+        auto http = [&](const std::string& url, std::string& body) -> bool {
+            ++calls;
+            if (url.find("lrclib.net/api/search") != std::string::npos) {
+                // 同歌手的另一首歌排在前面 (时长更接近),不该被选中
+                body = R"([{"id":11,"trackName":"晴天","artistName":"周杰伦","albumName":"叶惠美","duration":315.3,"syncedLyrics":"[00:01.00]故事的小黄花"},
+                           {"id":12,"trackName":"东风破","artistName":"周杰伦","albumName":"叶惠美","duration":313.0,"syncedLyrics":"[00:02.00]一盏离愁"}])";
+                return true;
+            }
+            if (url.find("lrclib.net/api/get/12") != std::string::npos) {
+                body = R"({"syncedLyrics":"[00:02.00]一盏离愁\n[00:05.00]孤单窗前","plainLyrics":"一盏离愁"})";
+                return true;
+            }
+            if (url.find("music.163.com/api/search") != std::string::npos) {
+                body = R"({"result":{"songs":[{"id":7,"name":"东风破","artists":[{"name":"周杰伦"}],"album":{"name":"叶惠美"},"duration":313000}]}})";
+                return true;
+            }
+            if (url.find("music.163.com/api/song/lyric") != std::string::npos) {
+                body = R"({"lrc":{"lyric":"[00:02.00]一盏离愁\n[00:05.00]孤单窗前"},"tlyric":{"lyric":"[00:02.00]a parting sorrow\n[00:05.01]alone by the window"}})";
+                return true;
+            }
+            return false; // 酷狗不可用
+        };
+        const fs::path cache = work / "multi_cache";
+        fs::create_directories(cache);
+        LyricManager mgr;
+        mgr.SetCacheDirectory(cache.wstring());
+        mgr.SetHttpGetter(http);
+        ParsedLyrics l;
+        LyricCandidate picked;
+        CHECK(mgr.FetchOnlineMulti(L"/m/东风破.flac", L"东风破", L"周杰伦", 315000, l, &picked));
+        CHECK(picked.title == L"东风破");
+        CHECK(l.lines.size() == 2 && l.lines[0].full_text == L"一盏离愁");
+        CHECK(fs::exists(cache / L"周杰伦 - 东风破.lrc"));
+        // 缓存的 .lrc 进了本地索引:不联网也能载入
+        calls = 0;
+        ParsedLyrics again;
+        CHECK(mgr.LoadLyricsForTrack(L"/m/东风破.flac", L"东风破", L"周杰伦", again));
+        CHECK(again.lines.size() == 2 && calls == 0);
+        // 网易云的翻译单独一份,按时间戳并入 (5.00 与 5.01 在容差内)
+        RawLyricDoc doc;
+        LyricProvider p(http);
+        CHECK(p.Fetch(LyricCandidate{"netease", "7"}, doc, nullptr));
+        ParsedLyrics nl;
+        CHECK(LyricManager::ParseDoc(doc, nl) && nl.lines.size() == 2 && nl.lines[1].translation == L"alone by the window");
+        // 纯文本歌词:无时间轴,按行切分
+        RawLyricDoc plain;
+        plain.kind = RawLyricDoc::Payload::Plain;
+        plain.raw_payload = "第一行\r\n\r\n第二行";
+        ParsedLyrics pl;
+        CHECK(LyricManager::ParseDoc(plain, pl) && pl.lines.size() == 2 && pl.lines[1].full_text == L"第二行");
+        // 一个歌名都对不上:不采用,且本次运行内不再请求
+        ParsedLyrics none;
+        CHECK(!mgr.FetchOnlineMulti(L"/m/七里香.flac", L"七里香", L"周杰伦", 300000, none));
+        calls = 0;
+        CHECK(!mgr.FetchOnlineMulti(L"/m/七里香.flac", L"七里香", L"周杰伦", 300000, none) && calls == 0);
+        // 手动搜索 (loose):关键词不是歌名,候选全部保留
+        LyricQuery lq;
+        lq.title = L"叶惠美";
+        lq.loose = true;
+        CHECK(p.SearchAll(lq).candidates.size() >= 2);
     }
 
     std::printf("[4] 候选挑选\n");

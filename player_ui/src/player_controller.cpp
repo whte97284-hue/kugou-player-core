@@ -16,6 +16,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QUrl>
+#include <QUrlQuery>
 #include <QStandardPaths>
 #include <QRegularExpression>
 #include <QTimer>
@@ -1151,14 +1153,115 @@ static QString FindLyricFile(const QString& audioPath, const QString& sourcePath
     return hit;
 }
 
+namespace {
+QString LyricSourceName(const std::string& source) {
+    if (source == "kugou") return QStringLiteral("酷狗");
+    if (source == "netease") return QStringLiteral("网易云");
+    if (source == "lrclib") return QStringLiteral("LRCLIB");
+    return QString::fromStdString(source);
+}
+
+// 截图 / 演示用的假歌词接口 (KP_TEST_LYRIC_FAKE=1):按查询的歌名造几条 LRCLIB / 网易云候选,
+// 走的是真实的搜索、排名、拉取、解析流程,只有 HTTP 是假的
+bool FakeLyricHttp(const std::string& url, std::string& body) {
+    const QUrl u(QString::fromStdString(url));
+    const QUrlQuery q(u);
+    auto json = [](const QString& s) { return QString::fromUtf8(QJsonDocument(QJsonArray{s}).toJson(QJsonDocument::Compact)).mid(1).chopped(1); };
+    QString title = q.queryItemValue(QStringLiteral("track_name"), QUrl::FullyDecoded);
+    QString artist = q.queryItemValue(QStringLiteral("artist_name"), QUrl::FullyDecoded);
+    if (title.isEmpty()) title = q.queryItemValue(QStringLiteral("q"), QUrl::FullyDecoded);
+    if (title.isEmpty()) title = q.queryItemValue(QStringLiteral("s"), QUrl::FullyDecoded);
+    if (artist.isEmpty()) artist = QStringLiteral("群星");
+    const QString lrc = QStringLiteral("[00:00.50]%1\n[00:04.00]风吹过窗前的那一页\n[00:08.00]我把旧时光折成纸飞机\n"
+                                       "[00:12.00]落在你经过的街角\n[00:16.00]等一场不会迟到的雨\n[00:20.00]%1").arg(title);
+    if (u.host() == QLatin1String("lrclib.net") && u.path() == QLatin1String("/api/search")) {
+        body = QStringLiteral("[{\"id\":101,\"trackName\":%1,\"artistName\":%2,\"albumName\":\"Single\",\"duration\":241,\"syncedLyrics\":%3},"
+                              "{\"id\":102,\"trackName\":%4,\"artistName\":%2,\"albumName\":\"Live 2019\",\"duration\":262,\"syncedLyrics\":%3},"
+                              "{\"id\":103,\"trackName\":%1,\"artistName\":\"Cover\",\"albumName\":\"\",\"duration\":238,\"plainLyrics\":\"x\"}]")
+                   .arg(json(title), json(artist), json(lrc), json(title + QStringLiteral(" (Live)"))).toStdString();
+        return true;
+    }
+    if (u.host() == QLatin1String("lrclib.net") && u.path().startsWith(QLatin1String("/api/get/"))) {
+        body = QStringLiteral("{\"syncedLyrics\":%1}").arg(json(lrc)).toStdString();
+        return true;
+    }
+    if (u.host() == QLatin1String("music.163.com") && u.path().contains(QLatin1String("search"))) {
+        const QString name = title.section(QLatin1Char(' '), 0, 0);
+        body = QStringLiteral("{\"result\":{\"songs\":[{\"id\":7001,\"name\":%1,\"artists\":[{\"name\":%2}],\"album\":{\"name\":\"精选集\"},\"duration\":240500}]}}")
+                   .arg(json(name), json(artist)).toStdString();
+        return true;
+    }
+    if (u.host() == QLatin1String("music.163.com") && u.path().contains(QLatin1String("lyric"))) {
+        body = QStringLiteral("{\"lrc\":{\"lyric\":%1},\"tlyric\":{\"lyric\":%2}}")
+                   .arg(json(lrc), json(QStringLiteral("[00:04.00]The wind blew past the page by the window"))).toStdString();
+        return true;
+    }
+    return false;
+}
+
+lyric_core::HttpGetFn LyricHttp() {
+    static const bool fake = qEnvironmentVariableIsSet("KP_TEST_LYRIC_FAKE");
+    return fake ? lyric_core::HttpGetFn(&FakeLyricHttp) : lyric_core::HttpGetFn();
+}
+
+// 结构化歌词 → applyLyricsText 的参数:显示用 LRC (不含翻译)、保存用 LRC (含翻译)、每句时长与翻译 (键为 10ms 精度的时间戳)。
+// 没有时间轴的纯文本按行拼接,显示为静态歌词
+struct LyricPayload {
+    QString lrc, saved;
+    QHash<qint64, qint64> durations;
+    QHash<qint64, QString> translations;
+};
+LyricPayload ToPayload(const lyric_core::ParsedLyrics& parsed) {
+    LyricPayload p;
+    bool timed = false;
+    for (const auto& l : parsed.lines) timed = timed || l.start_ms > 0;
+    if (!timed) {
+        QStringList rows;
+        for (const auto& l : parsed.lines) rows << QString::fromStdWString(l.full_text);
+        p.lrc = p.saved = rows.join(QLatin1Char('\n'));
+        return p;
+    }
+    p.lrc = QString::fromStdString(parsed.ToStandardLrc());
+    p.saved = QString::fromStdString(parsed.ToStandardLrc(true));
+    for (const auto& l : parsed.lines) {
+        if (l.duration_ms) p.durations.insert(l.start_ms / 10 * 10, l.duration_ms);
+        if (!l.translation.empty()) p.translations.insert(l.start_ms / 10 * 10, QString::fromStdWString(l.translation));
+    }
+    return p;
+}
+} // namespace
+
+void PlayerController::setLyricSource(const QString& kind, const QString& label, const QString& detail, const QString& path) {
+    QVariantMap m;
+    m[QStringLiteral("kind")] = kind;
+    m[QStringLiteral("label")] = label;
+    m[QStringLiteral("detail")] = detail;
+    m[QStringLiteral("path")] = path;
+    m[QStringLiteral("savable")] = kind != QLatin1String("file") && kind != QLatin1String("none") && !lyricText_.trimmed().isEmpty() &&
+                                   current_ && !current_->is_cue_track;
+    if (m == lyricSource_) return;
+    lyricSource_ = m;
+    emit lyricSourceChanged();
+}
+
 // 歌词来源:同名 .lrc (自动识别 UTF-8 / UTF-16 / GBK) 与文件内嵌歌词 (USLT / LYRICS / ©lyr),优先级可在设置中调整;
 // 两者都没有时,在后台到本机酷狗歌词库 (.krc) 里按歌名 / 歌手严格匹配
 void PlayerController::loadLyrics() {
     ++lyricsGen_;
+    // 换歌 / 重新加载:上一首的搜索结果作废
+    ++lyricSearchGen_;
+    lyricCandRaw_.clear();
+    lyricCandidates_.clear();
+    lyricSearching_ = false;
+    lyricPicked_ = -1;
+    lyricSearchNote_.clear();
+    emit lyricSearchChanged();
     QString text;
+    QString kind = QStringLiteral("none"), lrcPath;
     if (current_) {
-        auto readLrc = [this]() -> QString {
+        auto readLrc = [this, &lrcPath]() -> QString {
             const QString path = FindLyricFile(Q(current_->file_path), Q(current_->source_path));
+            lrcPath = path;
             platform::ReadOnlyFile f;
             if (!path.isEmpty() && f.Open(path.toStdWString(), false) && f.Size() > 0 && f.Size() < (1 << 20)) {
                 QByteArray raw(static_cast<int>(f.Size()), Qt::Uninitialized);
@@ -1186,11 +1289,17 @@ void PlayerController::loadLyrics() {
         };
         const QString first = embeddedFirst ? readEmbedded() : readLrc();
         text = first;
-        if (!hasBody(text)) text = embeddedFirst ? readLrc() : readEmbedded();
-        if (!hasBody(text)) text = hasBody(first) ? first : QString();
+        bool firstWon = hasBody(text);
+        if (!firstWon) text = embeddedFirst ? readLrc() : readEmbedded();
+        if (hasBody(text)) kind = firstWon == embeddedFirst ? QStringLiteral("embedded") : QStringLiteral("file");
+        else text = hasBody(first) ? first : QString();
         // 两处都只有署名或为空:去酷狗歌词库 / 在线找;找不到时先显示署名行
         if (!hasBody(text)) { if (text.isEmpty()) text = first; loadKugouLyrics(); }
     }
+    lyricText_ = kind == QLatin1String("none") ? QString() : text;
+    if (kind == QLatin1String("file")) setLyricSource(kind, QStringLiteral("同名歌词文件"), QFileInfo(lrcPath).fileName(), lrcPath);
+    else if (kind == QLatin1String("embedded")) setLyricSource(kind, QStringLiteral("内嵌歌词"), QStringLiteral("写在音频文件的标签里"));
+    else setLyricSource(kind, QString(), QString());
     applyLyricsText(text, true);
 }
 
@@ -1208,24 +1317,44 @@ void PlayerController::loadKugouLyrics() {
         // 首次使用时探测歌词库目录,之后常驻;内部自带锁,可跨线程复用
         static lyric_core::LyricManager kugou;
         static std::once_flag cacheOnce;
-        std::call_once(cacheOnce, [&]() { kugou.SetCacheDirectory(cacheDir); });
+        std::call_once(cacheOnce, [&]() {
+            kugou.SetCacheDirectory(cacheDir);
+            if (auto http = LyricHttp()) kugou.SetHttpGetter(http);
+        });
         lyric_core::ParsedLyrics parsed;
-        bool ok = kugou.LoadLyricsForTrack(path, title, artist, parsed);
-        if (!ok && online) ok = kugou.FetchOnline(path, title, artist, durationMs, parsed);
-        if (!ok) return;
-        const QString lrc = QString::fromStdString(parsed.ToStandardLrc());
-        // 酷狗歌词带每句的演唱时长,用来让当前句的填充与演唱同步 (键与 LRC 时间戳同为 10ms 精度)
-        // 外文歌的中文翻译来自 KRC 的 [language:] 标签,同样按时间戳挂到对应行
-        QHash<qint64, qint64> durations;
-        QHash<qint64, QString> translations;
-        for (const auto& l : parsed.lines) {
-            durations.insert(l.start_ms / 10 * 10, l.duration_ms);
-            if (!l.translation.empty()) translations.insert(l.start_ms / 10 * 10, QString::fromStdWString(l.translation));
+        QString kind, label, detail, file;
+        if (kugou.LoadLyricsForTrack(path, title, artist, parsed)) {
+            // 在线拉过的歌词缓存在应用数据目录,也在歌词库索引里
+            file = QString::fromStdWString(kugou.FindMatchingKrcFile(path, title, artist));
+            const bool cached = !file.isEmpty() && QDir::cleanPath(file).startsWith(QDir::cleanPath(QString::fromStdWString(cacheDir)), Qt::CaseInsensitive);
+            kind = cached ? QStringLiteral("online") : QStringLiteral("library");
+            label = cached ? QStringLiteral("在线歌词") : QStringLiteral("酷狗歌词库");
+            detail = cached ? QStringLiteral("之前在线找到,已缓存") : QFileInfo(file).fileName();
+            if (cached) file.clear();
+        } else if (online) {
+            lyric_core::LyricCandidate picked;
+            bool ok = kugou.FetchOnlineMulti(path, title, artist, durationMs, parsed, &picked);
+            if (!ok && kugou.FetchOnline(path, title, artist, durationMs, parsed)) {
+                ok = true;
+                picked.source = "kugou";
+                picked.title = parsed.title;
+                picked.artist = parsed.artist;
+            }
+            if (!ok) return;
+            kind = QStringLiteral("online");
+            label = QStringLiteral("在线 · ") + LyricSourceName(picked.source);
+            detail = QString::fromStdWString(picked.artist.empty() ? picked.title : picked.title + L" - " + picked.artist);
+        } else {
+            return;
         }
-        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, lrc, durations, translations]() {
+        // 酷狗歌词带每句的演唱时长,用来让当前句的填充与演唱同步;外文歌的中文翻译同样按时间戳挂到对应行
+        const LyricPayload p = ToPayload(parsed);
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, p, kind, label, detail, file]() {
             // 期间切了歌或重新加载过,结果作废
             if (self && self->lyricsGen_ == gen) {
-                self->applyLyricsText(lrc, false, durations, translations);
+                self->lyricText_ = p.saved;
+                self->setLyricSource(kind, label, detail, file);
+                self->applyLyricsText(p.lrc, false, p.durations, p.translations);
                 self->updateLyricIndex();
             }
         }, Qt::QueuedConnection);
@@ -1337,6 +1466,123 @@ QString PlayerController::lyricAt(double seconds) const {
     const int idx = static_cast<int>(it - lyricTimes_.begin()) - 1;
     if (idx < 0 || idx >= lyrics_.size()) return {};
     return lyrics_.at(idx).toMap().value(QStringLiteral("text")).toString();
+}
+
+QString PlayerController::lyricQuery() const {
+    if (!current_) return {};
+    const QString title = Q(current_->title).trimmed();
+    const QString artist = Q(current_->artist).trimmed();
+    if (title.isEmpty()) return QFileInfo(Q(current_->file_path)).completeBaseName();
+    return artist.isEmpty() || artist == QStringLiteral("未知艺术家") ? title : title + QLatin1Char(' ') + artist;
+}
+
+// 歌词搜索:后台依次查各源,全部候选按匹配度排好交给歌词来源面板。
+// 搜索词没改过时按歌名 / 歌手 / 时长结构化查询;改过就把整串当作关键词。两种都不丢候选,由用户挑
+void PlayerController::searchLyrics(const QString& keyword) {
+    if (!current_) return;
+    const QString kw = keyword.simplified();
+    if (kw.isEmpty()) return;
+    const quint64 gen = ++lyricSearchGen_;
+    lyricSearching_ = true;
+    lyricSearchNote_.clear();
+    emit lyricSearchChanged();
+
+    lyric_core::LyricQuery q;
+    q.loose = true;
+    q.duration_ms = current_->duration_ms;
+    if (kw == lyricQuery().simplified()) {
+        q.title = current_->title.empty() ? kw.toStdWString() : current_->title;
+        if (Q(current_->artist) != QStringLiteral("未知艺术家")) q.artist = current_->artist;
+    } else {
+        q.title = kw.toStdWString();
+    }
+    QPointer<PlayerController> self(this);
+    QThreadPool::globalInstance()->start([self, gen, q]() {
+        lyric_core::LyricProvider provider(LyricHttp());
+        lyric_core::LyricSearchResult r = provider.SearchAll(q);
+        if (r.candidates.size() > 30) r.candidates.resize(30);
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, r]() {
+            if (!self || self->lyricSearchGen_ != gen) return;
+            self->lyricCandRaw_ = r.candidates;
+            self->lyricCandidates_.clear();
+            for (const auto& c : r.candidates) {
+                QVariantMap m;
+                m[QStringLiteral("title")] = QString::fromStdWString(c.title);
+                m[QStringLiteral("artist")] = QString::fromStdWString(c.artist);
+                m[QStringLiteral("album")] = QString::fromStdWString(c.album);
+                m[QStringLiteral("duration")] = c.duration_ms / 1000.0;
+                m[QStringLiteral("source")] = LyricSourceName(c.source);
+                m[QStringLiteral("synced")] = c.has_synced;
+                m[QStringLiteral("wordTimed")] = c.source == "kugou"; // 酷狗 KRC 带逐字时间
+                self->lyricCandidates_.append(m);
+            }
+            self->lyricSearching_ = false;
+            self->lyricPicked_ = -1;
+            self->lyricSearchNote_ = r.candidates.empty()
+                ? (r.answered == 0 ? QStringLiteral("连不上歌词服务,检查一下网络") : QStringLiteral("没有找到,换个关键词试试"))
+                : QString();
+            emit self->lyricSearchChanged();
+        }, Qt::QueuedConnection);
+    });
+}
+
+// 换用第 index 个候选:后台拉取后立即显示 (不写盘,要留住请点「保存到本地」)
+void PlayerController::useLyricCandidate(int index) {
+    if (!current_ || index < 0 || index >= static_cast<int>(lyricCandRaw_.size())) return;
+    const lyric_core::LyricCandidate c = lyricCandRaw_[static_cast<size_t>(index)];
+    const quint64 gen = ++lyricsGen_; // 自动查找的结果晚到也不会盖掉手选的
+    const quint64 searchGen = lyricSearchGen_;
+    QPointer<PlayerController> self(this);
+    QThreadPool::globalInstance()->start([self, gen, searchGen, index, c]() {
+        lyric_core::LyricProvider provider(LyricHttp());
+        lyric_core::RawLyricDoc doc;
+        lyric_core::ParsedLyrics parsed;
+        const bool ok = provider.Fetch(c, doc, nullptr) && lyric_core::LyricManager::ParseDoc(doc, parsed);
+        const LyricPayload p = ok ? ToPayload(parsed) : LyricPayload();
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen, searchGen, index, c, ok, p]() {
+            if (!self || self->lyricsGen_ != gen || self->lyricSearchGen_ != searchGen) return;
+            if (!ok) {
+                self->lyricSearchNote_ = QStringLiteral("这份歌词拉取失败,换一个试试");
+                emit self->lyricSearchChanged();
+                return;
+            }
+            self->lyricText_ = p.saved;
+            self->setLyricSource(QStringLiteral("online"), QStringLiteral("在线 · ") + LyricSourceName(c.source),
+                                 QString::fromStdWString(c.artist.empty() ? c.title : c.title + L" - " + c.artist));
+            self->applyLyricsText(p.lrc, false, p.durations, p.translations);
+            self->updateLyricIndex();
+            self->lyricPicked_ = index;
+            self->lyricSearchNote_.clear();
+            emit self->lyricSearchChanged();
+        }, Qt::QueuedConnection);
+    });
+}
+
+// 把当前显示的歌词存成歌曲旁边的同名 .lrc (UTF-8 带 BOM),之后这首歌总是先用它。
+// 已有内容不同的同名歌词时先改名为 .lrc.bak,不直接覆盖
+bool PlayerController::saveLyrics() {
+    if (!current_ || current_->is_cue_track || lyricText_.trimmed().isEmpty()) return false;
+    const QFileInfo audio(Q(current_->file_path));
+    const QString target = audio.path() + QLatin1Char('/') + audio.completeBaseName() + QStringLiteral(".lrc");
+    const QByteArray data = QByteArrayLiteral("\xEF\xBB\xBF") + lyricText_.toUtf8();
+    QFile old(target);
+    if (old.exists()) {
+        if (old.open(QIODevice::ReadOnly) && old.readAll() == data) {
+            old.close();
+        } else {
+            old.close();
+            QFile::remove(target + QStringLiteral(".bak"));
+            if (!QFile::rename(target, target + QStringLiteral(".bak"))) return false;
+        }
+    }
+    QSaveFile f(target);
+    if (!f.open(QIODevice::WriteOnly) || f.write(data) != data.size() || !f.commit()) {
+        lyricSearchNote_ = QStringLiteral("保存失败:歌曲所在文件夹不可写");
+        emit lyricSearchChanged();
+        return false;
+    }
+    setLyricSource(QStringLiteral("file"), QStringLiteral("同名歌词文件"), QFileInfo(target).fileName(), target);
+    return true;
 }
 
 void PlayerController::updateLyricIndex() {

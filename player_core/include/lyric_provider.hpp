@@ -40,6 +40,7 @@ struct LyricCandidate {
     uint32_t duration_ms = 0;  // 源侧时长 (毫秒,0 表示未知)
     int match_score = 0;       // 与查询的匹配度 (由 RankCandidates 算,越大越好)
     bool has_synced = true;    // 是否带时间轴 (false = 纯文本歌词)
+    bool title_match = false;  // 歌名与查询对得上 (由 RankCandidates 判定;自动挑选只认对得上的)
 };
 
 // 从某个源拉回的原始歌词文档 (已归一,但未解析成 ParsedLyrics)
@@ -48,7 +49,7 @@ struct RawLyricDoc {
     std::string lrc_text;        // 标准 LRC 文本 (UTF-8);可能为空
     std::string translation_text;// 翻译 LRC 文本 (UTF-8);可能为空 (网易云 tlyric)
     std::string romaji_text;     // 音译 LRC 文本 (UTF-8);可能为空
-    std::string raw_payload;     // 源的原始二进制载荷 (如酷狗 krc Base64 解码后)
+    std::string raw_payload;     // Krc: 酷狗 krc 二进制 (Base64 解码后);Plain: 无时间轴的纯文本歌词
     enum class Payload { Lrc, Krc, Plain } kind = Payload::Lrc;
 };
 
@@ -56,6 +57,7 @@ struct RawLyricDoc {
 struct LyricSearchResult {
     std::vector<LyricCandidate> candidates; // 按 match_score 降序
     std::vector<std::string> source_errors; // 失败源及原因 (调试/前端提示用)
+    int answered = 0;                       // 有正常应答的源个数 (含「查无结果」);0 多半是断网
 };
 
 // 统一的 HTTP GET 钩子 (默认实现为 WinHTTP);测试时可注入假实现
@@ -68,12 +70,13 @@ struct LyricQuery {
     std::wstring album;       // 可选
     uint32_t duration_ms = 0;
     std::string hash;         // 酷狗 hash,可选
+    bool loose = false;       // 手动搜索:关键词不一定是歌名,不按歌名 / 歌手 / 时长扣分,也不丢弃低分候选
 
     bool Empty() const { return title.empty(); }
     std::wstring Keyword() const; // "歌手 歌名" 拼装
 };
 
-// 多源聚合器。所有公开方法线程安全 (各源可并行调用)。
+// 多源聚合器。查询方法只读成员,可多线程同时调用;源开关请在查询开始前设好 (每次查询各建一个实例最简单)。
 class LyricProvider {
 public:
     explicit LyricProvider(HttpGetFn http = nullptr);

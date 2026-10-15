@@ -16,6 +16,10 @@ Item {
     // 大封面的投影:飞行副本按它的参数带着投影落地
     readonly property Item coverShadow: coverShadow
     function automationTab(t) { side.tab = String(t) }
+    function automationLyricPanel(on) { if (on) { side.tab = "lyrics"; lyricPanel.open() } else lyricPanel.close() }
+    function automationLyricPick(i) { lyricPanel.pick(i) }
+    function automationLyricHover(i) { lyricPanel.hoverRow = i }
+    function automationLyricSave() { lyricPanel.save() }
     function openMenu(item, px, py) {
         const p = item.mapToItem(null, px, py)
         Nav.trackMenu(player.trackId, p.x, p.y, {})
@@ -144,6 +148,62 @@ Item {
         z: 2
         opacity: np.shown ? 1 : 0
         Behavior on opacity { SequentialAnimation { PauseAnimation { duration: np.shown ? 260 : 0 } OpacityAnimator { duration: 360 } } }
+        // 歌词来源胶囊:强调色圆点 + 来源名;没有歌词时是「搜索歌词」。点开歌词来源面板
+        Rectangle {
+            id: sourceChip
+            readonly property bool has: !!(player.lyricSource.kind && player.lyricSource.kind !== "none")
+            readonly property bool open: lyricPanel.shown
+            visible: player.hasTrack
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.verticalCenterOffset: -2
+            width: chipRow.implicitWidth + 24
+            height: 28
+            radius: 14
+            color: open ? Theme.accentAlpha(0.16) : Qt.rgba(1, 0.96, 0.9, 0.05)
+            Behavior on color { ColorAnimation { duration: Theme.fast } }
+            Behavior on width { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
+            scale: chipMouse.pressed ? 0.96 : 1
+            Behavior on scale { ScaleAnimator { duration: Theme.fast; easing.type: Easing.OutCubic } }
+            Rectangle {
+                anchors.fill: parent
+                radius: parent.radius
+                color: Qt.rgba(1, 0.96, 0.9, 0.05)
+                opacity: chipMouse.containsMouse && !sourceChip.open ? 1 : 0
+                Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+            }
+            Row {
+                id: chipRow
+                anchors.centerIn: parent
+                spacing: 8
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 6; height: 6; radius: 3
+                    color: Theme.accent
+                    opacity: sourceChip.has ? 1 : 0.4
+                    Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+                }
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: sourceChip.has ? player.lyricSource.label : qsTr("搜索歌词")
+                    color: sourceChip.open ? Theme.accent : chipMouse.containsMouse ? Theme.text : Theme.textSecondary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12
+                    font.weight: sourceChip.open ? Font.DemiBold : Font.Medium
+                }
+            }
+            MouseArea {
+                id: chipMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                    if (lyricPanel.shown) { lyricPanel.close(); return }
+                    side.tab = "lyrics"
+                    lyricPanel.open()
+                }
+            }
+        }
+        Item { width: 8; height: 1 }
         Repeater {
             model: [{ key: "lyrics", icon: "lyrics", tip: qsTr("歌词") }, { key: "queue", icon: "queue", tip: qsTr("播放队列") }]
             Item {
@@ -182,6 +242,14 @@ Item {
                 }
             }
         }
+    }
+
+    // 歌词来源面板:右下角对齐来源胶囊,从那里弹出
+    LyricSourcePanel {
+        id: lyricPanel
+        anchorRight: tabs.x + tabs.width
+        anchorBottom: tabs.y - 6
+        Connections { target: np; function onShownChanged() { if (!np.shown) lyricPanel.close() } }
     }
 
     component MetaLink: Text {
@@ -679,11 +747,19 @@ Item {
             }
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: qsTr("同名 .lrc · 内嵌歌词 · 酷狗歌词库")
+                text: qsTr("同名 .lrc · 内嵌歌词 · 酷狗歌词库 · 在线")
                 color: Theme.textTertiary
                 opacity: 0.7
                 font.family: Theme.fontFamily
                 font.pixelSize: 12
+            }
+            Item { width: 1; height: 4 }
+            Capsule {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: qsTr("搜索歌词")
+                filled: true
+                pad: 20
+                onClicked: lyricPanel.open()
             }
         }
 

@@ -914,6 +914,10 @@ Window {
     function automationQueueMenu(row) { queuePanel.automationMenu(row) }
     function automationClearQueue() { queuePanel.clearWithUndo() }
     function automationNowTab(t) { nowPlaying.automationTab(t) }
+    function automationLyricPanel(on) { nowPlaying.automationLyricPanel(!!on) }
+    function automationLyricPick(i) { nowPlaying.automationLyricPick(Number(i)) }
+    function automationLyricHover(i) { nowPlaying.automationLyricHover(Number(i)) }
+    function automationLyricSave() { nowPlaying.automationLyricSave() }
     function automationSleep(m) { player.setSleepTimer(Number(m)) }
     function automationSongsSort(m) { songsModel.sortMode = Number(m) }
     function automationDecryptPrompt(on) { on ? decryptPrompt.open() : decryptPrompt.close() }

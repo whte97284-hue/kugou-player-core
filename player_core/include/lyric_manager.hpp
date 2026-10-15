@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <cstdint>
 #include <memory>
+#include "lyric_provider.hpp"
 #include <mutex>
 #include <functional>
 #include <unordered_set>
@@ -73,7 +74,7 @@ private:
 // KRC (Kugou ResourCe) 解密与解析器
 class KrcDecoder {
 public:
-    // 从物理 .krc 文件解码
+    // 从文件解码:以 krc1 开头按酷狗 KRC 解密,否则按 LRC 文本解析 (在线缓存的 .lrc)
     static bool DecodeFile(const std::wstring& krcFilePath, ParsedLyrics& outLyrics);
 
     // 从二进制内存流解码 (用于流式或者包内提取)
@@ -148,12 +149,14 @@ public:
     bool FetchOnline(const std::wstring& audioFilePath, const std::wstring& title, const std::wstring& artist,
                      uint32_t durationMs, ParsedLyrics& outLyrics);
 
-    // 【新】多源聚合拉取:并行查询 LRCLIB / 网易云 / 酷狗,择优合并。
-    // 相比 FetchOnline 单源(仅酷狗),覆盖面更广、成功率更高;结果同样写入缓存目录
-    // (LRC 源写 .lrc,酷狗 KRC 源写 .krc),之后 LoadLyricsForTrack 直接命中。
-    // query 为空时用 (audioFilePath, title, artist) 自动补全。
+    // 多源聚合拉取:依次查询 LRCLIB / 网易云 / 酷狗,统一排名后按名次拉取,只采用歌名对得上的带时间轴歌词。
+    // 结果写入缓存目录「歌手 - 歌名」(酷狗 KRC 写 .krc,其他源写带翻译的 .lrc),之后 LoadLyricsForTrack 直接命中;
+    // 确实查不到的曲目本次运行内不再重复请求。picked 非空时返回采用的候选 (用于界面显示来源)
     bool FetchOnlineMulti(const std::wstring& audioFilePath, const std::wstring& title, const std::wstring& artist,
-                          uint32_t durationMs, ParsedLyrics& outLyrics);
+                          uint32_t durationMs, ParsedLyrics& outLyrics, LyricCandidate* picked = nullptr);
+
+    // 把任一歌词源拉到的载荷转成结构化歌词:KRC 解密、LRC 解析 (另附的翻译按时间戳并入),纯文本按行切分 (无时间轴)
+    static bool ParseDoc(const RawLyricDoc& doc, ParsedLyrics& outLyrics);
 
     // 在线歌词缓存目录 (同时加入本地歌词库索引)
     void SetCacheDirectory(const std::wstring& dir);
@@ -161,10 +164,10 @@ public:
     // 替换在线接口的 HTTP 实现 (测试用)
     void SetHttpGetter(KuGouOnlineLyrics::HttpGetFn http);
 
-    // 根据文件路径或标识保存转换后的标准 .lrc 文件到目标位置
+    // 把歌词存为带 BOM 的标准 .lrc (含翻译行),先写临时文件再替换,不会留下半截文件
     bool ExportLrcFile(const ParsedLyrics& lyrics, const std::wstring& targetLrcPath);
 
-    // 在已探测的歌词库中搜索最匹配的 .krc 文件 (找不到返回空)
+    // 在已探测的歌词库中搜索最匹配的 .krc / .lrc 文件 (找不到返回空)
     std::wstring FindMatchingKrcFile(const std::wstring& audioFilePath, const std::wstring& title, const std::wstring& artist);
 
 private:

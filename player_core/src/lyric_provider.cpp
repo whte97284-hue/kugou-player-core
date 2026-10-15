@@ -241,13 +241,14 @@ bool Base64DecodeImpl(const std::string& in, std::string& out) {
         for (int i = 0; i < 64; ++i) tbl[static_cast<unsigned char>(a[i])] = static_cast<int8_t>(i);
     });
     out.clear();
-    int val = 0, bits = -8;
+    uint32_t val = 0;
+    int bits = -8;
     for (unsigned char c : in) {
         if (c == '=') break;
         if (c == ' ' || c == '\r' || c == '\n' || c == '\t') continue;
         int8_t d = tbl[c];
         if (d < 0) return false;
-        val = (val << 6) | d;
+        val = ((val << 6) | static_cast<uint32_t>(d)) & 0xFFFFFFu; // 只留 24 位,不会溢出
         bits += 6;
         if (bits >= 0) {
             out.push_back(static_cast<char>((val >> bits) & 0xFF));
@@ -515,17 +516,23 @@ void LyricProvider::RankCandidates(const LyricQuery& q, std::vector<LyricCandida
         const std::wstring ct = NormalizeImpl(c.title);
         const std::wstring ca = NormalizeImpl(c.artist);
 
-        // 歌名:相同加权重,包含次之
+        // 歌名:相同加权重,包含次之 (短的一方至少占长的 60%,免得「爱」这种短歌名匹配上一切)
+        auto contains = [](const std::wstring& a, const std::wstring& b) {
+            const std::wstring& lo = a.size() < b.size() ? a : b;
+            const std::wstring& hi = a.size() < b.size() ? b : a;
+            return hi.find(lo) != std::wstring::npos && lo.size() * 10 >= hi.size() * 6;
+        };
+        c.title_match = false;
         if (!wantTitle.empty() && !ct.empty()) {
-            if (ct == wantTitle) score += 100;
-            else if (ct.find(wantTitle) != std::wstring::npos || wantTitle.find(ct) != std::wstring::npos) score += 40;
-            else score -= 40;
+            if (ct == wantTitle) { score += 100; c.title_match = true; }
+            else if (contains(ct, wantTitle)) { score += 40; c.title_match = true; }
+            else if (!q.loose) score -= 40;
         }
         // 歌手:相同加权重,包含次之
         if (!wantArtist.empty() && !ca.empty()) {
             if (ca == wantArtist) score += 60;
             else if (ca.find(wantArtist) != std::wstring::npos || wantArtist.find(ca) != std::wstring::npos) score += 25;
-            else score -= 20;
+            else if (!q.loose) score -= 20;
         }
         // 时长:5 秒内命中,8 秒内算勉强,否则视为别的版本
         if (q.duration_ms && c.duration_ms) {
@@ -575,7 +582,9 @@ LyricSearchResult LyricProvider::SearchAll(const LyricQuery& q) const {
     auto collect = [&](const char* source, std::vector<LyricCandidate>& dst) {
         std::string err;
         std::vector<LyricCandidate> list;
-        if (Search(source, q, list, &err)) {
+        const bool ok = Search(source, q, list, &err);
+        if (ok || err.find("http failed") == std::string::npos) ++result.answered;
+        if (ok) {
             for (auto& c : list) dst.push_back(std::move(c));
         } else if (!err.empty()) {
             result.source_errors.push_back(source + std::string(": ") + err);
@@ -598,10 +607,13 @@ LyricSearchResult LyricProvider::SearchAll(const LyricQuery& q) const {
         if (!dup) result.candidates.push_back(std::move(c));
     }
     RankCandidates(q, result.candidates);
-    // 弃掉低分候选:正常命中一般 >= 40 分;负分说明歌名/歌手/时长全不符,是噪声
-    auto cut = std::remove_if(result.candidates.begin(), result.candidates.end(),
-                              [](const LyricCandidate& c) { return c.match_score < 0; });
-    result.candidates.erase(cut, result.candidates.end());
+    // 弃掉低分候选:正常命中一般 >= 40 分;负分说明歌名/歌手/时长全不符,是噪声。
+    // 手动搜索 (loose) 时关键词不一定是歌名,全部留给用户挑
+    if (!q.loose) {
+        auto cut = std::remove_if(result.candidates.begin(), result.candidates.end(),
+                                  [](const LyricCandidate& c) { return c.match_score < 0; });
+        result.candidates.erase(cut, result.candidates.end());
+    }
     return result;
 }
 
@@ -627,12 +639,18 @@ bool LyricProvider::SearchAndFetch(const LyricQuery& q, RawLyricDoc& out, LyricC
                                    LyricSearchResult* all) const {
     LyricSearchResult r = SearchAll(q);
     if (all) *all = r;
-    const int best = PickBest(q, r.candidates);
-    if (best < 0) return false;
-    std::string err;
-    if (!Fetch(r.candidates[static_cast<size_t>(best)], out, &err)) return false;
-    if (picked) *picked = r.candidates[static_cast<size_t>(best)];
-    return true;
+    // 按排名依次拉取,第一名拉不到 (接口出错 / 只有纯文本) 就试下一名;
+    // 自动挑选只认歌名对得上的,宁可没有也不要同一歌手的另一首歌
+    int tried = 0;
+    for (const auto& c : r.candidates) {
+        if (!c.title_match && !q.loose) continue;
+        if (++tried > 4) break;
+        std::string err;
+        if (!Fetch(c, out, &err) || out.kind == RawLyricDoc::Payload::Plain) continue;
+        if (picked) *picked = c;
+        return true;
+    }
+    return false;
 }
 
 // ============================================================================
@@ -880,7 +898,11 @@ bool LyricProvider::SearchKugou(const LyricQuery& q, std::vector<LyricCandidate>
     }
 
     // ---- 阶段 B: 对每个 hash 查 lyrics 候选,合并成统一候选 ----
+    // 每个 hash 都要单独请求一次:最多查 6 个、拿到 4 个就停;时长差太多的版本 (自动匹配时) 直接跳过,
+    // 免得接口慢或被墙时一首歌要等几十个请求
+    int lookups = 0;
     for (const auto& s : lists->arr) {
+        if (lookups >= 6 || out.size() >= 4) break;
         const JVal* vh = s.Get("FileHash");
         const JVal* vn = s.Get("SongName");
         const JVal* vs = s.Get("SingerName");
@@ -894,6 +916,9 @@ bool LyricProvider::SearchKugou(const LyricQuery& q, std::vector<LyricCandidate>
         const uint32_t dur = vd ? static_cast<uint32_t>(vd->AsNumber() * 1000.0) : 0;
         const std::wstring album = va ? Utf8ToWideLocal(va->AsString()) : std::wstring();
         if (name.empty()) continue;
+        if (!q.loose && q.duration_ms && dur &&
+            std::llabs(static_cast<int64_t>(dur) - static_cast<int64_t>(q.duration_ms)) > 8000) continue;
+        ++lookups;
 
         std::string kq = "/search?ver=1&man=yes&client=pc&keyword=" +
                          UrlEncodeImpl(WideToUtf8Local(singer.empty() ? name : singer + L" - " + name));
@@ -929,7 +954,9 @@ bool LyricProvider::SearchKugou(const LyricQuery& q, std::vector<LyricCandidate>
         item.album = album;
         item.has_synced = true; // 酷狗 KRC 带逐字时间轴
         if (item.id.empty() || item.accesskey.empty()) continue;
-        out.push_back(std::move(item));
+        bool seen = false; // 不同音质的 hash 常对应同一份歌词
+        for (const auto& o : out) seen = seen || o.id == item.id;
+        if (!seen) out.push_back(std::move(item));
     }
 
     if (out.empty() && error) *error = "kugou: none";
@@ -998,8 +1025,13 @@ bool LyricProvider::FetchKugou(const LyricCandidate& c, RawLyricDoc& out, std::s
     }
     out = RawLyricDoc{};
     out.source = "kugou";
-    out.lrc_text = std::move(bytes);
-    out.kind = LooksLikeLrcImpl(out.lrc_text) ? RawLyricDoc::Payload::Lrc : RawLyricDoc::Payload::Plain;
+    if (LooksLikeLrcImpl(bytes)) {
+        out.lrc_text = std::move(bytes);
+        out.kind = RawLyricDoc::Payload::Lrc;
+    } else {
+        out.raw_payload = std::move(bytes); // 纯文本与其他源一致放 raw_payload
+        out.kind = RawLyricDoc::Payload::Plain;
+    }
     return true;
 }
 

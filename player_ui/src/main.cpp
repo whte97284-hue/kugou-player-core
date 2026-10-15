@@ -95,6 +95,21 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         steps->push_back({"p08_pure_json", [&player, lyr] { lyr("vip"); player.next(); player.next(); }, 1500});
         steps->push_back({"p09_zh", [&player, lyr, call] { lyr("purejson"); call("automationPlayTitle", QStringLiteral("THE BOOK")); }, 1500});
         steps->push_back({"p10_done", [&player, lyr] { lyr("zh"); }, 300});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_LYRSRC")) {
+        // 歌词来源:自动找到的在线歌词 → 打开来源面板 (自动搜索) → 换一份 → 保存到本地;以及没有歌词时的样子
+        // 配合 KP_TEST_LYRIC_FAKE=1 使用 (假的歌词接口)
+        const QString album = qEnvironmentVariable("KP_LYR_ALBUM", QStringLiteral("async"));
+        steps->push_back({"l01_auto_online", [call, album] { call("automationPlayTitle", album); call("automationNowPlaying", true); }, 2600});
+        steps->push_back({"l02_panel_open_80", [call] { call("automationLyricPanel", true); }, 80});
+        steps->push_back({"l03_panel_searching", [] {}, 160});
+        steps->push_back({"l04_panel_results", [] {}, 1400});
+        steps->push_back({"l05_hover_row", [call] { call("automationLyricHover", 2); }, 500});
+        steps->push_back({"l06_picked", [call] { call("automationLyricHover", -1); call("automationLyricPick", 2); }, 1400});
+        steps->push_back({"l07_saved", [call] { call("automationLyricSave"); }, 1400});
+        steps->push_back({"l08_closed", [call] { call("automationLyricPanel", false); }, 900});
+        steps->push_back({"l09_reopen", [call] { call("automationLyricPanel", true); }, 900});
+        steps->push_back({"l10_small", [window, call] { call("automationLyricPanel", false); window->resize(980, 640); }, 1200});
+        steps->push_back({"l11_small_panel", [call] { call("automationLyricPanel", true); }, 1400});
     } else if (qEnvironmentVariableIsSet("KP_TEST_FLIGHT")) {
         // 打开 / 收起播放页的过程:封面从底栏黑胶飞出、投影与内容的出场时机
         steps->push_back({"f00_playing", [call] { call("automationPlayTitle", QStringLiteral("async")); }, 1800});

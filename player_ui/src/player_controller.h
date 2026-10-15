@@ -1,5 +1,6 @@
 #pragma once
 #include <QImage>
+#include "lyric_provider.hpp"
 #include <QStringList>
 #include <QAbstractListModel>
 #include <QColor>
@@ -89,6 +90,15 @@ class PlayerController : public QObject {
     Q_PROPERTY(int lyricIndex READ lyricIndex NOTIFY lyricIndexChanged)
     // false:歌词没有时间戳,按静态文本展示
     Q_PROPERTY(bool lyricsSynced READ lyricsSynced NOTIFY lyricsChanged)
+    // 当前歌词从哪来:kind = file (同名歌词文件) / embedded (内嵌) / library (酷狗歌词库) / online (在线) / none;
+    // label 给人看的来源名,detail 文件路径或「歌名 - 歌手」,path 本地文件路径 (可在文件夹中显示),
+    // savable = 不是同名歌词文件,可以「保存到本地」
+    Q_PROPERTY(QVariantMap lyricSource READ lyricSource NOTIFY lyricSourceChanged)
+    // 歌词搜索 (歌词来源面板):候选列表、是否在搜、选中的是第几个、出错说明
+    Q_PROPERTY(QVariantList lyricCandidates READ lyricCandidates NOTIFY lyricSearchChanged)
+    Q_PROPERTY(bool lyricSearching READ lyricSearching NOTIFY lyricSearchChanged)
+    Q_PROPERTY(int lyricPicked READ lyricPicked NOTIFY lyricSearchChanged)
+    Q_PROPERTY(QString lyricSearchNote READ lyricSearchNote NOTIFY lyricSearchChanged)
     Q_PROPERTY(QString chainSummary READ chainSummary NOTIFY signalChainChanged)
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorChanged)
     // 定时关闭:0 = 关闭,-1 = 播完当前歌曲后停止,N = N 分钟后暂停;sleepRemaining 为剩余秒数
@@ -144,6 +154,12 @@ public:
     void setReplayGain(int mode);
     Q_INVOKABLE void refreshDevices();
     Q_INVOKABLE void reloadLyrics() { loadLyrics(); updateLyricIndex(); }
+    // 歌词来源面板:默认搜索词「歌名 歌手」;搜索 (在后台依次查酷狗 / 网易云 / LRCLIB);
+    // 换成第 index 个候选 (立即显示,先不写盘);把当前显示的歌词存成歌曲旁边的「歌名.lrc」
+    Q_INVOKABLE QString lyricQuery() const;
+    Q_INVOKABLE void searchLyrics(const QString& keyword);
+    Q_INVOKABLE void useLyricCandidate(int index);
+    Q_INVOKABLE bool saveLyrics();
     // 某一时刻 (秒) 正在唱的那句歌词;没有同步歌词或尚未开始时为空 (进度条悬停提示用)
     Q_INVOKABLE QString lyricAt(double seconds) const;
     int repeatMode() const { return repeat_; }
@@ -155,6 +171,11 @@ public:
     QVariantList lyrics() const { return lyrics_; }
     int lyricIndex() const { return lyricIndex_; }
     bool lyricsSynced() const { return lyricsSynced_; }
+    QVariantMap lyricSource() const { return lyricSource_; }
+    QVariantList lyricCandidates() const { return lyricCandidates_; }
+    bool lyricSearching() const { return lyricSearching_; }
+    int lyricPicked() const { return lyricPicked_; }
+    QString lyricSearchNote() const { return lyricSearchNote_; }
     QString chainSummary() const;
 
     Q_INVOKABLE void playAlbum(int albumIndex, int startRow = 0);
@@ -202,6 +223,8 @@ signals:
     void modeChanged();
     void errorChanged();
     void lyricsChanged();
+    void lyricSourceChanged();
+    void lyricSearchChanged();
     void lyricIndexChanged();
     void devicesChanged();
     void sleepChanged();
@@ -240,6 +263,7 @@ private:
     void onFrameTimer();
     void loadLyrics();
     void loadKugouLyrics();
+    void setLyricSource(const QString& kind, const QString& label, const QString& detail, const QString& path = {});
     void applyLyricsText(const QString& text, bool wholeFileTimeline, const QHash<qint64, qint64>& durations = {},
                          const QHash<qint64, QString>& translations = {});
     void updateLyricIndex();
@@ -302,6 +326,14 @@ private:
     std::vector<qint64> lyricTimes_; // 毫秒,相对于当前曲目起点
     int lyricIndex_ = -1;
     bool lyricsSynced_ = false;
+    QVariantMap lyricSource_;
+    QVariantList lyricCandidates_;
+    bool lyricSearching_ = false;
+    int lyricPicked_ = -1;
+    QString lyricSearchNote_;
+    QString lyricText_;          // 当前显示的歌词 (标准 LRC,含翻译),「保存到本地」写的就是它
+    quint64 lyricSearchGen_ = 0; // 每次搜索 / 换歌递增,丢弃过期的搜索结果
+    std::vector<lyric_core::LyricCandidate> lyricCandRaw_; // 上一次搜索的原始候选
     quint64 lyricsGen_ = 0; // 每次重新加载歌词递增,丢弃过期的后台结果
     int sleepMinutes_ = 0;
     qint64 sleepDeadline_ = 0; // QDateTime 毫秒;按分钟定时时有效
