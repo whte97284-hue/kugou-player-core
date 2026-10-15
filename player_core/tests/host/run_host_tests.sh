@@ -26,6 +26,7 @@ g++ -std=c++17 $SAN -pthread tests/host/test_lyric_online_host.cpp src/lyric_man
 g++ -std=c++17 $SAN -pthread tests/host/test_kugou_bridge_host.cpp src/kugou_track_bridge.cpp src/lyric_manager.cpp src/lyric_provider.cpp src/tinf.cpp $CORE -o "$OUT/kugou_bridge_host"
 g++ -std=c++17 $SAN -pthread tests/host/test_organizer_host.cpp src/library_organizer.cpp $CORE -o "$OUT/organizer_host"
 g++ -std=c++17 $SAN -pthread tests/host/test_dedupe_host.cpp src/library_dedupe.cpp $CORE -o "$OUT/dedupe_host"
+g++ -std=c++17 $SAN -pthread tests/host/test_playlist_host.cpp src/playlist_provider.cpp src/playlist_matcher.cpp src/library_dedupe.cpp $CORE -o "$OUT/playlist_host"
 
 echo "== 1. 解析对照 (ffprobe 为基准)"
 python3 tests/host/check_fixtures.py "$OUT/tag_probe" "$OUT/fx"
@@ -44,5 +45,7 @@ echo "== 5c. 整理曲库 (模板 / 冲突 / 交换改名 / 撤销)"
 "$OUT/organizer_host" "$OUT/organizer_work"
 echo "== 5d. 查找重复歌曲 (五种匹配 / 自动勾选 / 隔离 / 废纸篓 / 硬链接 / 撤销)"
 "$OUT/dedupe_host" "$OUT/dedupe_work"
+echo "== 5e. 歌单导入 (链接归一化 / 酷狗与网易云解析 / 匹配本地曲库)"
+"$OUT/playlist_host"
 echo "== 6. 变异模糊测试"
 "$OUT/fuzz" "${FUZZ_ITERS:-500}" $(ls "$OUT"/fx/* | grep -v manifest)

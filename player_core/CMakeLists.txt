@@ -22,6 +22,8 @@ add_library(player_core STATIC
     src/audio_playback_engine.cpp
     src/lyric_manager.cpp
     src/lyric_provider.cpp
+    src/playlist_provider.cpp
+    src/playlist_matcher.cpp
     src/tinf.cpp
     src/kugou_track_bridge.cpp
 )

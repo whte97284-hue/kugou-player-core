@@ -14,11 +14,15 @@
 //     2) GET  http://music.163.com/api/song/detail/?id={csv}&ids=%5B{csv}%5D
 //        → songs[].name / ar[].name / dt / id / al.id
 // ============================================================================
-#define WIN32_LEAN_AND_MEAN
-#include "playlist_provider.hpp"
+#include "../include/playlist_provider.hpp"
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #include <winhttp.h>
+#endif
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -35,7 +39,9 @@
 #undef max
 #endif
 
+#ifdef _WIN32
 #pragma comment(lib, "winhttp.lib")
+#endif
 
 namespace playlist_core {
 
@@ -232,6 +238,7 @@ private:
 };
 
 // ---- 宽窄字符串转换 ----
+#ifdef _WIN32
 std::string ToUtf8(const std::wstring& w) {
     if (w.empty()) return {};
     int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
@@ -247,6 +254,47 @@ std::wstring ToWide(const std::string& s) {
     MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &out[0], n);
     return out;
 }
+#else
+// 非 Windows (宿主测试 / Linux 版界面): wchar_t 为 UTF-32
+std::string ToUtf8(const std::wstring& w) {
+    std::string out;
+    out.reserve(w.size() * 3);
+    for (wchar_t wc : w) {
+        uint32_t c = static_cast<uint32_t>(wc);
+        if (c < 0x80) out += static_cast<char>(c);
+        else if (c < 0x800) { out += static_cast<char>(0xC0 | (c >> 6)); out += static_cast<char>(0x80 | (c & 0x3F)); }
+        else if (c < 0x10000) {
+            out += static_cast<char>(0xE0 | (c >> 12)); out += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (c & 0x3F));
+        } else {
+            out += static_cast<char>(0xF0 | (c >> 18)); out += static_cast<char>(0x80 | ((c >> 12) & 0x3F));
+            out += static_cast<char>(0x80 | ((c >> 6) & 0x3F)); out += static_cast<char>(0x80 | (c & 0x3F));
+        }
+    }
+    return out;
+}
+
+std::wstring ToWide(const std::string& s) {
+    std::wstring out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size();) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        int len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 0;
+        if (len == 0 || i + len > s.size()) { out += L'\xFFFD'; ++i; continue; }
+        uint32_t cp = len == 1 ? c : len == 2 ? (c & 0x1F) : len == 3 ? (c & 0x0F) : (c & 0x07);
+        bool bad = false;
+        for (int k = 1; k < len; ++k) {
+            const unsigned char cc = static_cast<unsigned char>(s[i + k]);
+            if ((cc & 0xC0) != 0x80) { bad = true; break; }
+            cp = (cp << 6) | (cc & 0x3F);
+        }
+        if (bad) { out += L'\xFFFD'; ++i; continue; }
+        out += static_cast<wchar_t>(cp);
+        i += len;
+    }
+    return out;
+}
+#endif
 
 std::wstring TrimW(const std::wstring& s) {
     size_t b = 0, e = s.size();
@@ -434,6 +482,7 @@ bool PlaylistProvider::ParseInput(const std::string& raw, Platform& plat, std::s
 
 bool PlaylistProvider::FollowRedirect(const std::string& url, std::string& final_url,
                                       std::string* error, int max_hops) {
+#ifdef _WIN32
     std::string cur = url;
     for (int hop = 0; hop < max_hops; ++hop) {
         std::wstring wurl = ToWide(cur);
@@ -504,6 +553,12 @@ bool PlaylistProvider::FollowRedirect(const std::string& url, std::string& final
     }
     final_url = cur;
     return true;
+#else
+    (void)max_hops;
+    final_url = url;
+    if (error) *error = "当前平台不支持跟随短链";
+    return false;
+#endif
 }
 
 bool PlaylistProvider::ResolveInput(const std::string& input, Platform& plat, std::string& id,
@@ -833,6 +888,7 @@ std::string PlaylistProvider::WideToUtf8(const std::wstring& s) { return ToUtf8(
 std::wstring PlaylistProvider::Trim(const std::wstring& s) { return TrimW(s); }
 
 bool PlaylistProvider::DefaultHttpGet(const std::string& url, std::string& body) {
+#ifdef _WIN32
     std::wstring wurl = ToWide(url);
     URL_COMPONENTS uc{};
     uc.dwStructSize = sizeof(uc);
@@ -902,6 +958,11 @@ bool PlaylistProvider::DefaultHttpGet(const std::string& url, std::string& body)
     WinHttpCloseHandle(con);
     WinHttpCloseHandle(ses);
     return ok;
+#else
+    (void)url;
+    body.clear();
+    return false;
+#endif
 }
 
 } // namespace playlist_core
