@@ -532,45 +532,25 @@ Window {
     }
     function closeAlbum() { if (detailKind === "album") back() }
 
-    // 顶部渐暗:内容滚到窗口顶端时,保证窗口按钮在浅色封面上依然可见
-    Rectangle {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        height: 56
-        z: 9
-        opacity: 1 - topBand.opacity
-        gradient: Gradient {
-            GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, 0.38) }
-            GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0) }
-        }
-    }
-    // 内容滚到窗口按钮下面时:顶端 44px 换成与播放条同材质的磨砂条 (对齐的模糊封面 + 压暗 + 发丝线),
-    // 文字不会和最小化 / 关闭按钮叠在一起。专辑详情与沉浸页有自己的顶栏
+    // 顶部渐暗:内容滚到窗口顶端时,保证窗口按钮在浅色封面上依然可见。
+    // 内容滚到窗口按钮下面时渐暗加深加长,文字柔和地隐进顶端,不和最小化 / 关闭按钮叠在一起
+    // (不用整条实色或磨砂条:顶端会多出一条生硬的黑带)。专辑详情与沉浸页有自己的顶栏
     readonly property bool topCovered: !nowPlaying.shown && root.view !== "album"
         && (root.view === "albums" ? wall.active && wall.scrolled
             : [artistsLoader, songsLoader, playlistsLoader, settingsLoader, artistLoader, playlistLoader].some(l => l.scrolled))
-    Item {
-        id: topBand
-        x: Theme.navWidth
-        width: root.width - Theme.navWidth
-        height: 44
+    Rectangle {
+        id: topShade
+        anchors.left: parent.left
+        anchors.right: parent.right
         z: 9
-        clip: true
-        opacity: root.topCovered ? 1 : 0
-        visible: opacity > 0
-        Behavior on opacity { NumberAnimation { duration: Theme.normal } }
-        Rectangle { anchors.fill: parent; color: Theme.base }
-        Backdrop {
-            x: -Theme.navWidth
-            y: 0
-            width: root.width
-            height: root.height
-            source: player.cover
-            solid: false
-            opacity: player.hasTrack ? 1 : 0
+        property real deep: root.topCovered ? 1 : 0
+        Behavior on deep { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
+        height: 56 + 24 * deep
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, 0.38 + 0.2 * topShade.deep) }
+            GradientStop { position: 0.45; color: Qt.rgba(0, 0, 0, 0.12 + 0.2 * topShade.deep) }
+            GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0) }
         }
-        Rectangle { anchors.fill: parent; color: Qt.rgba(0.05, 0.045, 0.04, player.hasTrack ? 0.66 : 0.95) }
-        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.hairline }
     }
 
     // ======================= 隐形标题栏 =======================

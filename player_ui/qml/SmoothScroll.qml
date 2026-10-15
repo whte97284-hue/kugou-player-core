@@ -35,17 +35,21 @@ WheelHandler {
             return
         }
         if (angle === 0) return
-        if (!anim.running) { pos = current(); goal = pos }
+        if (!anim.running) { pos = current(); goal = pos; vel = 0 }
         goal = clamp(goal - angle / 120 * step)
         anim.start()
     }
 
-    // 逐帧指数追随目标 (和浏览器的平滑滚动同一思路):
-    //  · 连续滚动时只是把目标往前推,当前速度不会被打断重来,没有一格一格的顿挫;
+    // 逐帧用临界阻尼弹簧追随目标 (速度连续):
+    //  · 连续滚动时只是把目标往前推,当前速度会平滑地加上去,不会每格「猛冲一下再刹住」。
+    //    原来的一阶指数追随在每格到来时速度瞬间跳到最大再迅速衰减,连续滚动时速度呈锯齿状一快一慢,
+    //    帧率计不掉帧,眼睛看起来却像低帧率;
     //  · 按显示器帧长计算,60 / 144Hz 下速度一致;
-    //  · 内部用浮点位置,写回时对齐到物理像素,文字和封面不会在亚像素间抖动
+    //  · 运动途中不再逐帧对齐像素 (速度不是整数像素 / 帧时,取整会让每帧位移 1、2、1、2 地交替,也是一种抖),
+    //    停稳时才对齐到物理像素,静止的文字和封面依然清晰
     property real pos: 0
-    readonly property real tau: duration / 4600   // 时间常数 (秒):340ms 约等于 74ms,约 0.3s 基本停稳
+    property real vel: 0
+    readonly property real smoothTime: duration / 2600   // 340ms 约 0.13s,约 0.4s 基本停稳
     // 显示器一帧的时长。frameTime 是界面线程「被叫醒」的时刻差,会被同一帧里其他工作推迟或提前几毫秒,
     // 而画面总是按刷新节拍显示:直接用它推进,每帧位移忽大忽小,看起来就是细碎的抖动。
     // 所以把间隔对齐到整数帧 (掉帧时按掉了几帧算),和 Qt 自己的 vsync 动画驱动、浏览器的平滑滚动同一做法
@@ -70,14 +74,28 @@ WheelHandler {
         }
         onTriggered: {
             const g = h.clamp(h.goal)
-            const k = 1 - Math.exp(-h.frameStep(frameTime) / h.tau)
-            h.pos += (g - h.pos) * k
-            if (Math.abs(g - h.pos) < 0.25) { h.pos = g; stop() }
-            // 注意: QQuickWindow / QWindow 在 QML 里 **没有** devicePixelRatio 属性,
-            // 用 Window.window.devicePixelRatio 会取到 undefined -> contentY = NaN -> 完全滚不动。
-            // 用附加属性 Screen.devicePixelRatio (QtQuick 自带, 无需额外 import)。
-            const dpr = h.flickable.Screen.devicePixelRatio > 0 ? h.flickable.Screen.devicePixelRatio : 1
-            h.apply(Math.round(h.pos * dpr) / dpr)
+            // 临界阻尼 SmoothDamp (Game Programming Gems 4, 1.10)
+            const dt = h.frameStep(frameTime)
+            const w = 2 / h.smoothTime
+            const x = w * dt
+            const e = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x)
+            const c = h.pos - g
+            const t = (h.vel + w * c) * dt
+            h.vel = (h.vel - w * t) * e
+            h.pos = g + (c + t) * e
+            // 到边界时不越过去回弹
+            if ((h.pos - h.minPos) * (h.pos - h.maxPos) > 0) { h.pos = h.clamp(h.pos); h.vel = 0 }
+            if (Math.abs(g - h.pos) < 0.3 && Math.abs(h.vel) < 12) {
+                // 注意: QQuickWindow / QWindow 在 QML 里 **没有** devicePixelRatio 属性,
+                // 用 Window.window.devicePixelRatio 会取到 undefined -> contentY = NaN -> 完全滚不动。
+                // 用附加属性 Screen.devicePixelRatio (QtQuick 自带, 无需额外 import)。
+                const dpr = h.flickable.Screen.devicePixelRatio > 0 ? h.flickable.Screen.devicePixelRatio : 1
+                h.pos = g; h.vel = 0
+                h.apply(Math.round(g * dpr) / dpr)
+                stop()
+                return
+            }
+            h.apply(h.pos)
         }
     }
     // 用户拖动或代码跳转时停止动画
@@ -90,7 +108,7 @@ WheelHandler {
     function destination() { return anim.running ? goal : current() }
     function scrollTo(v) {
         if (!flickable) return
-        if (!anim.running) pos = current()
+        if (!anim.running) { pos = current(); vel = 0 }
         goal = clamp(v)
         anim.start()
     }
