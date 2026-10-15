@@ -195,7 +195,7 @@ Item {
         if (key === "play") {
             if (player.hasTrack && id === player.trackId && !player.playing) player.toggle()
             else if (q >= 0) player.playQueueIndex(q)
-            else if (typeof ctx.play === "function") ctx.play()
+            else if (typeof ctx.play === "function") { Nav.pickNow = true; try { ctx.play() } finally { Nav.pickNow = false } }
             else player.playTrack(id)
         }
         else if (key === "next") {

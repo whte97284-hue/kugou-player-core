@@ -340,16 +340,35 @@ Item {
             SectionTitle { text: qsTr("播放") }
             Panel {
                 order: 1
+                // 在列表 (专辑、歌单、歌手、歌曲、搜索) 里点歌或点列表的播放键时怎么放;右键菜单不受影响
+                SettingRow {
+                    label: qsTr("点歌后")
+                    hint: (settings.clickAction === 1 ? qsTr("排到正在播放的歌后面,不打断") : qsTr("在列表里点歌马上开始放")) + qsTr(" · 右键菜单不受影响")
+                    Segmented {
+                        options: [{ t: qsTr("立即播放"), v: 0 }, { t: qsTr("下一首播放"), v: 1 }]
+                        value: settings.clickAction
+                        onPicked: (v) => settings.clickAction = v
+                    }
+                }
+                SettingRow {
+                    label: qsTr("播放队列")
+                    hint: settings.queueMode === 1 ? qsTr("保留原来的队列,把歌加进去") : qsTr("换成所点的这份列表")
+                    Segmented {
+                        options: [{ t: qsTr("换成新列表"), v: 0 }, { t: qsTr("加到队列"), v: 1 }]
+                        value: settings.queueMode
+                        onPicked: (v) => settings.queueMode = v
+                    }
+                }
                 SettingRow {
                     label: qsTr("WASAPI 独占")
-                    hint: player.exclusive ? qsTr("绕过系统混音器,直接送往设备;其他程序暂时没有声音") : qsTr("关闭时经过系统混音器,可与其他程序同时出声")
+                    hint: player.exclusive ? qsTr("绕过系统混音直接送往设备,其他程序暂时没声音") : qsTr("经过系统混音,可以和其他程序一起出声")
                     Toggle { checked: player.exclusive; onToggled: (v) => player.exclusive = v }
                 }
                 SettingRow {
                     id: devRow
                     noSep: devList.open
                     label: qsTr("输出设备")
-                    hint: qsTr("切换时播放不中断")
+                    hint: qsTr("切换时不中断播放")
                     Capsule {
                         text: (player.outputDevice || qsTr("系统默认")) + (devList.open ? "  ︿" : "  ﹀")
                         width: Math.min(implicitWidth, 340)
@@ -364,12 +383,12 @@ Item {
                 }
                 SettingRow {
                     label: qsTr("无缝播放")
-                    hint: qsTr("曲目之间不留空隙,适合现场专辑与古典")
+                    hint: qsTr("曲目之间不留空隙,适合现场和古典专辑")
                     Toggle { checked: player.gapless; onToggled: (v) => player.gapless = v }
                 }
                 SettingRow {
                     label: qsTr("音量标准化")
-                    hint: qsTr("读取 ReplayGain 让不同歌曲音量接近,不会削波")
+                    hint: qsTr("按 ReplayGain 让各首歌音量接近")
                     Segmented {
                         options: [{ t: qsTr("关闭"), v: 0 }, { t: qsTr("按曲目"), v: 1 }, { t: qsTr("按专辑"), v: 2 }]
                         value: player.replayGain
@@ -378,7 +397,7 @@ Item {
                 }
                 SettingRow {
                     label: qsTr("淡入淡出")
-                    hint: qsTr("暂停时淡出、继续时淡入,避免突然截断")
+                    hint: qsTr("暂停和继续时声音渐变,不突兀")
                     Segmented {
                         options: [{ t: qsTr("关闭"), v: 0 }, { t: qsTr("短"), v: 1 }, { t: qsTr("标准"), v: 2 }, { t: qsTr("长"), v: 3 }]
                         value: settings.fadeLevel
@@ -388,8 +407,8 @@ Item {
                 SettingRow {
                     label: qsTr("定时关闭")
                     hint: player.sleepMinutes > 0
-                          ? qsTr("还剩 %1,到点后淡出暂停").arg(Math.floor(player.sleepRemaining / 60) + ":" + String(player.sleepRemaining % 60).padStart(2, "0"))
-                          : player.sleepMinutes === -1 ? qsTr("当前歌曲播完后停止") : qsTr("到点后淡出暂停")
+                          ? qsTr("还剩 %1,到点淡出暂停").arg(Math.floor(player.sleepRemaining / 60) + ":" + String(player.sleepRemaining % 60).padStart(2, "0"))
+                          : player.sleepMinutes === -1 ? qsTr("当前这首播完就停") : qsTr("到点淡出暂停")
                     Segmented {
                         options: [{ t: qsTr("关闭"), v: 0 }, { t: "15", v: 15 }, { t: "30", v: 30 }, { t: "60", v: 60 }, { t: "90", v: 90 }, { t: qsTr("播完本首"), v: -1 }]
                         value: player.sleepMinutes
@@ -398,12 +417,12 @@ Item {
                 }
                 SettingRow {
                     label: qsTr("启动时恢复播放")
-                    hint: qsTr("打开软件时回到上次的队列和位置 (暂停状态)")
+                    hint: qsTr("打开时回到上次的队列和进度,先不出声")
                     Toggle { checked: settings.resume; onToggled: (v) => settings.resume = v }
                 }
                 SettingRow {
                     label: qsTr("播放时不睡眠")
-                    hint: qsTr("播放期间电脑不会自动睡眠,显示器照常关闭")
+                    hint: qsTr("播放期间电脑不自动睡眠,显示器照常关闭")
                     Toggle { checked: settings.keepAwake; onToggled: (v) => settings.keepAwake = v }
                 }
             }
@@ -414,7 +433,7 @@ Item {
                 order: 2
                 SettingRow {
                     label: qsTr("歌词来源")
-                    hint: qsTr("同名 .lrc 文件与歌曲内嵌歌词都有时用哪个")
+                    hint: qsTr("同名 .lrc 和内嵌歌词都有时用哪个")
                     Segmented {
                         options: [{ t: qsTr("LRC 优先"), v: 0 }, { t: qsTr("内嵌优先"), v: 1 }]
                         value: settings.lyricsSource
@@ -423,18 +442,18 @@ Item {
                 }
                 SettingRow {
                     label: qsTr("在线查找")
-                    hint: qsTr("本地没有歌词时从酷狗查找并缓存")
+                    hint: qsTr("本地没有歌词时从酷狗找,并存到本地")
                     Toggle { checked: settings.onlineLyrics; onToggled: (v) => { settings.onlineLyrics = v; player.reloadLyrics() } }
                 }
                 SettingRow {
                     label: qsTr("桌面歌词")
-                    hint: qsTr("置顶显示在桌面上,也可以按 Ctrl+D")
+                    hint: qsTr("置顶显示在桌面 · Ctrl+D")
                     Toggle { checked: settings.desktopLyrics; onToggled: (v) => settings.desktopLyrics = v }
                 }
                 SettingRow {
                     visible: settings.desktopLyrics
                     label: qsTr("锁定位置")
-                    hint: qsTr("锁定后鼠标可以穿过歌词,悬停时出现解锁按钮")
+                    hint: qsTr("鼠标可以穿过歌词,悬停时出现解锁按钮")
                     Toggle { checked: settings.lyricsLocked; onToggled: (v) => settings.lyricsLocked = v }
                 }
                 SettingRow {
@@ -449,7 +468,7 @@ Item {
                 SettingRow {
                     visible: settings.desktopLyrics
                     label: qsTr("双行显示")
-                    hint: qsTr("上下两句交替显示,有翻译时每句下面带翻译")
+                    hint: qsTr("两句交替显示,有翻译时每句带翻译")
                     Toggle { checked: settings.lyricsTwoLine; onToggled: (v) => settings.lyricsTwoLine = v }
                 }
                 SettingRow {
@@ -561,17 +580,17 @@ Item {
                 }
                 SettingRow {
                     label: qsTr("歌单去重")
-                    hint: qsTr("同一首歌的多个副本只显示音质最好的一份,不动文件")
+                    hint: qsTr("同一首歌只显示音质最好的一份,不动文件")
                     Toggle { checked: library.displayDedupe; onToggled: (v) => library.displayDedupe = v }
                 }
                 SettingRow {
                     label: qsTr("实时监控")
-                    hint: qsTr("文件夹里有新歌、删除或改名时自动更新")
+                    hint: qsTr("文件夹里有新增、删除或改名时自动更新")
                     Toggle { checked: library.watchFolders; onToggled: (v) => library.watchFolders = v }
                 }
                 SettingRow {
                     label: qsTr("扫描线程")
-                    hint: qsTr("机械硬盘建议 4,固态硬盘用自动")
+                    hint: qsTr("机械硬盘选 4,固态硬盘选自动")
                     Segmented {
                         options: [{ t: qsTr("自动"), v: 0 }, { t: "4", v: 4 }, { t: "8", v: 8 }, { t: "16", v: 16 }]
                         value: settings.scanThreads
@@ -580,12 +599,12 @@ Item {
                 }
                 SettingRow {
                     label: qsTr("CUE 分轨")
-                    hint: qsTr("整轨文件按 CUE 拆成独立曲目 · 改后需重扫")
+                    hint: qsTr("按 CUE 把整轨拆成单曲 · 改后需重扫")
                     Toggle { checked: settings.splitCue; onToggled: (v) => settings.splitCue = v }
                 }
                 SettingRow {
                     label: qsTr("旧编码标签")
-                    hint: qsTr("非 Unicode 标签乱码时切换 · 改后需重扫")
+                    hint: qsTr("老歌标签乱码时换一种 · 改后需重扫")
                     Segmented {
                         options: [{ t: qsTr("简体"), v: 936 }, { t: qsTr("繁体"), v: 950 }, { t: qsTr("日文"), v: 932 }]
                         value: settings.codePage
@@ -600,7 +619,7 @@ Item {
                 SettingRow {
                     visible: settings.needRescan
                     label: qsTr("需要重新扫描")
-                    hint: qsTr("上面的解析设置改过,重扫后才生效")
+                    hint: qsTr("上面几项改过,重扫后生效")
                     Capsule {
                         filled: true
                         text: library.scanning ? qsTr("扫描中…") : qsTr("立即重扫")
@@ -631,7 +650,7 @@ Item {
                 }
                 SettingRow {
                     label: qsTr("写回标签")
-                    hint: qsTr("NCM 转换后写入歌名、歌手和封面")
+                    hint: qsTr("NCM 转换后写入歌名、歌手和封面;同名歌词一起带过去")
                     Toggle { checked: settings.writeTags; onToggled: (v) => settings.writeTags = v }
                 }
                 SettingRow {
@@ -655,7 +674,7 @@ Item {
                 }
                 SettingRow {
                     label: qsTr("背景")
-                    hint: qsTr("没在播放时的背景;播放时会换成当前封面的模糊底图")
+                    hint: qsTr("没在播放时显示;播放时换成封面的模糊底图")
                     Segmented {
                         options: [{ t: qsTr("流动"), v: 0 }, { t: qsTr("静止"), v: 1 }, { t: qsTr("纯色"), v: 2 }]
                         value: settings.background
@@ -664,7 +683,7 @@ Item {
                 }
                 SettingRow {
                     label: qsTr("减弱动效")
-                    hint: qsTr("缩短过渡动画,停止流动背景和提示点的闪烁")
+                    hint: qsTr("缩短过渡动画,停掉流动背景和闪烁提示;歌词动画照常")
                     Toggle { checked: settings.reducedMotion; onToggled: (v) => settings.reducedMotion = v }
                 }
                 SettingRow {

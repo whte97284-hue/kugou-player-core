@@ -555,7 +555,7 @@ Item {
                 // 夹在可滚动范围内:前几句时列表停在顶端,当前句自己往下走;末尾同理
                 t = Math.max(originY - topMargin, Math.min(t, originY + contentHeight + bottomMargin - height))
                 settle.stop()
-                if (!animate || Theme.reduced || Math.abs(contentY - t) < 0.5) { contentY = t; return }
+                if (!animate || Math.abs(contentY - t) < 0.5) { contentY = t; return }
                 // 跨越很远 (拖动进度条) 时稍慢一点,相邻换句约 0.62 秒
                 settle.duration = Math.abs(contentY - t) > height * 0.6 ? 820 : 620
                 settle.to = t
@@ -630,7 +630,7 @@ Item {
                         Behavior on color { ColorAnimation { duration: 360 } }
 
                         // 当前句:未唱部分压暗,随演唱进度从左到右点亮 (交界处约 28px 柔和过渡)
-                        layer.enabled: row.current && !Theme.reduced
+                        layer.enabled: row.current
                         layer.effect: ShaderEffect {
                             readonly property real start: modelData.time
                             readonly property real span: modelData.duration > 0 ? modelData.duration : 3

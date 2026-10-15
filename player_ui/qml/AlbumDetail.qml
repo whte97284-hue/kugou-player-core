@@ -35,7 +35,7 @@ Item {
     function playInOrder() {
         if (page.isCurrentAlbum) { player.toggle(); return }
         player.shuffle = false
-        player.playAlbum(albumTracks.albumIndex, 0)
+        Nav.picked(player.pickAlbum(albumTracks.albumIndex, 0, true))
     }
     function playShuffled() {
         player.shuffle = true
@@ -60,7 +60,7 @@ Item {
         } else if (e.key === Qt.Key_Home) i = 0
         else if (e.key === Qt.Key_End) i = list.count - 1
         else if ((e.key === Qt.Key_Return || e.key === Qt.Key_Enter) && i >= 0) {
-            player.playAlbum(albumTracks.albumIndex, i)
+            Nav.picked(player.pickAlbum(albumTracks.albumIndex, i))
             return true
         } else if (e.key === Qt.Key_Menu && i >= 0 && list.currentItem) {
             const p = list.currentItem.mapToItem(null, 60, list.currentItem.height)
@@ -207,7 +207,7 @@ Item {
                 Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
                 onClicked: {
                     player.shuffle = false
-                    player.playAlbum(albumTracks.albumIndex, discHead.info.firstRow || 0)
+                    Nav.picked(player.pickAlbum(albumTracks.albumIndex, discHead.info.firstRow || 0, true))
                 }
             }
         }
@@ -487,7 +487,7 @@ Item {
             duration: model.duration
             keyFocus: ListView.isCurrentItem
             menuContext: ({ albumIndex: albumTracks.albumIndex })
-            onActivated: player.playAlbum(albumTracks.albumIndex, index)
+            onActivated: Nav.picked(player.pickAlbum(albumTracks.albumIndex, index, false, Nav.pickNow))
         }
 
         // ---- 页尾:专辑资料 + 这位歌手的其他专辑 ----

@@ -165,7 +165,7 @@ Item {
                 onClicked: {
                     if (hero.live) { player.toggle(); return }
                     player.shuffle = false
-                    player.playAlbum(hero.albumIndex, 0)
+                    Nav.picked(player.pickAlbum(hero.albumIndex, 0, true))
                 }
             }
             IconButton {
@@ -368,7 +368,7 @@ Item {
                     const ai = albumModel.albumAt(Math.floor(Math.random() * albumModel.count))
                     if (ai < 0) return
                     player.shuffle = false
-                    player.playAlbum(ai, 0)
+                    Nav.picked(player.pickAlbum(ai, 0, true))
                     Nav.toast("shuffle", qsTr("随机来一张:%1").arg(library.albumInfo(ai).title || ""))
                 }
             }

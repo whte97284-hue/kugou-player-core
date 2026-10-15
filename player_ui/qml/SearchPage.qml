@@ -30,7 +30,7 @@ Item {
         if (!hasTop) return
         if (best.kind === "artist") Nav.openArtist(best.index)
         else if (best.kind === "album") Nav.openAlbum(best.index)
-        else player.playTracks(searchModel.trackIds(), 0)
+        else Nav.picked(player.pickTracks(searchModel.trackIds(), 0))
     }
 
     Timer { id: debounce; interval: 90; onTriggered: searchModel.query = input.text }
@@ -66,8 +66,8 @@ Item {
             font.weight: Font.DemiBold
             clip: true
             onTextChanged: debounce.restart()
-            Keys.onReturnPressed: page.sel >= 0 ? player.playTracks(searchModel.trackIds(), page.sel) : page.openTop()
-            Keys.onEnterPressed: page.sel >= 0 ? player.playTracks(searchModel.trackIds(), page.sel) : page.openTop()
+            Keys.onReturnPressed: page.sel >= 0 ? Nav.picked(player.pickTracks(searchModel.trackIds(), page.sel)) : page.openTop()
+            Keys.onEnterPressed: page.sel >= 0 ? Nav.picked(player.pickTracks(searchModel.trackIds(), page.sel)) : page.openTop()
             Keys.onDownPressed: page.moveSel(1)
             Keys.onUpPressed: page.moveSel(-1)
             Keys.onEscapePressed: text.length ? (text = "") : page.back()
@@ -243,10 +243,10 @@ Item {
                         Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutBack } }
                         onClicked: {
                             const t = page.best
-                            if (t.kind === "album") player.playAlbum(t.index, 0)
+                            if (t.kind === "album") Nav.picked(player.pickAlbum(t.index, 0, true))
                             // 不写 artistTracks:那是歌手详情页正在显示的列表
-                            else if (t.kind === "artist") { player.shuffle = false; player.playTracks(library.artistTrackIds(t.index), 0, "artist:" + t.name) }
-                            else player.playTracks(searchModel.trackIds(), 0)
+                            else if (t.kind === "artist") { player.shuffle = false; Nav.picked(player.pickTracks(library.artistTrackIds(t.index), 0, "artist:" + t.name, true)) }
+                            else Nav.picked(player.pickTracks(searchModel.trackIds(), 0))
                         }
                     }
                 }
@@ -328,7 +328,7 @@ Item {
             showAlbum: true
             highlight: page.q
             keyFocus: page.sel === index
-            onActivated: player.playTracks(searchModel.trackIds(), index)
+            onActivated: Nav.picked(player.pickTracks(searchModel.trackIds(), index, "", false, Nav.pickNow))
         }
     }
 

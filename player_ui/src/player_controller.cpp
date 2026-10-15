@@ -9,6 +9,8 @@
 #include <QVariantMap>
 #include <QFile>
 #include <QFileInfo>
+#include <QDir>
+#include <QDirIterator>
 #include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -19,8 +21,10 @@
 #include <QTimer>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <mutex>
 #include <random>
+#include <unordered_set>
 #include "audio_tag_parser.hpp"
 #include "platform_io.hpp"
 #include "lyric_manager.hpp"
@@ -350,6 +354,93 @@ void PlayerController::playTracks(const QVariantList& trackIds, int start, const
     ids.reserve(trackIds.size());
     for (const QVariant& v : trackIds) ids.push_back(static_cast<uint64_t>(v.toDouble()));
     setQueue(std::move(ids), start, tag);
+}
+
+QString PlayerController::pickTracks(const QVariantList& trackIds, int start, const QString& tag, bool whole, bool now) {
+    std::vector<uint64_t> ids;
+    ids.reserve(trackIds.size());
+    for (const QVariant& v : trackIds) ids.push_back(static_cast<uint64_t>(v.toDouble()));
+    return pick(std::move(ids), start, tag, whole, now);
+}
+
+QString PlayerController::pickAlbum(int albumIndex, int startRow, bool whole, bool now) {
+    auto snap = lib_->snapshot();
+    if (albumIndex < 0 || albumIndex >= static_cast<int>(snap->albums.size())) return {};
+    std::vector<uint64_t> ids;
+    for (const TrackItem* t : snap->albums[albumIndex].tracks) ids.push_back(t->id);
+    return pick(std::move(ids), startRow, QStringLiteral("album:%1").arg(albumIndex), whole, now);
+}
+
+QString PlayerController::pick(std::vector<uint64_t> ids, int start, const QString& tag, bool whole, bool now) {
+    if (ids.empty()) return {};
+    start = std::clamp(start, 0, static_cast<int>(ids.size()) - 1);
+    const QSettings s;
+    const bool later = s.value("player/clickAction", 0).toInt() == 1; // 下一首播放
+    const bool append = s.value("player/queueMode", 0).toInt() == 1;  // 加到队列末尾
+    const bool idle = queue_.empty() || !current_ || queueIndex_ < 0 || queueIndex_ >= static_cast<int>(queue_.size());
+    // 什么都没在放,或者就是默认的「立即播放 + 换成这份列表」:与原来一样
+    if (now || idle || (!later && !append)) {
+        snap_ = lib_->snapshot();
+        setQueue(std::move(ids), start, tag);
+        return QStringLiteral("play");
+    }
+    const uint64_t cur = queue_[queueIndex_];
+    if (!later) {
+        // 立即播放 + 加到队列:队列里还没有的歌按原顺序接到末尾,然后跳到点的那首;原有队列不动
+        std::unordered_set<uint64_t> have(queue_.begin(), queue_.end());
+        std::vector<uint64_t> add;
+        for (uint64_t id : ids) if (have.insert(id).second) add.push_back(id);
+        if (!add.empty()) {
+            const int first = static_cast<int>(queue_.size());
+            queue_.insert(queue_.end(), add.begin(), add.end());
+            unshuffled_.insert(unshuffled_.end(), add.begin(), add.end());
+            queueModel_.insertAt(first, add);
+            queueEdited();
+        }
+        auto it = std::find(queue_.begin(), queue_.end(), ids[start]);
+        if (it != queue_.end() && *it != cur) openIndex(static_cast<int>(it - queue_.begin()), true);
+        return QStringLiteral("queued");
+    }
+    // 下一首播放:点的那首 (整份列表的播放键时是从它开始的整份列表) 排在正在播放的歌后面,不打断当前播放
+    std::vector<uint64_t> pickIds;
+    if (whole) {
+        pickIds.insert(pickIds.end(), ids.begin() + start, ids.end());
+        pickIds.insert(pickIds.end(), ids.begin(), ids.begin() + start);
+    } else {
+        pickIds.push_back(ids[start]);
+    }
+    pickIds.erase(std::remove(pickIds.begin(), pickIds.end(), cur), pickIds.end());
+    if (pickIds.empty()) return {};
+    if (append) {
+        // 加到队列:插到当前歌之后,队列里原有的同一首挪过来 (不重复)
+        std::unordered_set<uint64_t> moving(pickIds.begin(), pickIds.end());
+        std::vector<uint64_t> rest;
+        for (int i = 0; i < static_cast<int>(queue_.size()); ++i)
+            if (i == queueIndex_ || !moving.count(queue_[i])) rest.push_back(queue_[i]);
+        const int at = static_cast<int>(std::find(rest.begin(), rest.end(), cur) - rest.begin());
+        rest.insert(rest.begin() + at + 1, pickIds.begin(), pickIds.end());
+        for (uint64_t id : pickIds)
+            if (std::find(unshuffled_.begin(), unshuffled_.end(), id) == unshuffled_.end()) unshuffled_.push_back(id);
+        queue_ = std::move(rest);
+        queueIndex_ = at;
+    } else {
+        // 换成这份列表:当前这首播完后接着放点的那首,再按列表顺序往下 (随机模式下其余打乱);当前这首留在队首
+        std::vector<uint64_t> order;
+        order.insert(order.end(), ids.begin() + start, ids.end());
+        order.insert(order.end(), ids.begin(), ids.begin() + start);
+        order.erase(std::remove(order.begin(), order.end(), cur), order.end());
+        if (shuffle_ && order.size() > 2) std::shuffle(order.begin() + 1, order.end(), std::mt19937(std::random_device{}()));
+        snap_ = lib_->snapshot();
+        context_ = ids;
+        queueTag_ = tag;
+        unshuffled_ = ids;
+        queue_.assign(1, cur);
+        queue_.insert(queue_.end(), order.begin(), order.end());
+        queueIndex_ = 0;
+    }
+    queueContentChanged();
+    emit queueIndexChanged();
+    return QStringLiteral("next");
 }
 
 void PlayerController::playNext(double trackId) {
@@ -1028,6 +1119,38 @@ QString PlayerController::chainSummary() const {
     return parts.join(QStringLiteral("  ·  "));
 }
 
+// 同名歌词文件:与整理 / 查重同一规则,「歌名.lrc」之外也认「歌名.zh.lrc」这类 (主文件名后紧跟一个点)。
+// 找的位置依次是:音频所在目录;解密产物的加密源所在目录 (按源文件名);网易云把加密歌曲与歌词一起放在
+// 下载目录的 VipSongsDownload 子目录里,用别的工具解密到上一级时歌词留在那里,也去那里找
+static QString FindLyricFile(const QString& audioPath, const QString& sourcePath) {
+    auto lookIn = [](const QString& dir, const QString& stem) -> QString {
+        if (dir.isEmpty() || stem.isEmpty()) return {};
+        const QString exact = dir + "/" + stem + ".lrc";
+        if (QFileInfo::exists(exact)) return exact;
+        const QString upper = dir + "/" + stem + ".LRC";
+        if (QFileInfo::exists(upper)) return upper;
+        const QString low = stem.toLower() + ".";
+        QString best;
+        QDirIterator it(dir, {QStringLiteral("*.lrc"), QStringLiteral("*.LRC")}, QDir::Files);
+        while (it.hasNext()) {
+            const QString f = it.next();
+            const QString name = it.fileName().toLower();
+            if (name.size() > low.size() + 3 && name.startsWith(low) && name.endsWith(QStringLiteral(".lrc"))) {
+                if (best.isEmpty() || f.size() < best.size()) best = f;
+            }
+        }
+        return best;
+    };
+    const QFileInfo a(audioPath);
+    QString hit = lookIn(a.path(), a.completeBaseName());
+    if (hit.isEmpty() && !sourcePath.isEmpty()) {
+        const QFileInfo s(sourcePath);
+        hit = lookIn(s.path(), s.completeBaseName());
+    }
+    if (hit.isEmpty()) hit = lookIn(a.path() + QStringLiteral("/VipSongsDownload"), a.completeBaseName());
+    return hit;
+}
+
 // 歌词来源:同名 .lrc (自动识别 UTF-8 / UTF-16 / GBK) 与文件内嵌歌词 (USLT / LYRICS / ©lyr),优先级可在设置中调整;
 // 两者都没有时,在后台到本机酷狗歌词库 (.krc) 里按歌名 / 歌手严格匹配
 void PlayerController::loadLyrics() {
@@ -1035,15 +1158,12 @@ void PlayerController::loadLyrics() {
     QString text;
     if (current_) {
         auto readLrc = [this]() -> QString {
-            QFileInfo fi(Q(current_->file_path));
-            QString base = fi.path() + "/" + fi.completeBaseName();
-            for (const QString& ext : {QStringLiteral(".lrc"), QStringLiteral(".LRC")}) {
-                platform::ReadOnlyFile f;
-                if (f.Open((base + ext).toStdWString(), false) && f.Size() > 0 && f.Size() < (1 << 20)) {
-                    QByteArray raw(static_cast<int>(f.Size()), Qt::Uninitialized);
-                    f.ReadAt(0, raw.data(), static_cast<size_t>(raw.size()));
-                    return QString::fromStdWString(AudioTagParser::DecodeTextAuto(raw.toStdString()));
-                }
+            const QString path = FindLyricFile(Q(current_->file_path), Q(current_->source_path));
+            platform::ReadOnlyFile f;
+            if (!path.isEmpty() && f.Open(path.toStdWString(), false) && f.Size() > 0 && f.Size() < (1 << 20)) {
+                QByteArray raw(static_cast<int>(f.Size()), Qt::Uninitialized);
+                f.ReadAt(0, raw.data(), static_cast<size_t>(raw.size()));
+                return QString::fromStdWString(AudioTagParser::DecodeTextAuto(raw.toStdString()));
             }
             return {};
         };
@@ -1056,9 +1176,20 @@ void PlayerController::loadLyrics() {
             return QString::fromStdWString(m.lyrics);
         };
         const bool embeddedFirst = QSettings().value("player/lyricsSource", 0).toInt() == 1;
-        text = embeddedFirst ? readEmbedded() : readLrc();
-        if (text.trimmed().isEmpty()) text = embeddedFirst ? readLrc() : readEmbedded();
-        if (text.trimmed().isEmpty()) loadKugouLyrics();
+        // 只有 JSON 署名行 (网易云纯 JSON 歌词:只有作词 / 作曲,没有一句正文) 不算有歌词,继续找别的来源
+        auto hasBody = [](const QString& t) {
+            for (const QString& l : t.split(QRegularExpression(QStringLiteral("[\\r\\n]+")))) {
+                const QString b = l.trimmed();
+                if (!b.isEmpty() && !b.startsWith(QLatin1Char('{'))) return true;
+            }
+            return false;
+        };
+        const QString first = embeddedFirst ? readEmbedded() : readLrc();
+        text = first;
+        if (!hasBody(text)) text = embeddedFirst ? readLrc() : readEmbedded();
+        if (!hasBody(text)) text = hasBody(first) ? first : QString();
+        // 两处都只有署名或为空:去酷狗歌词库 / 在线找;找不到时先显示署名行
+        if (!hasBody(text)) { if (text.isEmpty()) text = first; loadKugouLyrics(); }
     }
     applyLyricsText(text, true);
 }
@@ -1118,6 +1249,7 @@ void PlayerController::applyLyricsText(const QString& text, bool wholeFileTimeli
         if (om.hasMatch()) offset = om.captured(1).toLongLong();
         struct Line { qint64 time; QString text; qint64 duration; QString translation; };
         std::vector<Line> lines;
+        std::vector<Line> jsonLines;
         QStringList plain;
         for (const QString& line : text.split(QRegularExpression(QStringLiteral("[\\r\\n]+")))) {
             std::vector<qint64> times;
@@ -1133,10 +1265,27 @@ void PlayerController::applyLyricsText(const QString& text, bool wholeFileTimeli
             QString body = line.mid(pos).trimmed();
             if (body.isEmpty()) continue;
             if (times.empty()) {
+                // 网易云歌词里的 JSON 行 ({"t":毫秒,"c":[{"tx":"作词: "},{"tx":"某某"}]}):取出文字按时间显示,
+                // 不能当成纯文本歌词把整串 JSON 露出来
+                if (body.startsWith(QLatin1Char('{'))) {
+                    const QJsonObject o = QJsonDocument::fromJson(body.toUtf8()).object();
+                    QString tx;
+                    for (const QJsonValue& c : o.value(QStringLiteral("c")).toArray()) tx += c.toObject().value(QStringLiteral("tx")).toString();
+                    tx = tx.trimmed();
+                    if (!tx.isEmpty() && o.contains(QStringLiteral("t"))) jsonLines.push_back({qint64(o.value(QStringLiteral("t")).toDouble()), tx, -1, QString()});
+                    continue;
+                }
                 if (!metaRe.match(body).hasMatch()) plain << body;
                 continue;
             }
             for (qint64 t : times) lines.push_back({t - offset, body, durations.value(t, -1), translations.value(t)});
+        }
+        // JSON 行 (作词 / 作曲等) 只补在第一句正式歌词之前,时间戳与正式歌词撞上时不会被当成翻译并进去
+        if (!jsonLines.empty()) {
+            qint64 first = std::numeric_limits<qint64>::max();
+            for (const Line& l : lines) first = std::min(first, l.time);
+            for (const Line& l : jsonLines)
+                if (lines.empty() || l.time < first) lines.push_back(l);
         }
         if (!lines.empty()) {
             lyricsSynced_ = true;

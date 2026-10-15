@@ -105,7 +105,7 @@ Item {
                         const ids = playlists.trackIdsOf(modelData.id)
                         if (!ids.length) return
                         player.shuffle = false
-                        player.playTracks(ids, 0, "playlist:" + modelData.id)
+                        Nav.picked(player.pickTracks(ids, 0, "playlist:" + modelData.id, true))
                     }
                 }
             }

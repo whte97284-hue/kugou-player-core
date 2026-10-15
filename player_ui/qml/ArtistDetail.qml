@@ -28,12 +28,13 @@ Item {
     function play(shuffled) {
         if (artistTracks.count === 0) return
         player.shuffle = shuffled
-        player.playTracks(artistTracks.trackIds(), shuffled ? Math.floor(Math.random() * artistTracks.count) : 0, queueTag)
+        shuffled ? player.playTracks(artistTracks.trackIds(), Math.floor(Math.random() * artistTracks.count), queueTag)
+                 : Nav.picked(player.pickTracks(artistTracks.trackIds(), 0, queueTag, true))
     }
     function playOrToggle() { if (isCurrent) player.toggle(); else play(false) }
     function keyNav(e) {
         return Nav.listKeys(list, e, isCurrent ? artistTracks.rowOfTrack(player.trackId) : -1, bottomInset - 20,
-                            (i) => player.playTracks(artistTracks.trackIds(), i, queueTag),
+                            (i) => Nav.picked(player.pickTracks(artistTracks.trackIds(), i, queueTag)),
                             (i, x, y) => { const it = list.currentItem; if (it) Nav.trackMenu(it.trackId, x, y, it.menuCtx()) })
     }
     Connections {
@@ -239,7 +240,7 @@ Item {
             cover: model.cover
             showAlbum: true
             keyFocus: ListView.isCurrentItem
-            onActivated: player.playTracks(artistTracks.trackIds(), index, page.queueTag)
+            onActivated: Nav.picked(player.pickTracks(artistTracks.trackIds(), index, page.queueTag, false, Nav.pickNow))
         }
     }
 

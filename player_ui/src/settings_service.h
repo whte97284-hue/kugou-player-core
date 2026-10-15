@@ -19,6 +19,8 @@ class SettingsService : public QObject {
     Q_PROPERTY(bool keepAwake READ keepAwake WRITE setKeepAwake NOTIFY changed) // 播放时不让电脑自动睡眠
     Q_PROPERTY(bool resume READ resume WRITE setResume NOTIFY changed)      // 启动时恢复上次的队列与位置
     Q_PROPERTY(int lyricsSource READ lyricsSource WRITE setLyricsSource NOTIFY changed) // 0 .lrc 优先 / 1 内嵌优先
+    Q_PROPERTY(int clickAction READ clickAction WRITE setClickAction NOTIFY changed) // 在列表里点歌:0 立即播放 / 1 下一首播放
+    Q_PROPERTY(int queueMode READ queueMode WRITE setQueueMode NOTIFY changed)       // 点歌时播放队列:0 换成这份列表 / 1 加到队列
     // ---- 桌面歌词 ----
     Q_PROPERTY(bool desktopLyrics READ desktopLyrics WRITE setDesktopLyrics NOTIFY changed)
     Q_PROPERTY(bool lyricsLocked READ lyricsLocked WRITE setLyricsLocked NOTIFY changed)   // 锁定后鼠标穿透
@@ -68,6 +70,10 @@ public:
     void setResume(bool v) { put("player/resume", v); }
     int lyricsSource() const { return get("player/lyricsSource", 0).toInt(); }
     void setLyricsSource(int v) { put("player/lyricsSource", v); }
+    int clickAction() const { return get("player/clickAction", 0).toInt(); }
+    void setClickAction(int v) { put("player/clickAction", v); }
+    int queueMode() const { return get("player/queueMode", 0).toInt(); }
+    void setQueueMode(int v) { put("player/queueMode", v); }
 
     bool desktopLyrics() const { return get("lyrics/desktop", false).toBool(); }
     void setDesktopLyrics(bool v) { put("lyrics/desktop", v); }

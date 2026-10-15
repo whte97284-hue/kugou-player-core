@@ -244,7 +244,7 @@ Item {
                 onOpen: wall.openAlbum(model.albumIndex, cardItem.coverItem)
                 onPlay: {
                     player.shuffle = false
-                    player.playAlbum(model.albumIndex, 0)
+                    Nav.picked(player.pickAlbum(model.albumIndex, 0, true))
                 }
             }
         }

@@ -18,7 +18,8 @@ Item {
     function playAll(shuffled) {
         if (source.count === 0) return
         player.shuffle = shuffled
-        player.playTracks(source.trackIds(), shuffled ? Math.floor(Math.random() * source.count) : 0, queueTag)
+        shuffled ? player.playTracks(source.trackIds(), Math.floor(Math.random() * source.count), queueTag)
+                 : Nav.picked(player.pickTracks(source.trackIds(), 0, queueTag, true))
     }
     function openMenu(item, px, py) {
         const p = item.mapToItem(null, px, py)
@@ -38,7 +39,7 @@ Item {
     }
     function keyNav(e) {
         return Nav.listKeys(list, e, isCurrent ? source.rowOfTrack(player.trackId) : -1, bottomInset - 20,
-                            (i) => player.playTracks(source.trackIds(), i, queueTag),
+                            (i) => Nav.picked(player.pickTracks(source.trackIds(), i, queueTag)),
                             (i, x, y) => { const it = list.currentItem; if (it) Nav.trackMenu(it.trackId, x, y, it.menuCtx()) })
     }
     readonly property var sortNames: [qsTr("按标题"), qsTr("按歌手"), qsTr("按专辑"), qsTr("最近添加"), qsTr("按时长"), qsTr("按音质")]
@@ -228,7 +229,7 @@ Item {
             albumIndex: model.albumIndex
             showAlbum: true
             keyFocus: ListView.isCurrentItem
-            onActivated: player.playTracks(page.source.trackIds(), index, page.queueTag)
+            onActivated: Nav.picked(player.pickTracks(page.source.trackIds(), index, page.queueTag, false, Nav.pickNow))
         }
 
         onContentYChanged: syncLetter.restart()

@@ -48,13 +48,14 @@ Item {
     function play(shuffled) {
         if (playlistTracks.count === 0) return
         player.shuffle = shuffled
-        player.playTracks(playlistTracks.trackIds(), shuffled ? Math.floor(Math.random() * playlistTracks.count) : 0, queueTag)
+        shuffled ? player.playTracks(playlistTracks.trackIds(), Math.floor(Math.random() * playlistTracks.count), queueTag)
+                 : Nav.picked(player.pickTracks(playlistTracks.trackIds(), 0, queueTag, true))
     }
     function playOrToggle() { if (isCurrent) player.toggle(); else play(false) }
     function keyNav(e) {
         if (list.dragFrom >= 0) return false
         return Nav.listKeys(list, e, isCurrent ? playlistTracks.rowOfTrack(player.trackId) : -1, bottomInset - 20,
-                            (i) => player.playTracks(playlistTracks.trackIds(), i, queueTag),
+                            (i) => Nav.picked(player.pickTracks(playlistTracks.trackIds(), i, queueTag)),
                             (i, x, y) => { const it = list.currentItem; if (it) Nav.trackMenu(it.row.trackId, x, y, it.row.menuCtx()) })
     }
     Connections {
@@ -302,7 +303,7 @@ Item {
                 showAlbum: true
                 keyFocus: rowWrap.ListView.isCurrentItem && list.dragFrom < 0
                 menuContext: ({ playlistId: page.playlistId })
-                onActivated: player.playTracks(playlistTracks.trackIds(), index, page.queueTag)
+                onActivated: Nav.picked(player.pickTracks(playlistTracks.trackIds(), index, page.queueTag, false, Nav.pickNow))
             }
             Icon {
                 x: -26

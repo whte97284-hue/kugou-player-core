@@ -11,6 +11,13 @@ QtObject {
     // ctx: { playlistId } 等上下文 (在歌单中时菜单多出「从歌单移除」)
     signal trackMenu(real trackId, real x, real y, var ctx)
     signal toast(string icon, string text)
+    // 列表点歌 (player.pickTracks / pickAlbum) 的结果:没有立即播放时提示一下歌去了哪里
+    // 右键菜单的「播放」走同一条点歌路径时置为 true:菜单的播放总是立即播放,不受点歌设置影响
+    property bool pickNow: false
+    function picked(result) {
+        if (result === "next") toast("next-up", qsTr("下一首播放"))
+        else if (result === "queued") toast("queue", qsTr("已加到播放队列"))
+    }
     // 带操作按钮的提示 (如清空播放队列后的「撤销」):点按钮执行 fn
     signal toastAction(string text, string actionText, var fn)
     // 看封面大图 (专辑详情点封面)

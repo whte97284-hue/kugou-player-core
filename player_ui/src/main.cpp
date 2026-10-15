@@ -1,3 +1,5 @@
+#include <QSettings>
+#include <QAbstractItemModel>
 #include <QDir>
 #include <cmath>
 #include <QGuiApplication>
@@ -67,6 +69,32 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         steps->push_back({"o6_dedupe", [tools, call] { call("automationGo", QStringLiteral("dedupe")); tools()->findDuplicates(); }, 6000});
         steps->push_back({"o7_applied", [tools] { tools()->applyDedupe(1); }, 6000});
         steps->push_back({"o8_play_after", [&player] { player.playAlbum(1, 0); player.next(); }, 2000});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_PICK")) {
+        // 点歌设置的四种组合 + 右键菜单的「播放」(now) 不受设置影响;歌词查找与网易云 JSON 行
+        auto dump = [&player](const char* tag) {
+            auto* m = qobject_cast<QAbstractItemModel*>(player.queueModel());
+            QStringList t;
+            for (int i = 0; i < m->rowCount() && i < 14; ++i) t << m->index(i, 0).data(Qt::UserRole + 2).toString();
+            qInfo().noquote() << "qml PICK" << tag << "pos" << player.queuePosition() << "now" << player.title() << "|" << t.join(" / ");
+        };
+        auto setMode = [](int click, int queue) { QSettings().setValue("player/clickAction", click); QSettings().setValue("player/queueMode", queue); };
+        auto lyr = [&player](const char* tag) {
+            QStringList t;
+            const QVariantList l = player.lyrics();
+            for (int i = 0; i < l.size() && i < 4; ++i) t << QString::number(l[i].toMap().value("time").toDouble()) + ":" + l[i].toMap().value("text").toString();
+            qInfo().noquote() << "qml LYR" << tag << player.title() << "n" << l.size() << "|" << t.join(" / ");
+        };
+        steps->push_back({"p00", [&player, setMode] { setMode(0, 0); player.playAlbum(0, 0); }, 900});
+        steps->push_back({"p01_now_append", [&player, setMode, dump] { setMode(0, 1); qInfo() << "qml PICK r" << player.pickAlbum(1, 2); dump("now+append"); }, 600});
+        steps->push_back({"p02_next_append", [&player, setMode, dump] { setMode(0, 0); player.playAlbum(0, 0); setMode(1, 1); qInfo() << "qml PICK r" << player.pickAlbum(1, 2); dump("next+append"); }, 600});
+        steps->push_back({"p03_next_append_whole", [&player, dump] { qInfo() << "qml PICK r" << player.pickAlbum(2, 1, true); dump("next+append whole"); }, 600});
+        steps->push_back({"p04_next_replace", [&player, setMode, dump] { setMode(0, 0); player.playAlbum(0, 0); setMode(1, 0); qInfo() << "qml PICK r" << player.pickAlbum(1, 2); dump("next+replace"); }, 600});
+        steps->push_back({"p05_menu_now", [&player, dump] { qInfo() << "qml PICK r" << player.pickAlbum(1, 3, false, true); dump("menu now"); }, 600});
+        steps->push_back({"p06_reset", [&player, setMode, call] { setMode(0, 0); call("automationPlayTitle", QStringLiteral("叶惠美")); }, 1200});
+        steps->push_back({"p07_json_vip", [&player, lyr] { player.next(); player.next(); }, 1500});
+        steps->push_back({"p08_pure_json", [&player, lyr] { lyr("vip"); player.next(); player.next(); }, 1500});
+        steps->push_back({"p09_zh", [&player, lyr, call] { lyr("purejson"); call("automationPlayTitle", QStringLiteral("THE BOOK")); }, 1500});
+        steps->push_back({"p10_done", [&player, lyr] { lyr("zh"); }, 300});
     } else if (qEnvironmentVariableIsSet("KP_TEST_FLIGHT")) {
         // 打开 / 收起播放页的过程:封面从底栏黑胶飞出、投影与内容的出场时机
         steps->push_back({"f00_playing", [call] { call("automationPlayTitle", QStringLiteral("async")); }, 1800});

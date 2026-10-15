@@ -167,6 +167,12 @@ public:
     // 播放任意曲目列表 (歌曲页 / 歌手 / 歌单 / 搜索结果);tag 标明来源 (见 queueTag)
     Q_INVOKABLE void playTracks(const QVariantList& trackIds, int start = 0, const QString& tag = QString());
     Q_INVOKABLE void playNext(double trackId);
+    // 在列表里点歌 / 点列表的播放键:按设置「点歌时」(立即播放 / 下一首播放) 与「播放队列」(换成这份列表 / 加到队列末尾) 处理。
+    // whole = 点的是整份列表的播放键 (下一首播放时插入整份列表,而不只是一首)。
+    // now = 忽略设置,立即播放并换成这份列表 (右键菜单的「播放」)。
+    // 返回实际做了什么,界面据此提示:"play" 立即播放 / "next" 排到下一首 / "queued" 加到队列后播放 / "" 没有变化
+    Q_INVOKABLE QString pickTracks(const QVariantList& trackIds, int start = 0, const QString& tag = QString(), bool whole = false, bool now = false);
+    Q_INVOKABLE QString pickAlbum(int albumIndex, int startRow = 0, bool whole = false, bool now = false);
     // 一组曲目整体插到当前歌曲之后 (保持原顺序)
     Q_INVOKABLE void playNextTracks(const QVariantList& trackIds);
     Q_INVOKABLE void enqueue(const QVariantList& trackIds);
@@ -217,6 +223,7 @@ private:
     QHash<QString, QString> pendingRemap_;
     bool openIndex(int index, bool autoPlay);
     void setQueue(std::vector<uint64_t> ids, int start, const QString& tag);
+    QString pick(std::vector<uint64_t> ids, int start, const QString& tag, bool whole, bool now);
     // 专辑下标随重扫变化:按队列首曲在当前快照里重新找回 album: 标签
     void reresolveAlbumTag();
     void queueContentChanged();

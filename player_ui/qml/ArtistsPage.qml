@@ -140,7 +140,7 @@ Item {
                     onClicked: {
                         if (cell.isQueue) { player.toggle(); return }
                         player.shuffle = false
-                        player.playTracks(library.artistTrackIds(model.artistIndex), 0, "artist:" + model.name)
+                        Nav.picked(player.pickTracks(library.artistTrackIds(model.artistIndex), 0, "artist:" + model.name, true))
                     }
                 }
             }
