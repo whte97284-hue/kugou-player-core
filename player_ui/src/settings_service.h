@@ -4,6 +4,7 @@
 #include <QSettings>
 #include <QString>
 #include <QVariantList>
+#include <algorithm>
 
 class LibraryService;
 
@@ -39,6 +40,7 @@ class SettingsService : public QObject {
     Q_PROPERTY(QVariantList accentPresets READ accentPresets CONSTANT)
     Q_PROPERTY(int background READ background WRITE setBackground NOTIFY changed) // 0 流动 / 1 静止 / 2 纯色
     Q_PROPERTY(bool reducedMotion READ reducedMotion WRITE setReducedMotion NOTIFY changed)
+    Q_PROPERTY(int albumCell READ albumCell WRITE setAlbumCell NOTIFY changed) // 专辑墙封面基准宽度 (Ctrl + 滚轮调整)
     Q_PROPERTY(double uiScale READ uiScale WRITE setUiScale NOTIFY changed)
     Q_PROPERTY(bool restartNeeded READ restartNeeded NOTIFY changed)
     // ---- 存储 ----
@@ -100,6 +102,8 @@ public:
     void setBackground(int v) { put("ui/background", v); }
     bool reducedMotion() const { return get("ui/reducedMotion", false).toBool(); }
     void setReducedMotion(bool v) { put("ui/reducedMotion", v); }
+    int albumCell() const { return std::clamp(get("ui/albumCell", 176).toInt(), 128, 272); }
+    void setAlbumCell(int v) { put("ui/albumCell", std::clamp(v, 128, 272)); }
     double uiScale() const { return get("ui/scale", 1.0).toDouble(); }
     void setUiScale(double v);
     bool restartNeeded() const { return uiScale() != startScale_; }

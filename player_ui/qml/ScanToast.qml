@@ -24,7 +24,7 @@ Rectangle {
     Text {
         id: label
         anchors.centerIn: parent
-        // 扫描中:已识别 / 总数;完成:曲目数 (纯数字,配合左侧状态点)
+        // 扫描中:已识别 / 总数;完成:曲目数
         text: library.scanning ? (library.scanTotal > 0 ? qsTr("扫描 %1 / %2").arg(library.scanDone).arg(library.scanTotal) : qsTr("扫描中"))
                                : qsTr("%1 首").arg(library.trackCount.toLocaleString(Qt.locale(), "f", 0))
         color: Theme.textSecondary

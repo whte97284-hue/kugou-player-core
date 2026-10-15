@@ -27,7 +27,7 @@ Item {
         id: card
         x: Theme.navWidth + 12
         // 从侧栏底部的文件夹按钮旁弹出
-        y: lp.height - height - 76 - 14 // 停在底部播放条上方
+        y: lp.height - height - Theme.islandHeight - 14 // 停在底部播放条上方
         width: 540
         height: body.implicitHeight + 36
         radius: Theme.radiusL

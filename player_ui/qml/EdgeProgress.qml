@@ -15,11 +15,7 @@ Item {
     readonly property real ratio: duration > 0 ? Math.min(1, Math.max(0, (dragging ? dragValue : position) / duration)) : 0
     readonly property bool active: mouse.containsMouse || dragging
 
-    function fmt(s) {
-        s = Math.max(0, Math.floor(s))
-        const m = Math.floor(s / 60), r = s % 60
-        return m + ":" + (r < 10 ? "0" : "") + r
-    }
+    function fmt(s) { return Theme.formatTime(s) }
 
     Rectangle {
         id: track

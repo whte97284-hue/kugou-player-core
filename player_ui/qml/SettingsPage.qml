@@ -7,6 +7,8 @@ import PlayerUi
 // 改动即时生效,没有「保存」;需要重扫 / 重启才生效的在说明里写明
 Item {
     id: page
+    // 内容滚到窗口按钮下面了:Main 据此在顶端铺一条磨砂条
+    readonly property bool scrolled: flick.contentY - flick.originY > 8
     property int bottomInset: 140
     readonly property int pad: width > 1400 ? 56 : 40
     readonly property real contentW: Math.min(980, width - pad * 2)
@@ -426,7 +428,7 @@ Item {
                 }
                 SettingRow {
                     label: qsTr("桌面歌词")
-                    hint: qsTr("置顶显示在桌面上,也可以按 Ctrl D")
+                    hint: qsTr("置顶显示在桌面上,也可以按 Ctrl+D")
                     Toggle { checked: settings.desktopLyrics; onToggled: (v) => settings.desktopLyrics = v }
                 }
                 SettingRow {
@@ -698,7 +700,7 @@ Item {
                     id: histRow
                     property bool cleared: false
                     label: qsTr("播放记录")
-                    hint: cleared ? qsTr("已清空") : qsTr("「最近播放」与播放次数")
+                    hint: cleared ? qsTr("已清空") : qsTr("「最近播放」列表")
                     Capsule { text: qsTr("清空"); onClicked: { playlists.clearHistory(); histRow.cleared = true } }
                 }
             }
@@ -714,9 +716,14 @@ Item {
                     topPadding: 6
                     bottomPadding: 6
                     readonly property var list: [
-                        { k: qsTr("空格"), t: qsTr("播放 / 暂停") }, { k: "Ctrl K", t: qsTr("搜索") },
-                        { k: "Ctrl ←  →", t: qsTr("上一首 / 下一首") }, { k: "Ctrl D", t: qsTr("桌面歌词") },
-                        { k: "Alt ←", t: qsTr("返回") }, { k: qsTr("直接打字"), t: qsTr("开始搜索") }
+                        { k: qsTr("空格"), t: qsTr("播放 / 暂停") }, { k: "Ctrl+K", t: qsTr("搜索") },
+                        { k: "Ctrl+←  →", t: qsTr("上一首 / 下一首") }, { k: "← →", t: qsTr("快退 / 快进 5 秒") },
+                        { k: "Shift+←  →", t: qsTr("快退 / 快进 30 秒") }, { k: "Ctrl+↑  ↓", t: qsTr("音量") },
+                        { k: "Ctrl+M", t: qsTr("静音") }, { k: "Ctrl+L", t: qsTr("收藏当前歌曲") },
+                        { k: "Ctrl+P", t: qsTr("播放页") }, { k: "Ctrl+Q", t: qsTr("播放队列") },
+                        { k: "Ctrl+I", t: qsTr("歌曲信息") }, { k: "Ctrl+D", t: qsTr("桌面歌词") },
+                        { k: "Esc", t: qsTr("关闭 / 返回") }, { k: "Alt+←", t: qsTr("返回") },
+                        { k: "PgUp  PgDn", t: qsTr("专辑墙翻页") }, { k: qsTr("直接打字"), t: qsTr("开始搜索") }
                     ]
                     Repeater {
                         model: keys.list

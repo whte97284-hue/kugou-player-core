@@ -30,7 +30,9 @@ struct AlbumInfo {
     bool dsd = false;
     bool cue = false;
     QString dsdCodec;
-    QString sortKey; // 拼音排序键
+    QString sortKey;       // 拼音排序键
+    QString artistSortKey; // 按歌手排序用 (群星排最后)
+    uint64_t addedTime = 0; // 最新一首的入库时间 (文件修改时间)
 };
 
 // 歌手:由曲目歌手字段拆分 (A / B、A、B、feat.) 聚合
@@ -150,8 +152,8 @@ public:
     void carryScanCache(const std::vector<std::pair<std::wstring, std::wstring>>& moves, bool keepSource);
     Q_INVOKABLE void cancelScan();
     Q_INVOKABLE QString qualityBadge(int albumIndex) const;
-    // 今日推荐:有封面的 Hi-Res 专辑优先,按日期稳定挑选 (同一天内不变)
-    Q_INVOKABLE int featuredAlbum() const;
+    // 今日推荐:有封面的 Hi-Res 专辑优先;同一天内只要那张专辑还在就不变,skip 依次换下一张
+    Q_INVOKABLE int featuredAlbum(int skip = 0) const;
     // 专辑摘要:title / artist / year / cover / badge / summary / trackCount
     Q_INVOKABLE QVariantMap albumInfo(int albumIndex) const;
     // 歌手摘要:name / cover / summary / albumCount / trackCount
@@ -163,6 +165,8 @@ public:
     Q_INVOKABLE int albumOfTrack(double trackId) const;
     // 专辑的全部曲目 ID (按曲序);专辑墙上的右键菜单等没有绑定曲目列表的地方用
     Q_INVOKABLE QVariantList albumTrackIds(int albumIndex) const;
+    // 歌手的全部曲目 ID (歌手墙 / 搜索的播放键、右键菜单用,不动歌手详情的列表模型)
+    Q_INVOKABLE QVariantList artistTrackIds(int artistIndex) const;
     Q_INVOKABLE int artistOfTrack(double trackId) const;
     // 曲目详情 (右键「歌曲信息」):标签、文件路径、格式、采样率、码率、大小等;找不到返回空表
     Q_INVOKABLE QVariantMap trackInfo(double trackId) const;

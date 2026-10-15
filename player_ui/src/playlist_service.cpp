@@ -118,7 +118,8 @@ QVariantMap PlaylistService::info(const QString& id) const {
     m["count"] = static_cast<int>(tracks.size());
     m["duration"] = LibraryService::formatDuration(ms);
     m["covers"] = covers;
-    m["summary"] = tr("%1 首  ·  %2").arg(tracks.size()).arg(LibraryService::formatDuration(ms));
+    m["summary"] = tracks.empty() ? tr("还没有歌曲")
+                                  : tr("%1 首  ·  %2").arg(tracks.size()).arg(LibraryService::formatLongDuration(ms));
     return m;
 }
 

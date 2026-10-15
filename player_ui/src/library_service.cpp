@@ -4,6 +4,7 @@
 #include <QClipboard>
 #include <QCoreApplication>
 #include <QDate>
+#include <QDateTime>
 #include <QDir>
 #include <unordered_set>
 #include <QElapsedTimer>
@@ -692,6 +693,7 @@ std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<Mus
             if (!a.coverTrack && (t->has_cover || !t->external_cover_path.empty())) a.coverTrack = t;
             if (a.year.isEmpty() && !t->year.empty()) a.year = Q(t->year).left(4);
             artists[!t->album_artist.empty() ? t->album_artist : t->artist]++;
+            a.addedTime = std::max(a.addedTime, t->added_time);
         }
         if (artists.size() == 1) a.artist = Q(artists.begin()->first);
         else if (artists.size() > 1) {
@@ -702,6 +704,9 @@ std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<Mus
         }
         if (!a.coverTrack && !a.tracks.empty()) a.coverTrack = a.tracks.front();
         a.sortKey = SortKeyOf(a.title.toStdWString());
+        // 群星 / 没有歌手的合辑排在按歌手排序的最后
+        a.artistSortKey = a.artist.isEmpty() || a.artist == QObject::tr("群星") ? QStringLiteral("\uffff") + a.sortKey
+                                                                                : SortKeyOf(a.artist.toStdWString());
     }
     std::sort(snap->albums.begin(), snap->albums.end(),
               [](const AlbumInfo& x, const AlbumInfo& y) { return x.sortKey < y.sortKey; });
@@ -791,6 +796,15 @@ QVariantList LibraryService::albumTrackIds(int i) const {
     return out;
 }
 
+QVariantList LibraryService::artistTrackIds(int i) const {
+    QVariantList out;
+    auto s = snapshot();
+    if (i < 0 || i >= static_cast<int>(s->artists.size())) return out;
+    out.reserve(static_cast<int>(s->artists[i].tracks.size()));
+    for (const TrackItem* t : s->artists[i].tracks) out.append(static_cast<double>(t->id));
+    return out;
+}
+
 QString LibraryService::trackQuality(const TrackItem& t) {
     if (t.codec.compare(0, 3, L"DSD") == 0) return Q(t.codec);
     if (t.is_lossless && t.sample_rate)
@@ -811,7 +825,7 @@ QString LibraryService::qualityBadge(int i) const {
     return {};
 }
 
-int LibraryService::featuredAlbum() const {
+int LibraryService::featuredAlbum(int skip) const {
     auto s = snapshot();
     const int n = static_cast<int>(s->albums.size());
     if (n == 0) return -1;
@@ -823,8 +837,14 @@ int LibraryService::featuredAlbum() const {
     }
     if (pool.empty())
         for (int i = 0; i < n; ++i) pool.push_back(i);
-    uint seed = qHash(QDate::currentDate().toJulianDay());
-    return pool[seed % pool.size()];
+    // 按「专辑名 + 歌手」和日期算出的散列排名:新增 / 删掉别的专辑不会让今天的推荐变掉
+    const size_t seed = qHash(QDate::currentDate().toJulianDay());
+    std::vector<std::pair<size_t, int>> ranked;
+    ranked.reserve(pool.size());
+    for (int i : pool) ranked.emplace_back(qHash(s->albums[i].title + QChar(0x1f) + s->albums[i].artist, seed), i);
+    const size_t k = static_cast<size_t>(std::max(0, skip)) % ranked.size();
+    std::nth_element(ranked.begin(), ranked.begin() + k, ranked.end());
+    return ranked[k].second;
 }
 
 QVariantMap LibraryService::albumInfo(int i) const {
@@ -877,7 +897,18 @@ int LibraryService::artistIndexOf(const QString& name) const {
     // 合作曲目:取第一位歌手
     std::vector<std::wstring> parts = SplitArtists(name.toStdWString());
     if (parts.size() > 1) return artistIndexOf(QString::fromStdWString(parts.front()));
-    return -1;
+    // 异体字 / 简繁写法不同 (久石让 / 久石譲):全拼相同、字数相同且只有一位时才认,同音的几位歌手不乱认
+    const std::wstring wn = name.toStdWString();
+    if (!PinyinHelper::HasPhonetic(wn)) return -1;
+    const std::string py = PinyinHelper::GetFullPinyin(wn);
+    int found = -1;
+    for (int i = 0; i < static_cast<int>(s->artists.size()); ++i) {
+        const QString& a = s->artists[i].name;
+        if (a.size() != name.size() || PinyinHelper::GetFullPinyin(a.toStdWString()) != py) continue;
+        if (found >= 0) return -1;
+        found = i;
+    }
+    return found;
 }
 
 int LibraryService::albumOfTrack(double trackId) const {
@@ -914,6 +945,20 @@ QVariantMap LibraryService::trackInfo(double trackId) const {
     m["isCue"] = t->is_cue_track;
     m["exists"] = QFileInfo::exists(path);
     m["source"] = t->source_path.empty() ? QString() : QDir::toNativeSeparators(Q(t->source_path)); // 解密产物的加密源
+    const QFileInfo fi(path);
+    m["fileName"] = fi.fileName();
+    m["modified"] = fi.exists() ? fi.lastModified().toString(QStringLiteral("yyyy-MM-dd HH:mm")) : QString();
+    // 回放增益 (dB) 与峰值 (线性,1.0 = 满刻度)
+    m["hasRgTrack"] = t->has_rg_track;
+    m["rgTrackGain"] = t->rg_track_gain;
+    m["rgTrackPeak"] = t->rg_track_peak;
+    m["hasRgAlbum"] = t->has_rg_album;
+    m["rgAlbumGain"] = t->rg_album_gain;
+    m["rgAlbumPeak"] = t->rg_album_peak;
+    // 封面来源:embedded = 内嵌;否则为同目录封面的文件名;都没有为空
+    m["cover"] = QString("image://cover/t/%1/%2").arg(generation_).arg(t->id);
+    m["coverSource"] = t->has_cover ? QStringLiteral("embedded")
+                       : t->external_cover_path.empty() ? QString() : QFileInfo(Q(t->external_cover_path)).fileName();
     return m;
 }
 

@@ -27,6 +27,7 @@ Window {
         property bool allowEmpty: false
         readonly property bool current: root.view === key && (allowEmpty || !pages.libraryEmpty)
         property bool used: false
+        readonly property bool scrolled: current && item !== null && item.scrolled === true
         onCurrentChanged: if (current) used = true
         active: used
         asynchronous: !current
@@ -49,15 +50,20 @@ Window {
     property int lastArtist: -1
     property string lastArtistName: ""
     property string lastPlaylist: ""
-    onViewChanged: trackMenu.close()
+    // 离开搜索页时把键盘焦点从 (已隐藏的) 搜索框收回:空格、方向键、直接打字照常可用
+    onViewChanged: { trackMenu.close(); if (view !== "search") typeCatcher.forceActiveFocus() }
+    // 焦点落空 (编辑框 / 弹出卡片隐去) 时回到按键捕获
+    onActiveFocusItemChanged: if (activeFocusItem === null || activeFocusItem === contentItem) Qt.callLater(root.restoreKeys)
+    function restoreKeys() { if (root.active && (root.activeFocusItem === null || root.activeFocusItem === contentItem)) typeCatcher.forceActiveFocus() }
     onDetailRefChanged: syncDetail()
     onDetailKindChanged: syncDetail()
+    // 换详情类型时 detailKind 先变、detailRef 后变:类型对不上的那一刻跳过 (歌手是下标,歌单是 id 字符串)
     function syncDetail() {
-        if (detailKind === "artist") {
+        if (detailKind === "artist" && typeof detailRef === "number") {
             lastArtist = detailRef
             lastArtistName = library.artistInfo(detailRef).name || ""
         }
-        else if (detailKind === "playlist") lastPlaylist = detailRef
+        else if (detailKind === "playlist" && typeof detailRef === "string") lastPlaylist = detailRef
     }
 
     // 重新扫描后专辑 / 歌手的下标都会变:打开着的详情页跟着换到新下标 (专辑由曲目列表模型找回),
@@ -96,7 +102,11 @@ Window {
         if (st.kind === "album") albumTracks.albumIndex = st.ref
     }
     function go(sec) {
-        if (section === sec && !detailKind.length) return
+        if (section === sec && !detailKind.length) {
+            // 已在专辑墙时再点「专辑」:回到顶部
+            if (sec === "albums") wall.scrollToTop()
+            return
+        }
         pushHistory()
         section = sec
         detailKind = ""
@@ -133,16 +143,29 @@ Window {
         })
     }
     function openPlaylist(id) { if (id && id.length) openDetail("playlist", id) }
+    function closeOverlays() { nowPlaying.shown = false; queuePanel.shown = false; chain.shown = false }
+    // 静音 / 恢复:记住静音前的音量 (播放条与沉浸页共用)
+    property real lastVolume: 0.85
+    function toggleMute() {
+        if (player.volume > 0.01) { lastVolume = player.volume; player.volume = 0 }
+        else player.volume = Math.max(0.05, lastVolume)
+    }
 
     Connections {
         target: Nav
-        function onOpenAlbum(i) { if (i >= 0) root.openAlbum(i, null) }
-        function onOpenArtist(i) { root.openArtist(i, null) }
-        function onOpenArtistFrom(i, item) { root.openArtist(i, item) }
-        function onOpenPlaylist(id) { root.openPlaylist(id) }
+        // 从沉浸页 / 队列抽屉里跳转:先收起它们,新页面才看得见
+        function onOpenAlbum(i) { if (i >= 0) { root.closeOverlays(); root.openAlbum(i, null) } }
+        function onOpenArtist(i) { if (i >= 0) { root.closeOverlays(); root.openArtist(i, null) } }
+        function onOpenArtistFrom(i, item) { root.closeOverlays(); root.openArtist(i, item) }
+        function onOpenPlaylist(id) { root.closeOverlays(); root.openPlaylist(id) }
+        function onToggleMute() { root.toggleMute() }
+        function onHintRight(item, text) { hoverTip.show(item, text, "right") }
         function onTrackMenu(id, x, y, ctx) { trackMenu.open(id, x, y, ctx) }
         function onViewCover(src, t, s) { coverViewer.open(src, t, s) }
+        function onHint(item, text) { hoverTip.show(item, text) }
+        function onUnhint(item) { hoverTip.hide(item) }
         function onToast(icon, text) { toast.show(icon, text) }
+        function onToastAction(text, actionText, fn) { toast.showAction(text, actionText, fn) }
     }
 
     // ======================= 场景层 (同时作为毛玻璃的采样源) =======================
@@ -280,7 +303,8 @@ Window {
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             anchors.bottomMargin: island.height
-            current: root.section
+            // 整理曲库 / 查找重复从「音乐文件夹」面板进入:侧栏标在音乐文件夹上
+            current: ["organize", "dedupe"].indexOf(root.section) >= 0 ? "folder" : root.section
             onNavigate: (target) => {
                 if (target === "folder") library.folders.length ? libraryPanel.open() : folderDialog.open()
                 else if (target === "search") root.openSearch("")
@@ -514,10 +538,39 @@ Window {
         anchors.right: parent.right
         height: 56
         z: 9
+        opacity: 1 - topBand.opacity
         gradient: Gradient {
             GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, 0.38) }
             GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0) }
         }
+    }
+    // 内容滚到窗口按钮下面时:顶端 44px 换成与播放条同材质的磨砂条 (对齐的模糊封面 + 压暗 + 发丝线),
+    // 文字不会和最小化 / 关闭按钮叠在一起。专辑详情与沉浸页有自己的顶栏
+    readonly property bool topCovered: !nowPlaying.shown && root.view !== "album"
+        && (root.view === "albums" ? wall.active && wall.scrolled
+            : [artistsLoader, songsLoader, playlistsLoader, settingsLoader, artistLoader, playlistLoader].some(l => l.scrolled))
+    Item {
+        id: topBand
+        x: Theme.navWidth
+        width: root.width - Theme.navWidth
+        height: 44
+        z: 9
+        clip: true
+        opacity: root.topCovered ? 1 : 0
+        visible: opacity > 0
+        Behavior on opacity { NumberAnimation { duration: Theme.normal } }
+        Rectangle { anchors.fill: parent; color: Theme.base }
+        Backdrop {
+            x: -Theme.navWidth
+            y: 0
+            width: root.width
+            height: root.height
+            source: player.cover
+            solid: false
+            opacity: player.hasTrack ? 1 : 0
+        }
+        Rectangle { anchors.fill: parent; color: Qt.rgba(0.05, 0.045, 0.04, player.hasTrack ? 0.66 : 0.95) }
+        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.hairline }
     }
 
     // ======================= 隐形标题栏 =======================
@@ -530,7 +583,7 @@ Window {
         z: 10
     }
 
-    // ======================= 播放列表抽屉 =======================
+    // ======================= 播放队列抽屉 =======================
     QueuePanel {
         id: queuePanel
         z: 19
@@ -589,39 +642,19 @@ Window {
     ScanToast {
         // 首次导入时由引导页展示完整进度,不重复显示
         enabled: library.albumCount > 0
-        anchors.horizontalCenter: island.horizontalCenter
-        y: 18
+        // 沉浸页顶部正中是音质胶囊、右栏顶上是「接下来播放」:扫描提示改到右栏底部,轻提示的上方
+        x: nowPlaying.shown ? Math.round(nowPlaying.sideX + (nowPlaying.sideW - width) / 2) : Math.round((root.width - width) / 2)
+        y: nowPlaying.shown ? root.height - height - 80 : 18
         z: 25
     }
 
-    // 播放失败提示
-    Rectangle {
-        z: 25
-        anchors.horizontalCenter: island.horizontalCenter
-        y: island.y - height - 12
-        width: errText.implicitWidth + 32
-        height: 34
-        radius: 17
-        color: Qt.rgba(0.25, 0.1, 0.08, 0.92)
-        opacity: errTimer.running ? 1 : 0
-        visible: opacity > 0
-        Behavior on opacity { NumberAnimation { duration: Theme.normal } }
-        Text {
-            id: errText
-            anchors.centerIn: parent
-            text: player.errorText
-            color: "#ffd2c4"
-            font.family: Theme.fontFamily
-            font.pixelSize: 13
-        }
-        Timer { id: errTimer; interval: 3500 }
-        Connections { target: player; function onErrorChanged() { if (player.errorText.length) errTimer.restart() } }
-    }
+    // 播放失败:用同一个轻提示 (句首警示色圆点),不另起一套配色和位置
+    Connections { target: player; function onErrorChanged() { if (player.errorText.length) toast.showWarn(player.errorText) } }
 
     DecryptToast {
         z: 25
-        anchors.horizontalCenter: island.horizontalCenter
-        y: library.scanning ? 64 : 18
+        x: nowPlaying.shown ? Math.round(nowPlaying.sideX + (nowPlaying.sideW - width) / 2) : Math.round((root.width - width) / 2)
+        y: nowPlaying.shown ? root.height - height - 80 - (library.scanning ? 46 : 0) : 18 + (library.scanning ? 46 : 0)
         Behavior on y { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
     }
 
@@ -644,17 +677,24 @@ Window {
     TrackInfo {
         id: trackInfo
         z: 44
+        onShownChanged: if (!shown) typeCatcher.forceActiveFocus()
     }
     CoverViewer {
         id: coverViewer
         z: 45
     }
 
+    HoverTip {
+        id: hoverTip
+    }
+
     Toast {
         id: toast
         z: 46
-        anchors.horizontalCenter: island.horizontalCenter
-        y: island.y - height - 16
+        // 沉浸页里播放岛隐去:提示放在右栏 (歌词区) 底部正中,不压左栏的音量条;转换提示条在时叠在它上面
+        x: nowPlaying.shown ? Math.round(nowPlaying.sideX + (nowPlaying.sideW - width) / 2) : Math.round((root.width - width) / 2)
+        y: decryptPrompt.shown && !nowPlaying.shown ? decryptPrompt.y - height - 8
+           : nowPlaying.shown ? root.height - height - 28 : island.y - height - 16
     }
 
     LibraryPanel {
@@ -712,19 +752,42 @@ Window {
     Shortcut { sequence: "Ctrl+D"; onActivated: settings.desktopLyrics = !settings.desktopLyrics }
     Shortcut { sequence: "Ctrl+K"; onActivated: root.openSearch("") }
     Shortcut { sequence: "Ctrl+F"; onActivated: root.openSearch("") }
-    Shortcut { sequence: "Space"; enabled: !root.typing; onActivated: player.toggle() }
+    Shortcut { sequence: "Space"; enabled: !root.typing && !trackMenu.shown; onActivated: player.toggle() }
     Shortcut { sequence: "Ctrl+Right"; onActivated: player.next() }
     Shortcut { sequence: "Ctrl+Left"; onActivated: player.previous() }
     Shortcut { sequence: "Alt+Left"; onActivated: root.back() }
+    // 专辑墙翻页 / 到顶 / 到底
+    readonly property bool wallKeys: root.view === "albums" && !root.typing && !trackMenu.shown && !nowPlaying.shown
+                                     && !trackInfo.shown && !libraryPanel.shown && !coverViewer.shown
+    Shortcut { sequence: "PgDown"; enabled: root.wallKeys; onActivated: wall.pageBy(1) }
+    Shortcut { sequence: "PgUp"; enabled: root.wallKeys; onActivated: wall.pageBy(-1) }
+    Shortcut { sequence: "Home"; enabled: root.wallKeys; onActivated: wall.scrollToTop() }
+    Shortcut { sequence: "End"; enabled: root.wallKeys; onActivated: wall.scrollToEnd() }
     // 方向键:快进快退 5 秒;Ctrl+上下:音量 ±5%;键盘多媒体键 (窗口在前台时)
-    Shortcut { sequence: "Right"; enabled: !root.typing; onActivated: player.seekBy(5) }
-    Shortcut { sequence: "Left"; enabled: !root.typing; onActivated: player.seekBy(-5) }
+    Shortcut { sequence: "Right"; enabled: !root.typing && !trackMenu.shown; onActivated: player.seekBy(5) }
+    Shortcut { sequence: "Left"; enabled: !root.typing && !trackMenu.shown; onActivated: player.seekBy(-5) }
+    Shortcut { sequence: "Shift+Right"; enabled: !root.typing; onActivated: player.seekBy(30) }
+    Shortcut { sequence: "Shift+Left"; enabled: !root.typing; onActivated: player.seekBy(-30) }
+    // 收藏 / 静音 / 播放页 / 播放队列 / 歌曲信息
+    Shortcut {
+        sequence: "Ctrl+L"
+        enabled: player.hasTrack
+        onActivated: {
+            playlists.toggleFavorite(player.trackId)
+            Nav.toast("heart", playlists.isFavorite(player.trackId) ? qsTr("已收藏") : qsTr("已取消收藏"))
+        }
+    }
+    Shortcut { sequence: "Ctrl+M"; onActivated: root.toggleMute() }
+    Shortcut { sequence: "Ctrl+P"; enabled: player.hasTrack; onActivated: { trackMenu.close(); nowPlaying.shown = !nowPlaying.shown } }
+    Shortcut { sequence: "Ctrl+Q"; enabled: !nowPlaying.shown; onActivated: { trackMenu.close(); queuePanel.shown = !queuePanel.shown } }
+    Shortcut { sequence: "Ctrl+I"; enabled: player.hasTrack; onActivated: { trackMenu.close(); trackInfo.shown ? trackInfo.close() : trackInfo.open(player.trackId) } }
     Shortcut { sequence: "Ctrl+Up"; onActivated: player.changeVolume(0.05) }
     Shortcut { sequence: "Ctrl+Down"; onActivated: player.changeVolume(-0.05) }
     Shortcut { sequence: "Media Play"; onActivated: player.toggle() }
     Shortcut { sequence: "Toggle Media Play/Pause"; onActivated: player.toggle() }
     Shortcut { sequence: "Media Next"; onActivated: player.next() }
     Shortcut { sequence: "Media Previous"; onActivated: player.previous() }
+    Shortcut { sequence: "Media Stop"; onActivated: if (player.playing) player.toggle() }
     Connections {
         target: player
         function onSleepFired() { Nav.toast("check", qsTr("定时关闭:已暂停播放")) }
@@ -737,6 +800,7 @@ Window {
             else if (coverViewer.shown) coverViewer.close()
             else if (trackInfo.shown) trackInfo.close()
             else if (libraryPanel.shown) libraryPanel.close()
+            else if (decryptPrompt.shown) decryptPrompt.close()
             else if (chain.shown) chain.shown = false
             else if (queuePanel.shown) queuePanel.shown = false
             else if (nowPlaying.shown) nowPlaying.shown = false
@@ -755,9 +819,20 @@ Window {
         id: typeCatcher
         focus: !root.typing
         Keys.onPressed: (e) => {
+            // 右键菜单开着:方向键 / 回车操作菜单
+            if (trackMenu.shown) { if (trackMenu.keyNav(e)) e.accepted = true; return }
+            // 沉浸页 / 歌曲信息 / 音乐文件夹面板盖住了页面:按键不再作用到下面看不见的页面
+            if (nowPlaying.shown) {
+                if (e.key === Qt.Key_Up || e.key === Qt.Key_Down) { player.changeVolume(e.key === Qt.Key_Up ? 0.05 : -0.05); e.accepted = true }
+                return
+            }
+            if (trackInfo.shown || libraryPanel.shown || coverViewer.shown) return
             if (e.modifiers & (Qt.ControlModifier | Qt.AltModifier)) return
             // 专辑详情:上下键选曲、回车播放
-            if (root.view === "album" && !trackMenu.shown && !coverViewer.shown && detail.keyNav(e)) { e.accepted = true; return }
+            // 专辑 / 歌曲 / 歌手 / 歌单的曲目列表:上下键选曲、回车播放
+            const listPage = root.view === "album" ? detail : root.view === "songs" ? songsLoader.item
+                           : root.view === "artist" ? artistLoader.item : root.view === "playlist" ? playlistLoader.item : null
+            if (listPage && typeof listPage.keyNav === "function" && listPage.keyNav(e)) { e.accepted = true; return }
             if (e.text.length === 1 && /\S/.test(e.text)) {
                 root.openSearch(e.text)
                 e.accepted = true
@@ -808,8 +883,21 @@ Window {
     }
     function automationDetailScroll(y) { detail.automationScroll(Number(y)) }
     function automationAlbumMenu() { trackMenu.open(-1, root.width - 420, 330, { albumIndex: albumTracks.albumIndex, fromDetail: true }) }
+    function automationWallSort(m) { albumModel.sortMode = m }
+    function automationWallFilter(f) { albumModel.filter = f }
+    function automationWallScroll(y) { wall.automationScroll(y) }
+    function automationWallSortMenu(on) { wall.automationSortMenu(on) }
+    function automationAlbumCell(c) { settings.albumCell = c }
+    function automationWallMenu(row) { Nav.trackMenu(-1, 520, 420, { albumIndex: albumModel.albumAt(Number(row)) }) }
     function automationViewCover(on) { if (on) coverViewer.open(albumTracks.cover, albumTracks.title, albumTracks.artist); else coverViewer.close() }
     function automationCloseMenu() { trackMenu.close() }
+    function automationQueue(on) { queuePanel.shown = !!on }
+    function automationQueueScroll(row) { queuePanel.automationScroll(row) }
+    function automationQueueMenu(row) { queuePanel.automationMenu(row) }
+    function automationClearQueue() { queuePanel.clearWithUndo() }
+    function automationNowTab(t) { nowPlaying.automationTab(t) }
+    function automationSleep(m) { player.setSleepTimer(Number(m)) }
+    function automationSongsSort(m) { songsModel.sortMode = Number(m) }
     function automationDecryptPrompt(on) { on ? decryptPrompt.open() : decryptPrompt.close() }
     function automationLibraryPanel(on) { on ? libraryPanel.open() : libraryPanel.close() }
     function automationGo(sec) { root.go(String(sec)) }

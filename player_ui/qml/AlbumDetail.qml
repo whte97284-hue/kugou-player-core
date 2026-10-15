@@ -115,6 +115,18 @@ Item {
         }
     }
 
+    // 鼠标真的移动了才取消键盘选中 (键盘翻动列表时行从静止的鼠标下经过,不算)
+    HoverHandler {
+        property point last
+        property bool seen: false
+        onPointChanged: {
+            const p = point.scenePosition
+            if (!seen || Math.abs(p.x - last.x) + Math.abs(p.y - last.y) < 3) { seen = true; last = p; return }
+            last = p
+            if (list.currentIndex >= 0) list.currentIndex = -1
+        }
+    }
+
     ListView {
         id: list
         anchors.fill: parent
@@ -476,7 +488,6 @@ Item {
             keyFocus: ListView.isCurrentItem
             menuContext: ({ albumIndex: albumTracks.albumIndex })
             onActivated: player.playAlbum(albumTracks.albumIndex, index)
-            onHoveredChanged: if (hovered && list.currentIndex >= 0) list.currentIndex = -1
         }
 
         // ---- 页尾:专辑资料 + 这位歌手的其他专辑 ----
@@ -570,130 +581,17 @@ Item {
     }
 
     // ---- 精简标题栏:头部滚出视野后从顶端浮出 ----
-    Item {
+    DetailBar {
         id: sticky
-        z: 2
-        width: page.width
-        height: 100
-        readonly property real heroBottom: list.headerItem ? list.headerItem.y + list.headerItem.height - list.contentY : 1e6
-        readonly property bool shown: heroBottom < height + 46
-        opacity: shown ? 1 : 0
-        visible: opacity > 0
-        Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
-
-        // 背景:与播放栏同一做法,铺一份与窗口背景对齐的模糊封面再压暗,像磨砂玻璃
-        Rectangle { anchors.fill: parent; color: Theme.base }
-        Item {
-            anchors.fill: parent
-            clip: true
-            Backdrop {
-                x: -Theme.navWidth
-                y: 0
-                width: page.width + Theme.navWidth
-                height: page.Window.window ? page.Window.window.height : page.height
-                source: player.cover
-                solid: false
-                opacity: player.hasTrack ? 1 : 0
-            }
-        }
-        Rectangle { anchors.fill: parent; color: Qt.rgba(0.05, 0.045, 0.04, player.hasTrack ? 0.66 : 0.97) }
-        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.hairline }
-        // 挡住下面的列表 (精简栏本身不吃滚轮,滚轮照常滚列表)
-        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: (w) => w.accepted = false }
-
-        // 顶部 44px 留给窗口按钮 (标题栏拖动区),内容放在下面一行
-        Item {
-            x: page.sidePadding
-            y: 44
-            width: page.width - page.sidePadding * 2
-            height: 56
-            IconButton {
-                id: stickyBack
-                x: -8
-                anchors.verticalCenter: parent.verticalCenter
-                width: 36; height: 36
-                icon: "back"
-                iconSize: 18
-                tip: qsTr("返回")
-                onClicked: page.back()
-            }
-            RoundedImage {
-                id: stickyCover
-                anchors.left: stickyBack.right
-                anchors.leftMargin: 8
-                anchors.verticalCenter: parent.verticalCenter
-                width: 36; height: 36
-                radius: 6
-                source: albumTracks.cover
-                decodeSize: 96
-            }
-            Column {
-                anchors.left: stickyCover.right
-                anchors.leftMargin: 12
-                anchors.right: stickyButtons.left
-                anchors.rightMargin: 16
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 1
-                Text {
-                    width: parent.width
-                    elide: Text.ElideRight
-                    text: albumTracks.title
-                    color: Theme.text
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 15
-                    font.weight: Font.DemiBold
-                }
-                Text {
-                    width: parent.width
-                    elide: Text.ElideRight
-                    text: albumTracks.artist
-                    color: Theme.textSecondary
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 12
-                }
-            }
-            // 点标题区回到顶部
-            MouseArea {
-                anchors.left: stickyCover.left
-                anchors.right: stickyButtons.left
-                height: parent.height
-                cursorShape: Qt.PointingHandCursor
-                onClicked: list.positionViewAtBeginning()
-            }
-            Row {
-                id: stickyButtons
-                anchors.right: parent.right
-                anchors.rightMargin: 6
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 10
-                IconButton {
-                    id: stickyMore
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: 32; height: 32
-                    icon: "more"
-                    iconSize: 15
-                    tip: qsTr("更多")
-                    onClicked: page.openMenu(stickyMore, 0, height + 6)
-                }
-                IconButton {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: 32; height: 32
-                    outlined: true
-                    icon: "shuffle"
-                    iconSize: 14
-                    tip: qsTr("随机播放")
-                    onClicked: page.playShuffled()
-                }
-                IconButton {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: 38; height: 38
-                    filled: true
-                    morphOnChange: true
-                    icon: page.isCurrentAlbum && player.playing ? "pause" : "play"
-                    iconSize: 16
-                    onClicked: page.playInOrder()
-                }
-            }
-        }
+        view: list
+        sidePadding: page.sidePadding
+        title: albumTracks.title
+        subtitle: albumTracks.artist
+        cover: albumTracks.cover
+        current: page.isCurrentAlbum
+        onBack: page.back()
+        onMore: (anchor) => page.openMenu(anchor, 0, anchor.height + 6)
+        onShuffle: page.playShuffled()
+        onPlay: page.playInOrder()
     }
 }

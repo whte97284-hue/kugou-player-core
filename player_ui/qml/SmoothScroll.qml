@@ -86,4 +86,12 @@ WheelHandler {
         function onMovementStarted() { anim.stop() }
     }
     function stop() { anim.stop() }
+    // 代码驱动的平滑滚动 (回到顶部、翻页):与滚轮共用同一条追随曲线
+    function destination() { return anim.running ? goal : current() }
+    function scrollTo(v) {
+        if (!flickable) return
+        if (!anim.running) pos = current()
+        goal = clamp(v)
+        anim.start()
+    }
 }

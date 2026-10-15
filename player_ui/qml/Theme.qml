@@ -71,7 +71,15 @@ QtObject {
     readonly property bool scrolling: scrollers > 0
 
     readonly property int navWidth: 72
-    readonly property int islandHeight: 84
+    readonly property int islandHeight: 76
+
+    // 秒 → m:ss;一小时以上 h:mm:ss (CUE 整轨、DJ 串烧)
+    function formatTime(s) {
+        s = Math.max(0, Math.floor(s))
+        const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), r = s % 60
+        const ss = (r < 10 ? "0" : "") + r
+        return h > 0 ? h + ":" + (m < 10 ? "0" : "") + m + ":" + ss : m + ":" + ss
+    }
 
     // 字节数 → 人类可读
     function formatBytes(b) {

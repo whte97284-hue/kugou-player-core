@@ -4,7 +4,8 @@ import PlayerUi
 // 沉浸播放页 v4:整窗铺满模糊封面,左边封面与控制,右边歌词占满整个高度,没有用不到的空白
 //  左栏:封面 → 歌名歌手 (居中) → 进度 (时间在两侧) → 控制 → 音量
 //  右栏:歌词居中排版,当前句停在视口偏上处、用强调色随演唱点亮,译文跟在原句下面;无歌词时为「接下来播放」
-//  顶栏:左收起、中间音质小胶囊、右边歌词 / 队列切换
+//  顶栏:左收起、中间音质小胶囊 (在窗口拖动条下方,点得到);右下角歌词 / 队列切换
+//  大屏时封面、字号、按钮按窗口高度等比放大 (k,最多 1.35 倍)
 Item {
     id: np
     property bool shown: false
@@ -12,6 +13,11 @@ Item {
     signal chainClicked()
     // 共享元素飞行用:大封面。封面本身不参与进场位移,飞行落点在整个过程中保持不动
     readonly property Item coverItem: cover
+    function automationTab(t) { side.tab = String(t) }
+    function openMenu(item, px, py) {
+        const p = item.mapToItem(null, px, py)
+        Nav.trackMenu(player.trackId, p.x, p.y, {})
+    }
 
     // 进场错峰:封面下方各行依次上浮淡入 (order 越大越晚),退场同时下沉
     component Rise: Item {
@@ -43,9 +49,11 @@ Item {
     // ---------------- 版面 ----------------
     readonly property real padX: Math.max(40, width * 0.045)
     readonly property real leftW: Math.round(width * 0.46)
+    // 大屏放大系数:820 高以下为 1
+    readonly property real k: Math.max(1, Math.min(1.35, height / 820))
     // 封面下方固定内容的总高度 (歌名、歌手、进度、控制、音量与间距)
-    readonly property real belowCover: 224
-    readonly property real coverSize: Math.round(Math.max(200, Math.min(leftW - padX - 24, height - belowCover - 120, 520)))
+    readonly property real belowCover: Math.round(224 * k)
+    readonly property real coverSize: Math.round(Math.max(200, Math.min(leftW - padX - 24, height - belowCover - 120, 760)))
     readonly property real colX: Math.round(padX + (leftW - padX - coverSize) / 2)
     readonly property real colY: Math.round((height - coverSize - belowCover) / 2 + 8)
     readonly property real sideX: leftW + Math.max(16, width * 0.02)
@@ -54,10 +62,11 @@ Item {
     // ---------------- 顶栏 ----------------
     IconButton {
         x: 20
-        y: 16
+        y: 44
         icon: "back"
         iconSize: 18
         rotation: -90
+        tip: qsTr("收起  Esc")
         onClicked: np.closeRequested()
     }
 
@@ -68,7 +77,8 @@ Item {
         readonly property real shortW: shortText.implicitWidth + 40
         readonly property real longW: Math.min(np.width * 0.5, longText.implicitWidth + 40)
         anchors.horizontalCenter: parent.horizontalCenter
-        y: 22
+        // 顶部 44px 是窗口拖动条,胶囊放在它下面,整枚都点得到
+        y: 50
         height: 28
         width: open ? longW : shortW
         radius: 14
@@ -133,7 +143,7 @@ Item {
         opacity: np.shown ? 1 : 0
         Behavior on opacity { SequentialAnimation { PauseAnimation { duration: np.shown ? 260 : 0 } OpacityAnimator { duration: 360 } } }
         Repeater {
-            model: [{ key: "lyrics", icon: "lyrics" }, { key: "queue", icon: "queue" }]
+            model: [{ key: "lyrics", icon: "lyrics", tip: qsTr("歌词") }, { key: "queue", icon: "queue", tip: qsTr("播放队列") }]
             Item {
                 width: 40
                 height: 38
@@ -165,9 +175,31 @@ Item {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
+                    onContainsMouseChanged: containsMouse ? Nav.hint(parent, modelData.tip) : Nav.unhint(parent)
                     onClicked: side.tab = modelData.key
                 }
             }
+        }
+    }
+
+    component MetaLink: Text {
+        id: link
+        property real maxWidth: 200
+        property bool linked: true
+        signal activated()
+        width: Math.min(implicitWidth, maxWidth)
+        elide: Text.ElideRight
+        color: linkMouse.containsMouse && linked ? Theme.text : Theme.textSecondary
+        font.family: Theme.fontFamily
+        font.pixelSize: Math.round(14 * np.k)
+        font.underline: linkMouse.containsMouse && linked
+        MouseArea {
+            id: linkMouse
+            anchors.fill: parent
+            enabled: link.linked
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: link.activated()
         }
     }
 
@@ -195,6 +227,13 @@ Item {
                 height: np.coverSize
                 radius: 12
                 source: player.cover
+            }
+            // 右键封面:这首歌的菜单
+            MouseArea {
+                anchors.fill: cover
+                acceptedButtons: Qt.RightButton
+                enabled: player.hasTrack
+                onClicked: (e) => np.openMenu(cover, e.x, e.y)
             }
         }
 
@@ -227,8 +266,21 @@ Item {
                     elide: Text.ElideRight
                     color: Theme.text
                     font.family: Theme.fontFamily
-                    font.pixelSize: 22
+                    font.pixelSize: Math.round(22 * np.k)
                     font.weight: Font.Bold
+                }
+                // 左「更多」、右「收藏」对称,歌名真正居中
+                IconButton {
+                    id: npMore
+                    anchors.left: parent.left
+                    anchors.leftMargin: -8
+                    anchors.verticalCenter: titleText.verticalCenter
+                    width: 36; height: 36
+                    icon: "more"
+                    iconSize: 18
+                    restOpacity: 0.6
+                    tip: qsTr("更多")
+                    onClicked: np.openMenu(npMore, npMore.width / 2, npMore.height)
                 }
                 IconButton {
                     readonly property bool fav: playlists.revision >= 0 && player.hasTrack && playlists.isFavorite(player.trackId)
@@ -238,20 +290,45 @@ Item {
                     width: 36; height: 36
                     icon: fav ? "heart-filled" : "heart"
                     iconTint: fav ? Theme.accent : "transparent"
-                    popOnChange: true
                     iconSize: 18
-                    onClicked: playlists.toggleFavorite(player.trackId)
+                    tip: (fav ? qsTr("取消收藏") : qsTr("收藏")) + "  Ctrl+L"
+                    onClicked: { playlists.toggleFavorite(player.trackId); popNow() }
                 }
             }
-            Text {
-                topPadding: 3
+            // 歌手 · 专辑:各自可点,收起播放页并打开歌手 / 专辑
+            Item {
                 width: parent.width
-                horizontalAlignment: Text.AlignHCenter
-                text: player.artist + (player.album.length ? "  ·  " + player.album : "")
-                elide: Text.ElideRight
-                color: Theme.textSecondary
-                font.family: Theme.fontFamily
-                font.pixelSize: 14
+                height: metaRow.height + 3
+                Row {
+                    id: metaRow
+                    y: 3
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    spacing: 0
+                    MetaLink {
+                        text: player.artist
+                        maxWidth: (titleBlock.width - sepText.width) * (player.album.length ? 0.45 : 1)
+                        onActivated: {
+                            const i = library.artistOfTrack(player.trackId)
+                            if (i >= 0) Nav.openArtist(i)
+                        }
+                        linked: library.generation >= 0 && player.hasTrack && library.artistOfTrack(player.trackId) >= 0
+                    }
+                    Text {
+                        id: sepText
+                        visible: player.album.length > 0
+                        text: "  ·  "
+                        color: Theme.textSecondary
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Math.round(14 * np.k)
+                    }
+                    MetaLink {
+                        visible: player.album.length > 0
+                        text: player.album
+                        maxWidth: (titleBlock.width - sepText.width) * 0.55
+                        linked: player.albumIndex >= 0
+                        onActivated: Nav.openAlbum(player.albumIndex)
+                    }
+                }
             }
             }}
 
@@ -297,7 +374,8 @@ Item {
             Item { width: 1; height: 10 }
             Item {
                 width: parent.width
-                height: 62
+                height: Math.round(62 * np.k)
+                // 随机与单曲循环互斥 (与播放条的四态按钮一致:随机时循环整个列表)
                 IconButton {
                     anchors.left: parent.left
                     anchors.leftMargin: -6
@@ -307,7 +385,11 @@ Item {
                     iconSize: 16
                     iconTint: player.shuffle ? Theme.accent : "transparent"
                     restOpacity: player.shuffle ? 1 : 0.5
-                    onClicked: player.shuffle = !player.shuffle
+                    tip: player.shuffle ? qsTr("关闭随机播放") : qsTr("随机播放")
+                    onClicked: {
+                        player.shuffle = !player.shuffle
+                        if (player.shuffle && player.repeatMode === 2) player.repeatMode = 1
+                    }
                 }
                 IconButton {
                     anchors.right: parent.right
@@ -318,41 +400,97 @@ Item {
                     iconSize: 16
                     iconTint: player.repeatMode > 0 ? Theme.accent : "transparent"
                     restOpacity: player.repeatMode > 0 ? 1 : 0.5
-                    onClicked: player.repeatMode = (player.repeatMode + 1) % 3
+                    tip: player.repeatMode === 2 ? qsTr("单曲循环") : player.repeatMode === 1 ? qsTr("列表循环") : qsTr("不循环")
+                    onClicked: {
+                        const m = (player.repeatMode + 1) % 3
+                        if (m === 2) player.shuffle = false
+                        player.repeatMode = m
+                    }
                 }
                 Row {
                     anchors.centerIn: parent
-                    spacing: Math.max(14, Math.min(30, np.coverSize * 0.06))
-                    IconButton { icon: "prev"; nudge: -1; iconSize: 21; width: 46; height: 46; anchors.verticalCenter: parent.verticalCenter; onClicked: player.previous() }
+                    spacing: Math.max(14, Math.min(30 * np.k, np.coverSize * 0.06))
+                    IconButton {
+                        icon: "prev"; nudge: -1
+                        iconSize: Math.round(21 * np.k)
+                        width: Math.round(46 * np.k); height: width
+                        anchors.verticalCenter: parent.verticalCenter
+                        tip: qsTr("上一首  Ctrl+←")
+                        onClicked: player.previous()
+                    }
                     IconButton {
                         icon: player.playing ? "pause" : "play"
                         morphOnChange: true
-                        iconSize: 24
-                        width: 60; height: 60
+                        iconSize: Math.round(24 * np.k)
+                        width: Math.round(60 * np.k); height: width
                         filled: true
+                        tip: (player.playing ? qsTr("暂停") : qsTr("播放")) + "  空格"
                         onClicked: player.toggle()
                     }
-                    IconButton { icon: "next"; nudge: 1; iconSize: 21; width: 46; height: 46; anchors.verticalCenter: parent.verticalCenter; onClicked: player.next() }
+                    IconButton {
+                        icon: "next"; nudge: 1
+                        iconSize: Math.round(21 * np.k)
+                        width: Math.round(46 * np.k); height: width
+                        anchors.verticalCenter: parent.verticalCenter
+                        tip: qsTr("下一首  Ctrl+→")
+                        onClicked: player.next()
+                    }
                 }
             }
             }}
 
             Rise { order: 3; Column { width: parent.width
-            Item { width: 1; height: 12 }
-            Row {
+            Item { width: 1; height: 6 }
+            // 音量:左键静音 / 恢复,右键开到最大;整行支持滚轮
+            Item {
                 width: parent.width
-                spacing: 12
-                Icon { anchors.verticalCenter: parent.verticalCenter; name: "mute"; size: 14; opacity: 0.45 }
-                SeekBar {
+                height: 32
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.NoButton
+                    property real acc: 0
+                    onWheel: (w) => {
+                        acc += w.angleDelta.y
+                        const steps = Math.trunc(acc / 120)
+                        if (steps !== 0) { acc -= steps * 120; player.changeVolume(steps * 0.02) }
+                        w.accepted = true
+                    }
+                }
+                IconButton {
+                    id: muteBtn
+                    x: -9
                     anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - 14 * 2 - 24
+                    width: 32; height: 32
+                    icon: player.volume < 0.01 ? "mute" : "volume"
+                    iconSize: 14
+                    restOpacity: 0.45
+                    tip: (player.volume < 0.01 ? qsTr("取消静音") : qsTr("静音")) + "  Ctrl+M"
+                    onClicked: Nav.toggleMute()
+                }
+                SeekBar {
+                    id: volBar
+                    anchors.left: muteBtn.right
+                    anchors.leftMargin: 3
+                    anchors.right: volText.left
+                    anchors.rightMargin: 8
+                    anchors.verticalCenter: parent.verticalCenter
                     showTip: false
                     position: player.volume
                     duration: 1
                     onSeekRequested: (v) => player.volume = v
                     onDragValueChanged: if (dragging) player.volume = dragValue
                 }
-                Icon { anchors.verticalCenter: parent.verticalCenter; name: "volume"; size: 14; opacity: 0.45 }
+                Text {
+                    id: volText
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 32
+                    horizontalAlignment: Text.AlignRight
+                    text: Math.round(player.volume * 100)
+                    color: Theme.textTertiary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11
+                }
             }
             }}
         }
@@ -391,7 +529,7 @@ Item {
             // 一首歌的歌词全部实例化:每行位置都是实测的,不会因估算行高在滚动中途跳动
             cacheBuffer: 100000
             boundsBehavior: Flickable.StopAtBounds
-            readonly property int fontSize: Math.round(Math.max(20, Math.min(28, np.width / 44)))
+            readonly property int fontSize: Math.round(Math.max(20, Math.min(36, np.width / 46)))
             property bool following: true
 
             layer.enabled: true
@@ -471,10 +609,12 @@ Item {
                     scale: row.current || !player.lyricsSynced ? 1 : 0.9
                     Behavior on scale { ScaleAnimator { duration: 620; easing.type: Easing.OutQuint } }
 
+                    // 单行宽度用 TextMetrics 量 (换行文字的 implicitWidth 依赖自身宽度,直接用会形成绑定环)
+                    TextMetrics { id: lineMetrics; font: line.font; text: line.text }
                     Text {
                         id: line
                         // 单行时宽度贴合文字,逐字点亮的进度才能对准文字本身;换行时占满整栏
-                        width: Math.min(row.width - 24, implicitWidth)
+                        width: Math.min(row.width - 24, Math.ceil(lineMetrics.advanceWidth) + 2)
                         x: (row.width - width) / 2
                         y: 9
                         text: modelData.text
@@ -523,18 +663,56 @@ Item {
                 }
             }
         }
-        Icon {
+        Column {
             anchors.centerIn: parent
             visible: side.tab === "lyrics" && !side.hasLyrics
-            name: "lyrics"
-            size: 36
-            opacity: 0.15
+            spacing: 12
+            Icon { anchors.horizontalCenter: parent.horizontalCenter; name: "lyrics"; size: 36; opacity: 0.15 }
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: qsTr("没有找到歌词")
+                color: Theme.textTertiary
+                font.family: Theme.fontFamily
+                font.pixelSize: 14
+            }
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: qsTr("同名 .lrc · 内嵌歌词 · 酷狗歌词库")
+                color: Theme.textTertiary
+                opacity: 0.7
+                font.family: Theme.fontFamily
+                font.pixelSize: 12
+            }
+        }
+
+        // 接下来播放:标题 + 剩余
+        Row {
+            visible: side.tab === "queue"
+            // 在顶部音质胶囊 (y 50–78) 下方:窄窗时右栏会伸到窗口正中
+            y: 92
+            x: 10
+            spacing: 10
+            Text {
+                anchors.baseline: queueCount.baseline
+                text: qsTr("接下来播放")
+                color: Theme.text
+                font.family: Theme.fontFamily
+                font.pixelSize: 18
+                font.weight: Font.Bold
+            }
+            Text {
+                id: queueCount
+                text: qsTr("%1 首 · 剩余 %2").arg(Math.max(0, player.queueLength - player.queuePosition - 1)).arg(player.queueRemaining)
+                color: Theme.textTertiary
+                font.family: Theme.fontFamily
+                font.pixelSize: 12
+            }
         }
 
         // 接下来播放
         ListView {
             id: queueView
-            y: 72
+            y: 128
             width: parent.width
             height: parent.height - y - 32
             clip: true
@@ -555,19 +733,27 @@ Item {
                 Rectangle {
                     anchors.fill: parent
                     radius: Theme.radiusM
-                    color: current ? Theme.accentAlpha(0.12) : (hovered ? Theme.hover : "transparent")
+                    color: current ? Theme.accentAlpha(0.12) : "transparent"
+                }
+                Rectangle {
+                    anchors.fill: parent
+                    radius: Theme.radiusM
+                    color: Theme.hover
+                    opacity: hovered && !current ? 1 : 0
+                    Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
                 }
                 MouseArea {
                     id: rowMouse
                     anchors.fill: parent
-                    hoverEnabled: true
+                    // 滚动时行从鼠标下掠过,不逐行闪高亮
+                    hoverEnabled: !Theme.scrolling
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     cursorShape: Qt.PointingHandCursor
                     onClicked: (e) => {
                         if (e.button === Qt.RightButton) {
                             const p = mapToItem(null, e.x, e.y)
-                            Nav.trackMenu(model.trackId, p.x, p.y, {})
-                        } else player.playQueueIndex(model.queueIndex)
+                            Nav.trackMenu(model.trackId, p.x, p.y, { queueIndex: model.queueIndex })
+                        } else if (!current) player.playQueueIndex(model.queueIndex)
                     }
                 }
                 RoundedImage {
@@ -634,6 +820,7 @@ Item {
                     iconSize: 12
                     enabled: !current
                     opacity: hovered && !current ? 1 : 0
+                    tip: qsTr("从播放队列移除")
                     onClicked: player.removeFromQueue(model.queueIndex)
                 }
             }

@@ -15,6 +15,9 @@ Item {
     property string quality
     property string duration
     property string cover               // 非空时以小封面代替序号
+    // 专辑列 / 歌手行做成链接 (点了打开专辑 / 歌手);专辑页自己不设
+    property int albumIndex: -1
+    property bool artistLink: albumIndex >= 0
     property bool showAlbum: false
     property bool showQuality: true     // 整张专辑音质相同时由专辑页关掉,不逐行重复
     property bool keyFocus: false       // 键盘选中 (上下键)
@@ -22,9 +25,20 @@ Item {
     property var menuContext: ({})
     readonly property bool current: player.hasTrack && player.trackId === trackId
     signal activated()
+    // 右键菜单的「播放」与双击同一做法 (在歌单 / 歌手 / 搜索里播放时保留所在列表作为队列)
+    function menuCtx() { return Object.assign({ play: () => row.activated() }, row.menuContext) }
     height: cover.length ? 60 : 54
 
-    readonly property bool hovered: mouse.containsMouse || heart.hovered || more.hovered
+    readonly property bool hovered: mouse.containsMouse || heart.hovered || more.hovered || albumLink.containsMouse || artistArea.containsMouse
+    // 歌手链接:第一次悬停 / 按下时才查歌手下标 (-2 = 还没查;重扫后下标会变,按曲库代数重查),找不到的不显示成链接
+    property int artistIdx: -2
+    property int artistGen: -1
+    onArtistChanged: artistIdx = -2
+    function resolveArtist() {
+        if (artistIdx !== -2 && artistGen === library.generation) return
+        artistIdx = library.artistIndexOf(artist)
+        artistGen = library.generation
+    }
     readonly property bool fav: playlists.revision >= 0 && playlists.isFavorite(trackId)
     readonly property bool wide: width > 760
 
@@ -62,7 +76,7 @@ Item {
         onClicked: (e) => {
             if (e.button === Qt.RightButton) {
                 const p = mapToItem(null, e.x, e.y)
-                Nav.trackMenu(row.trackId, p.x, p.y, row.menuContext)
+                Nav.trackMenu(row.trackId, p.x, p.y, row.menuCtx())
             } else {
                 row.activated()
             }
@@ -172,7 +186,7 @@ Item {
             Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
             onClicked: {
                 const p = mapToItem(null, width / 2, height)
-                Nav.trackMenu(row.trackId, p.x, p.y, row.menuContext)
+                Nav.trackMenu(row.trackId, p.x, p.y, row.menuCtx())
             }
         }
     }
@@ -202,13 +216,28 @@ Item {
                 font.weight: row.current ? Font.DemiBold : Font.Normal
             }
             Text {
+                id: artistText
+                readonly property bool linked: row.artistLink && artistArea.containsMouse && row.artistIdx >= 0
                 width: parent.width
                 visible: text.length > 0
                 text: row.artist !== row.albumArtist ? row.artist : ""
                 elide: Text.ElideRight
-                color: Theme.textTertiary
+                color: linked ? Theme.textSecondary : Theme.textTertiary
                 font.family: Theme.fontFamily
                 font.pixelSize: 12
+                font.underline: linked
+                // 只盖住文字本身,点行的其余地方照常播放;找不到歌手时点击落到行上
+                MouseArea {
+                    id: artistArea
+                    width: Math.min(artistText.implicitWidth, artistText.width)
+                    height: parent.height
+                    enabled: row.artistLink
+                    hoverEnabled: !Theme.scrolling
+                    cursorShape: Qt.PointingHandCursor
+                    onContainsMouseChanged: if (containsMouse) row.resolveArtist()
+                    onPressed: (e) => { row.resolveArtist(); e.accepted = row.artistIdx >= 0 }
+                    onClicked: Nav.openArtist(row.artistIdx)
+                }
             }
         }
         Text {
@@ -219,9 +248,20 @@ Item {
             width: Math.min(parent.width * 0.36, 300)
             text: row.album
             elide: Text.ElideRight
-            color: Theme.textTertiary
+            color: albumLink.containsMouse ? Theme.textSecondary : Theme.textTertiary
             font.family: Theme.fontFamily
             font.pixelSize: 13
+            font.underline: albumLink.containsMouse
+            MouseArea {
+                id: albumLink
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.min(albumText.implicitWidth, albumText.width)
+                height: parent.height + 8
+                enabled: row.albumIndex >= 0 && albumText.visible
+                hoverEnabled: !Theme.scrolling
+                cursorShape: Qt.PointingHandCursor
+                onClicked: Nav.openAlbum(row.albumIndex)
+            }
         }
     }
 }

@@ -116,7 +116,14 @@ void PlayerController::applyPendingRemap() {
         return true;
     };
     uint64_t curNew = 0;
-    if (current_ && !mapId(current_->id, curNew)) return; // 正在播放的那首在新曲库里找不到:保持原样
+    if (current_ && !mapId(current_->id, curNew)) {
+        // 正在播放的那首在新曲库里找不到:保持原样;专辑下标已对不上新曲库,标签作废
+        if (queueTag_.startsWith(QLatin1String("album:"))) {
+            queueTag_.clear();
+            emit queueChanged();
+        }
+        return;
+    }
     auto remapVec = [&](std::vector<uint64_t>& v) {
         std::vector<uint64_t> out;
         out.reserve(v.size());
@@ -139,9 +146,19 @@ void PlayerController::applyPendingRemap() {
     nextId_ = 0;
     nextIndex_ = -1;
     if (engine_) engine_->ClearNext();
+    reresolveAlbumTag();
     queueContentChanged();
     emit trackChanged();
     saveSession();
+}
+
+void PlayerController::reresolveAlbumTag() {
+    if (!queueTag_.startsWith(QLatin1String("album:"))) return;
+    const std::vector<uint64_t>& src = context_.empty() ? queue_ : context_;
+    queueTag_.clear();
+    if (!snap_ || src.empty()) return;
+    auto it = snap_->trackAlbum.find(src.front());
+    if (it != snap_->trackAlbum.end()) queueTag_ = QStringLiteral("album:%1").arg(it->second);
 }
 
 void PlayerController::applyVolume() {
@@ -160,6 +177,7 @@ void PlayerController::saveSession() {
     QJsonObject o;
     o["keys"] = keys;
     o["index"] = queueIndex_;
+    o["tag"] = queueTag_;
     o["position"] = position_;
     QSaveFile f(SessionFile());
     if (f.open(QIODevice::WriteOnly)) {
@@ -191,6 +209,8 @@ void PlayerController::restoreSession() {
     snap_ = snap;
     queue_ = ids;
     unshuffled_ = ids;
+    queueTag_ = o.value("tag").toString();
+    reresolveAlbumTag();
     queueContentChanged();
     // 暂停在上次的位置,等用户按播放
     if (openIndex(std::max(0, mapped), false) && mapped >= 0) {
@@ -256,10 +276,10 @@ void PlayerController::playAlbum(int albumIndex, int startRow) {
     snap_ = snap;
     std::vector<uint64_t> ids;
     for (const TrackItem* t : snap_->albums[albumIndex].tracks) ids.push_back(t->id);
-    setQueue(std::move(ids), startRow);
+    setQueue(std::move(ids), startRow, QStringLiteral("album:%1").arg(albumIndex));
 }
 
-void PlayerController::setQueue(std::vector<uint64_t> ids, int start) {
+void PlayerController::setQueue(std::vector<uint64_t> ids, int start, const QString& tag) {
     if (ids.empty()) return;
     start = std::clamp(start, 0, static_cast<int>(ids.size()) - 1);
     // 点的是正在播放的同一份列表 (同一张专辑 / 歌单 / 歌手) 里的另一首:
@@ -267,11 +287,17 @@ void PlayerController::setQueue(std::vector<uint64_t> ids, int start) {
     if (ids == context_ && !queue_.empty()) {
         auto it = std::find(queue_.begin(), queue_.end(), ids[start]);
         if (it != queue_.end()) {
+            // 内容相同的另一份列表 (歌单恰好等于某张专辑):队列不变,来源记成这一次点的;没带来源的不覆盖
+            if (!tag.isEmpty() && tag != queueTag_) {
+                queueTag_ = tag;
+                emit queueChanged();
+            }
             openIndex(static_cast<int>(it - queue_.begin()), true);
             return;
         }
     }
     context_ = ids;
+    queueTag_ = tag;
     unshuffled_ = ids;
     if (shuffle_) {
         // 点选的曲目先播,其余随机
@@ -289,15 +315,41 @@ void PlayerController::setQueue(std::vector<uint64_t> ids, int start) {
 void PlayerController::queueContentChanged() {
     queueModel_.reset(snap_, queue_, lib_->generation());
     emit queueChanged();
+    updateQueueStats(true);
     scheduleGapless(); // 队列变了,预加载的「下一首」可能也变了
 }
 
-void PlayerController::playTracks(const QVariantList& trackIds, int start) {
+void PlayerController::queueEdited() {
+    emit queueChanged();
+    updateQueueStats(true);
+    scheduleGapless();
+}
+
+void PlayerController::updateQueueStats(bool recount) {
+    if (recount) {
+        queueAfterMs_ = 0;
+        if (snap_)
+            for (size_t i = static_cast<size_t>(std::max(0, queueIndex_ + 1)); i < queue_.size(); ++i)
+                if (const TrackItem* t = snap_->catalog.FindById(queue_[i])) queueAfterMs_ += t->duration_ms;
+    }
+    const qint64 curLeft = current_ ? std::max<qint64>(0, qint64(current_->duration_ms) - qint64(position_ * 1000)) : 0;
+    const qint64 minutes = (qint64(queueAfterMs_) + curLeft + 30000) / 60000;
+    if (minutes == remainingShown_) return;
+    remainingShown_ = minutes;
+    emit queueStatsChanged();
+}
+
+QString PlayerController::queueRemaining() const {
+    const qint64 curLeft = current_ ? std::max<qint64>(0, qint64(current_->duration_ms) - qint64(position_ * 1000)) : 0;
+    return LibraryService::formatLongDuration(queueAfterMs_ + static_cast<uint64_t>(curLeft));
+}
+
+void PlayerController::playTracks(const QVariantList& trackIds, int start, const QString& tag) {
     snap_ = lib_->snapshot();
     std::vector<uint64_t> ids;
     ids.reserve(trackIds.size());
     for (const QVariant& v : trackIds) ids.push_back(static_cast<uint64_t>(v.toDouble()));
-    setQueue(std::move(ids), start);
+    setQueue(std::move(ids), start, tag);
 }
 
 void PlayerController::playNext(double trackId) {
@@ -308,7 +360,8 @@ void PlayerController::playNext(double trackId) {
     uint64_t id = static_cast<uint64_t>(trackId);
     queue_.insert(queue_.begin() + queueIndex_ + 1, id);
     unshuffled_.push_back(id);
-    queueContentChanged();
+    queueModel_.insertAt(queueIndex_ + 1, {id});
+    queueEdited();
 }
 
 void PlayerController::playNextTracks(const QVariantList& trackIds) {
@@ -322,7 +375,8 @@ void PlayerController::playNextTracks(const QVariantList& trackIds) {
     for (const QVariant& v : trackIds) ids.push_back(static_cast<uint64_t>(v.toDouble()));
     queue_.insert(queue_.begin() + queueIndex_ + 1, ids.begin(), ids.end());
     unshuffled_.insert(unshuffled_.end(), ids.begin(), ids.end());
-    queueContentChanged();
+    queueModel_.insertAt(queueIndex_ + 1, ids);
+    queueEdited();
 }
 
 void PlayerController::enqueue(const QVariantList& trackIds) {
@@ -330,11 +384,13 @@ void PlayerController::enqueue(const QVariantList& trackIds) {
         playTracks(trackIds, 0);
         return;
     }
+    const size_t first = queue_.size();
     for (const QVariant& v : trackIds) {
         queue_.push_back(static_cast<uint64_t>(v.toDouble()));
         unshuffled_.push_back(queue_.back());
     }
-    queueContentChanged();
+    queueModel_.insertAt(static_cast<int>(first), std::vector<uint64_t>(queue_.begin() + first, queue_.end()));
+    queueEdited();
 }
 
 void PlayerController::removeFromQueue(int index) {
@@ -344,12 +400,31 @@ void PlayerController::removeFromQueue(int index) {
     auto it = std::find(unshuffled_.begin(), unshuffled_.end(), id);
     if (it != unshuffled_.end()) unshuffled_.erase(it);
     if (index < queueIndex_) --queueIndex_;
-    queueContentChanged();
+    queueModel_.removeAt(index);
+    queueEdited();
     emit queueIndexChanged();
+}
+
+void PlayerController::moveInQueue(int from, int to) {
+    const int n = static_cast<int>(queue_.size());
+    if (from < 0 || from >= n || to < 0 || to >= n || from == to) return;
+    const uint64_t id = queue_[from];
+    queue_.erase(queue_.begin() + from);
+    queue_.insert(queue_.begin() + to, id);
+    // 正在播放的那首:被拖动时跟着走;别的歌跨过它时前后挪一位
+    const int old = queueIndex_;
+    if (queueIndex_ == from) queueIndex_ = to;
+    else if (from < queueIndex_ && to >= queueIndex_) --queueIndex_;
+    else if (from > queueIndex_ && to <= queueIndex_) ++queueIndex_;
+    queueModel_.moveRow(from, to);
+    queueEdited();
+    if (queueIndex_ != old) emit queueIndexChanged();
 }
 
 void PlayerController::clearQueue() {
     if (queue_.size() <= 1) return;
+    lastCleared_ = {snap_, queue_, unshuffled_, context_, queueTag_};
+    queueTag_.clear();
     if (queueIndex_ < 0 || queueIndex_ >= static_cast<int>(queue_.size())) {
         queue_.clear();
         unshuffled_.clear();
@@ -363,6 +438,23 @@ void PlayerController::clearQueue() {
     }
     queueContentChanged();
     emit queueIndexChanged();
+}
+
+bool PlayerController::undoClearQueue() {
+    ClearedQueue c = std::move(lastCleared_);
+    lastCleared_ = {};
+    if (c.queue.empty() || c.snap != snap_ || !current_) return false;
+    // 清空后又换了歌:接着从那首在原队列里的位置播放
+    auto it = std::find(c.queue.begin(), c.queue.end(), current_->id);
+    if (it == c.queue.end()) return false;
+    queueIndex_ = static_cast<int>(it - c.queue.begin());
+    queue_ = std::move(c.queue);
+    unshuffled_ = std::move(c.unshuffled);
+    context_ = std::move(c.context);
+    queueTag_ = c.tag;
+    queueContentChanged();
+    emit queueIndexChanged();
+    return true;
 }
 
 void PlayerController::setShuffle(bool on) {
@@ -630,6 +722,7 @@ void PlayerController::onTrackOpened(const TrackItem* t, int index) {
     rebuildSignalChain();
     extractAccent();
     loadLyrics();
+    updateQueueStats(true);
     scheduleGapless();
 }
 
@@ -746,6 +839,7 @@ void PlayerController::tick() {
     if (std::abs(p - position_) > 1e-4) {
         position_ = p;
         emit positionChanged();
+        updateQueueStats(false);
     }
     bool isPlaying = engine_->GetState() == PlaybackState::Playing;
     if (playing_ != isPlaying && !isPlaying && engine_->GetState() == PlaybackState::Stopped) setPlaying(false);
@@ -861,14 +955,51 @@ void QueueModel::reset(std::shared_ptr<const LibrarySnapshot> snap, const std::v
     snap_ = std::move(snap);
     gen_ = gen;
     rows_.clear();
-    if (snap_)
-        for (uint64_t id : ids)
-            if (const TrackItem* t = snap_->catalog.FindById(id)) rows_.push_back(t);
+    rows_.reserve(ids.size());
+    for (uint64_t id : ids) rows_.push_back(snap_ ? snap_->catalog.FindById(id) : nullptr);
     endResetModel();
+}
+
+void QueueModel::insertAt(int row, const std::vector<uint64_t>& ids) {
+    row = std::clamp(row, 0, rowCount());
+    if (ids.empty()) return;
+    beginInsertRows({}, row, row + static_cast<int>(ids.size()) - 1);
+    std::vector<const TrackItem*> add;
+    add.reserve(ids.size());
+    for (uint64_t id : ids) add.push_back(snap_ ? snap_->catalog.FindById(id) : nullptr);
+    rows_.insert(rows_.begin() + row, add.begin(), add.end());
+    endInsertRows();
+    shiftedFrom(row + static_cast<int>(ids.size()), rowCount() - 1);
+}
+
+// 行号就是队列下标 (queueIndex 角色):插入 / 删除 / 挪动之后,后面已建好的代理要拿到新下标
+void QueueModel::shiftedFrom(int first, int last) {
+    if (first <= last) emit dataChanged(index(first), index(last), {QueueIndexRole});
+}
+
+void QueueModel::removeAt(int row) {
+    if (row < 0 || row >= rowCount()) return;
+    beginRemoveRows({}, row, row);
+    rows_.erase(rows_.begin() + row);
+    endRemoveRows();
+    shiftedFrom(row, rowCount() - 1);
+}
+
+void QueueModel::moveRow(int from, int to) {
+    const int n = rowCount();
+    if (from < 0 || from >= n || to < 0 || to >= n || from == to) return;
+    // beginMoveRows 的目标是「插到哪一行之前」(按移动前的行号):往后挪要再加一
+    beginMoveRows({}, from, from, {}, to > from ? to + 1 : to);
+    const TrackItem* t = rows_[from];
+    rows_.erase(rows_.begin() + from);
+    rows_.insert(rows_.begin() + to, t);
+    endMoveRows();
+    shiftedFrom(std::min(from, to), std::max(from, to));
 }
 
 QVariant QueueModel::data(const QModelIndex& index, int role) const {
     if (index.row() < 0 || index.row() >= rowCount()) return {};
+    if (!rows_[index.row()]) return role == TrackIdRole ? QVariant(-1.0) : role == QueueIndexRole ? QVariant(index.row()) : QVariant(QString());
     const TrackItem& t = *rows_[index.row()];
     switch (role) {
         case TrackIdRole: return static_cast<double>(t.id);

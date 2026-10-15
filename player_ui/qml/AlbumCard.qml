@@ -1,20 +1,29 @@
 import QtQuick
 import PlayerUi
 
-// 专辑卡片:悬停封面上浮放大 + 浮出播放键;正在播放的专辑显示律动角标
+// 专辑卡片:悬停封面上浮放大 + 浮出播放键与「更多」;正在播放的专辑显示律动角标,暂停时播放键常驻
+// 右键 / 「更多」打开整张专辑的菜单
 Item {
     id: card
     property string title
     property string artist
+    property string detail   // 歌手后面的附加信息 (按年份 / 歌手排序时显示年份)
     property string badge
     property string cover
     property int albumIndex: -1
     property bool isPlaying: player.albumIndex === albumIndex && player.hasTrack
+    readonly property bool active: isPlaying && player.playing
     readonly property alias coverItem: coverBox
+    readonly property bool compact: width < 150
     signal open()
     signal play()
 
-    readonly property bool hovered: mouse.containsMouse || playMouse.containsMouse
+    readonly property bool hovered: mouse.containsMouse || playMouse.containsMouse || moreMouse.containsMouse
+
+    function openMenu(item, px, py) {
+        const p = item.mapToItem(null, px, py)
+        Nav.trackMenu(-1, p.x, p.y, { albumIndex: card.albumIndex })
+    }
 
     // 投影:悬停时加深并下沉,配合封面上浮形成「拿起」的纵深感
     SoftShadow {
@@ -42,30 +51,57 @@ Item {
             decodeSize: Math.ceil(card.width * 1.5)
         }
 
-        // 播放按钮
+        // 播放 / 暂停:正在播放这张时切换暂停,暂停中的这张不悬停也露出继续键
         Rectangle {
             id: playBtn
-            width: 46; height: 46; radius: 23
+            readonly property bool shown: card.hovered || (card.isPlaying && !player.playing)
+            width: card.compact ? 38 : 46
+            height: width
+            radius: width / 2
             anchors.right: parent.right
             anchors.bottom: parent.bottom
-            anchors.margins: 12
+            anchors.margins: card.compact ? 8 : 12
             color: Theme.accent
-            opacity: card.hovered ? 1 : 0
-            scale: card.hovered ? (playMouse.pressed ? 0.92 : 1) : 0.7
+            opacity: shown ? (card.hovered ? 1 : 0.9) : 0
+            scale: shown ? (playMouse.pressed ? 0.92 : 1) : 0.7
             Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
             Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutBack } }
             Icon {
                 anchors.centerIn: parent
-                anchors.horizontalCenterOffset: 1
-                name: Theme.accentIsLight ? "play-dark" : "play"
-                size: 20
+                anchors.horizontalCenterOffset: card.active ? 0 : 1
+                name: (card.active ? "pause" : "play") + (Theme.accentIsLight ? "-dark" : "")
+                size: card.compact ? 17 : 20
             }
             MouseArea {
                 id: playMouse
                 anchors.fill: parent
-                hoverEnabled: true
+                enabled: playBtn.shown
+                hoverEnabled: !Theme.scrolling
                 cursorShape: Qt.PointingHandCursor
-                onClicked: card.play()
+                onClicked: card.isPlaying ? player.toggle() : card.play()
+            }
+        }
+
+        // 更多:整张专辑的菜单 (下一首播放、加入歌单、收藏全部…)
+        Rectangle {
+            id: moreBtn
+            width: 30; height: 30; radius: 15
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 10
+            color: moreMouse.containsMouse ? Qt.rgba(0, 0, 0, 0.62) : Qt.rgba(0, 0, 0, 0.45)
+            opacity: card.hovered ? 1 : 0
+            scale: card.hovered ? 1 : 0.7
+            visible: opacity > 0
+            Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+            Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutBack } }
+            Icon { anchors.centerIn: parent; name: "more"; size: 16 }
+            MouseArea {
+                id: moreMouse
+                anchors.fill: parent
+                hoverEnabled: !Theme.scrolling
+                cursorShape: Qt.PointingHandCursor
+                onClicked: card.openMenu(moreBtn, 0, moreBtn.height + 6)
             }
         }
 
@@ -93,7 +129,7 @@ Item {
             elide: Text.ElideRight
             color: card.isPlaying ? Theme.accent : Theme.text
             font.family: Theme.fontFamily
-            font.pixelSize: 14
+            font.pixelSize: card.compact ? 13 : 14
             font.weight: Font.DemiBold
         }
         Row {
@@ -101,7 +137,7 @@ Item {
             spacing: 6
             Text {
                 width: Math.min(implicitWidth, parent.width - (badgeItem.visible ? badgeItem.width + 6 : 0))
-                text: card.artist
+                text: card.detail.length ? card.artist + "  ·  " + card.detail : card.artist
                 elide: Text.ElideRight
                 color: Theme.textSecondary
                 font.family: Theme.fontFamily
@@ -110,7 +146,7 @@ Item {
             }
             QualityBadge {
                 id: badgeItem
-                text: card.badge
+                text: card.compact ? "" : card.badge
                 fontSize: 9
                 anchors.verticalCenter: parent.verticalCenter
             }
@@ -124,7 +160,11 @@ Item {
         // 滚动时卡片从鼠标下掠过,不逐张触发上浮与投影动画
         hoverEnabled: !Theme.scrolling
         cursorShape: Qt.PointingHandCursor
-        onClicked: card.open()
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onClicked: (e) => {
+            if (e.button === Qt.RightButton) card.openMenu(mouse, e.x, e.y)
+            else card.open()
+        }
         z: -1
     }
 }

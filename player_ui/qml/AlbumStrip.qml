@@ -1,11 +1,14 @@
 import QtQuick
 import PlayerUi
 
-// 横向专辑带 (歌手详情的专辑、专辑详情页尾「更多这位歌手的专辑」共用)
-// model: library.artistAlbums() 返回的列表 [{ index, title, year, cover, badge }]
+// 横向专辑带 (歌手详情的专辑、专辑详情页尾「更多这位歌手的专辑」、搜索结果共用)
+// model: library.artistAlbums() 返回的列表 [{ index, title, artist, year, cover, badge }]
 ListView {
     id: strip
     property int coverSize: 150
+    // 第二行写歌手而不是年份 (搜索结果里专辑来自不同歌手);highlight 为搜索词高亮
+    property bool showArtist: false
+    property string highlight
     signal open(int index, Item coverItem)
     width: parent ? parent.width : 0
     height: count > 0 ? coverSize + 64 : 0
@@ -32,7 +35,8 @@ ListView {
         Text {
             y: strip.coverSize + 10
             width: parent.width
-            text: modelData.title
+            text: strip.highlight.length ? Nav.highlight(modelData.title, strip.highlight, Theme.accent) : modelData.title
+            textFormat: strip.highlight.length ? Text.StyledText : Text.PlainText
             elide: Text.ElideRight
             color: parent.hovered ? Theme.accent : Theme.text
             font.family: Theme.fontFamily
@@ -45,13 +49,15 @@ ListView {
             spacing: 6
             Text {
                 anchors.verticalCenter: parent.verticalCenter
+                width: Math.min(implicitWidth, parent.width - (stripBadge.text.length ? stripBadge.width + 6 : 0))
                 visible: text.length > 0
-                text: modelData.year || ""
+                text: (strip.showArtist ? modelData.artist : modelData.year) || ""
+                elide: Text.ElideRight
                 color: Theme.textTertiary
                 font.family: Theme.fontFamily
                 font.pixelSize: 11
             }
-            QualityBadge { anchors.verticalCenter: parent.verticalCenter; text: modelData.badge || "" }
+            QualityBadge { id: stripBadge; anchors.verticalCenter: parent.verticalCenter; text: modelData.badge || "" }
         }
         MouseArea {
             id: am

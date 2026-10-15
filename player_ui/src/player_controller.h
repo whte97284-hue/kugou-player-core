@@ -17,7 +17,8 @@
 #include "audio_playback_engine.hpp"
 #include "library_service.h"
 
-// 播放队列模型 (歌曲很多时比 QVariantList 便宜得多:只在内容变化时重置)
+// 播放队列模型 (歌曲很多时比 QVariantList 便宜得多):整体换队列时重置,单条增删 / 挪动只发对应的行信号,
+// 列表保持滚动位置并能播放过渡动画。行与 queue_ 一一对应 (找不到的曲目留空行,下标不会错位)
 class QueueModel : public QAbstractListModel {
     Q_OBJECT
 public:
@@ -27,8 +28,12 @@ public:
     QVariant data(const QModelIndex& index, int role) const override;
     QHash<int, QByteArray> roleNames() const override;
     void reset(std::shared_ptr<const LibrarySnapshot> snap, const std::vector<uint64_t>& ids, int gen);
+    void insertAt(int row, const std::vector<uint64_t>& ids);
+    void removeAt(int row);
+    void moveRow(int from, int to);
 
 private:
+    void shiftedFrom(int first, int last);
     std::shared_ptr<const LibrarySnapshot> snap_;
     std::vector<const TrackItem*> rows_;
     int gen_ = 0;
@@ -58,6 +63,9 @@ class PlayerController : public QObject {
     Q_PROPERTY(QVariantList spectrum READ spectrum NOTIFY spectrumChanged)
     Q_PROPERTY(int queueLength READ queueLength NOTIFY queueChanged)
     Q_PROPERTY(int queuePosition READ queuePosition NOTIFY queueIndexChanged)
+    // 队列来自哪里:「album:<下标>」「artist:<名字>」「playlist:<id>」等;临时拼出来的队列为空。
+    // 页面据此判断「播放」键该显示暂停 (当前队列就是这一页)
+    Q_PROPERTY(QString queueTag READ queueTag NOTIFY queueChanged)
     Q_PROPERTY(QObject* queueModel READ queueModel CONSTANT)
     // WASAPI 独占输出 (切换时无缝重建输出设备,保持播放位置)
     Q_PROPERTY(bool exclusive READ exclusive WRITE setExclusive NOTIFY modeChanged)
@@ -86,6 +94,8 @@ class PlayerController : public QObject {
     // 定时关闭:0 = 关闭,-1 = 播完当前歌曲后停止,N = N 分钟后暂停;sleepRemaining 为剩余秒数
     Q_PROPERTY(int sleepMinutes READ sleepMinutes NOTIFY sleepChanged)
     Q_PROPERTY(int sleepRemaining READ sleepRemaining NOTIFY sleepChanged)
+    // 队列剩余时长 (当前曲目剩下的 + 之后各曲),「1 小时 12 分钟」这类写法;显示的分钟数变了才通知
+    Q_PROPERTY(QString queueRemaining READ queueRemaining NOTIFY queueStatsChanged)
 
 public:
     explicit PlayerController(LibraryService* lib, QObject* parent = nullptr);
@@ -115,6 +125,8 @@ public:
     QVariantList spectrum() const { return spectrum_; }
     int queueLength() const { return static_cast<int>(queue_.size()); }
     int queuePosition() const { return queueIndex_; }
+    QString queueTag() const { return queueTag_; }
+    QString queueRemaining() const;
     QString errorText() const { return error_; }
     int sleepMinutes() const { return sleepMinutes_; }
     int sleepRemaining() const;
@@ -152,15 +164,19 @@ public:
     Q_INVOKABLE void previous();
     Q_INVOKABLE void seek(double seconds);
     Q_INVOKABLE void playQueueIndex(int index);
-    // 播放任意曲目列表 (歌曲页 / 歌手 / 歌单 / 搜索结果)
-    Q_INVOKABLE void playTracks(const QVariantList& trackIds, int start = 0);
+    // 播放任意曲目列表 (歌曲页 / 歌手 / 歌单 / 搜索结果);tag 标明来源 (见 queueTag)
+    Q_INVOKABLE void playTracks(const QVariantList& trackIds, int start = 0, const QString& tag = QString());
     Q_INVOKABLE void playNext(double trackId);
     // 一组曲目整体插到当前歌曲之后 (保持原顺序)
     Q_INVOKABLE void playNextTracks(const QVariantList& trackIds);
     Q_INVOKABLE void enqueue(const QVariantList& trackIds);
     Q_INVOKABLE void removeFromQueue(int index);
+    // 拖动排序:把第 from 首挪到第 to 位 (正在播放的那首跟着走)
+    Q_INVOKABLE void moveInQueue(int from, int to);
     // 清空播放列表:只保留正在播放的这一首,播放不中断
     Q_INVOKABLE void clearQueue();
+    // 撤销刚才的清空 (提示条上的「撤销」);曲库已重扫或正在播放的歌不在原队列里时返回 false
+    Q_INVOKABLE bool undoClearQueue();
     Q_INVOKABLE void setSleepTimer(int minutes);
     // 键盘快捷键:相对跳转 (秒) / 音量增减
     Q_INVOKABLE void seekBy(double seconds) { seek(position_ + seconds); }
@@ -175,6 +191,7 @@ signals:
     void accentChanged();
     void spectrumChanged();
     void queueChanged();
+    void queueStatsChanged();
     void queueIndexChanged();
     void modeChanged();
     void errorChanged();
@@ -199,8 +216,13 @@ private:
     void applyPendingRemap();
     QHash<QString, QString> pendingRemap_;
     bool openIndex(int index, bool autoPlay);
-    void setQueue(std::vector<uint64_t> ids, int start);
+    void setQueue(std::vector<uint64_t> ids, int start, const QString& tag);
+    // 专辑下标随重扫变化:按队列首曲在当前快照里重新找回 album: 标签
+    void reresolveAlbumTag();
     void queueContentChanged();
+    // 单条增删 / 挪动之后:不重置模型,只通知长度与剩余时长、重排预加载
+    void queueEdited();
+    void updateQueueStats(bool recount);
     void onEnded();
     void applyVolume();
     // 启动恢复:保存 / 读取上次的队列 (路径 + CUE 起点)、位置
@@ -229,6 +251,7 @@ private:
     std::shared_ptr<const LibrarySnapshot> snap_; // 当前队列所依附的曲库快照
     std::vector<uint64_t> queue_;
     std::vector<uint64_t> context_; // 最近一次整体设为队列的那份列表 (点同一列表里的歌时只跳转)
+    QString queueTag_;
     int queueIndex_ = -1;
     std::vector<uint64_t> unshuffled_; // 打开随机前的原始顺序,关闭随机时恢复
     bool shuffle_ = false;
@@ -275,5 +298,13 @@ private:
     quint64 lyricsGen_ = 0; // 每次重新加载歌词递增,丢弃过期的后台结果
     int sleepMinutes_ = 0;
     qint64 sleepDeadline_ = 0; // QDateTime 毫秒;按分钟定时时有效
+    uint64_t queueAfterMs_ = 0;   // 当前曲目之后各曲的总时长
+    qint64 remainingShown_ = -1;  // 上次通知时的剩余分钟数
+    // 最近一次清空前的队列 (撤销用)
+    struct ClearedQueue {
+        std::shared_ptr<const LibrarySnapshot> snap;
+        std::vector<uint64_t> queue, unshuffled, context;
+        QString tag;
+    } lastCleared_;
     QTimer sleepTimer_;        // 每秒刷新剩余时间
 };

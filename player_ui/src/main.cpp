@@ -6,6 +6,8 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QTimer>
+#include <QKeyEvent>
+#include <QWheelEvent>
 #include <QFileInfo>
 #include <QFile>
 #include <QPainter>
@@ -92,6 +94,146 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
             call("automationOpenAlbumTitle", hires);
         }, 2000});
         steps->push_back({"a11_wall_small", [call] { call("automationBack"); }, 1600});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_WALL")) {
+        // 专辑墙:今日推荐 / 排序菜单 / 按年份 (年代索引) / 筛选 / 播放与暂停 / 卡片菜单 / 重扫后位置 / 封面大小 / 小窗
+        steps->push_back({"w01_wall", [call] { call("automationGo", QStringLiteral("albums")); }, 1600});
+        steps->push_back({"w02_sortmenu", [call] { call("automationWallSortMenu", true); }, 800});
+        steps->push_back({"w03_year", [call] { call("automationWallSortMenu", false); call("automationWallSort", 2); }, 1400});
+        steps->push_back({"w04_scrolled", [call] { call("automationWallScroll", 520); }, 900});
+        steps->push_back({"w05_lossy", [call] { call("automationWallScroll", 0); call("automationWallFilter", 3); }, 1400});
+        steps->push_back({"w06_playing", [call, &player] {
+            call("automationWallFilter", 0);
+            call("automationWallSort", 0);
+            player.playAlbum(0, 0);
+        }, 1800});
+        steps->push_back({"w07_paused", [&player] { player.toggle(); }, 1200});
+        steps->push_back({"w08_card_menu", [call] { call("automationWallMenu", 1); }, 900});
+        steps->push_back({"w09_rescan_kept", [call, &lib] {
+            call("automationCloseMenu");
+            call("automationWallScroll", 600);
+            lib.rescan();
+        }, 6000});
+        steps->push_back({"w10_small_cells", [call] { call("automationWallScroll", 0); call("automationAlbumCell", 128); }, 1400});
+        steps->push_back({"w11_big_cells", [call] { call("automationAlbumCell", 272); }, 1400});
+        steps->push_back({"w12_small_window", [window, call] {
+            call("automationAlbumCell", 176);
+            call("automationWallSort", 1);
+            window->resize(980, 640);
+        }, 1600});
+        steps->push_back({"w13_wide", [window] { window->resize(1920, 1080); }, 1600});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_PAGES")) {
+        // 歌手 / 歌单 / 歌曲 / 搜索页:播放中的暂停键、滚动后的精简栏、整组「更多」菜单、搜索最佳匹配与无结果
+        const QString artist = qEnvironmentVariable("KP_PAGES_ARTIST", QStringLiteral("久石譲"));
+        // 页面上的自动化函数 (按 objectName 找到页面根对象)
+        auto pageCall = [window](const char* page, const char* fn, QVariant arg = {}) {
+            QObject* o = window->findChild<QObject*>(QLatin1String(page));
+            if (QObject* root = window->property("contentItem").value<QObject*>(); !o && root) o = root->findChild<QObject*>(QLatin1String(page));
+            if (!o) return;
+            if (arg.isValid()) QMetaObject::invokeMethod(o, fn, Q_ARG(QVariant, arg));
+            else QMetaObject::invokeMethod(o, fn);
+        };
+        steps->push_back({"g01_artists", [call] { call("automationGo", QStringLiteral("artists")); }, 1600});
+        steps->push_back({"g02_artist", [call, artist] { call("automationOpenArtist", artist); }, 1600});
+        steps->push_back({"g03_artist_playing", [pageCall] { pageCall("artistDetailPage", "playOrToggle"); }, 1800});
+        steps->push_back({"g04_artist_bar", [pageCall] { pageCall("artistDetailPage", "automationScroll", 760); }, 900});
+        steps->push_back({"g05_artist_menu", [pageCall] {
+            pageCall("artistDetailPage", "automationScroll", 0);
+            pageCall("artistDetailPage", "automationMenu");
+        }, 900});
+        steps->push_back({"g06_artists_back", [call] { call("automationCloseMenu"); call("automationBack"); }, 1600});
+        steps->push_back({"g07_playlists", [&engine, &lib, call] {
+            auto* pl = qobject_cast<PlaylistService*>(engine.rootContext()->contextProperty("playlists").value<QObject*>());
+            auto snap = lib.snapshot();
+            if (pl && pl->playlists().size() <= 1 && snap->songs.size() > 40) {
+                QVariantList a;
+                for (size_t i = 0; i < 68; ++i) a.append(double(snap->songs[i * 3]->id));
+                pl->addTracks(pl->create(QStringLiteral("深夜循环")), a);
+                pl->create(QStringLiteral("空歌单"));
+            }
+            call("automationGo", QStringLiteral("playlists"));
+        }, 1400});
+        steps->push_back({"g08_playlist", [&engine, call] {
+            auto* pl = qobject_cast<PlaylistService*>(engine.rootContext()->contextProperty("playlists").value<QObject*>());
+            if (pl && pl->playlists().size() > 1) call("automationOpenPlaylist", pl->playlists()[1].toMap()["id"]);
+        }, 1400});
+        steps->push_back({"g09_playlist_bar", [pageCall] { pageCall("playlistDetailPage", "automationScroll", 700); }, 900});
+        steps->push_back({"g10_playlist_menu", [pageCall] {
+            pageCall("playlistDetailPage", "automationScroll", 0);
+            pageCall("playlistDetailPage", "automationMenu");
+        }, 900});
+        steps->push_back({"g11_empty_playlist", [&engine, call] {
+            call("automationCloseMenu");
+            auto* pl = qobject_cast<PlaylistService*>(engine.rootContext()->contextProperty("playlists").value<QObject*>());
+            if (!pl) return;
+            for (const QVariant& v : pl->playlists())
+                if (v.toMap()["count"].toInt() == 0) { call("automationOpenPlaylist", v.toMap()["id"]); break; }
+        }, 1400});
+        steps->push_back({"g12_songs", [call] { call("automationGo", QStringLiteral("songs")); }, 1600});
+        steps->push_back({"g13_search_artist", [call, artist] { call("automationSearch", artist); }, 1400});
+        steps->push_back({"g14_search_track", [call] { call("automationSearch", QStringLiteral("summer")); }, 1400});
+        steps->push_back({"g15_search_none", [call] { call("automationSearch", QStringLiteral("qqxxzz")); }, 1400});
+        steps->push_back({"g16_small_artist", [window, call, artist] {
+            window->resize(980, 640);
+            call("automationOpenArtist", artist);
+        }, 1800});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_CHROME")) {
+        // 播放队列抽屉 / 队列右键菜单与键盘操作 / 清空后撤销 / 沉浸页 / 歌曲信息 / 定时关闭与音量 / 窄窗播放条 / 顶部磨砂条
+        auto key = [window](int k) {
+            QKeyEvent press(QEvent::KeyPress, k, Qt::NoModifier);
+            QKeyEvent release(QEvent::KeyRelease, k, Qt::NoModifier);
+            QCoreApplication::sendEvent(window, &press);
+            QCoreApplication::sendEvent(window, &release);
+        };
+        auto wheel = [window](int dy) {
+            const QPointF pos(window->width() * 0.55, window->height() * 0.45);
+            QWheelEvent ev(pos, window->mapToGlobal(pos), QPoint(), QPoint(0, dy), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+            QCoreApplication::sendEvent(window, &ev);
+        };
+        steps->push_back({"c01_queue", [call, &player, &lib] {
+            auto snap = lib.snapshot();
+            QVariantList ids;
+            for (size_t i = 0; i < snap->songs.size() && i < 400; ++i) ids.append(double(snap->songs[i]->id));
+            player.playTracks(ids, 12, QStringLiteral("songs"));
+            call("automationQueue", true);
+        }, 1600});
+        steps->push_back({"c02_queue_scrolled", [call] { call("automationQueueScroll", 120); }, 900});
+        steps->push_back({"c03_queue_menu", [call] { call("automationQueueScroll", 0); call("automationQueueMenu", 16); }, 900});
+        steps->push_back({"c04_menu_keys", [key, window] {
+            window->requestActivate();
+            QTimer::singleShot(150, [key] { key(Qt::Key_Down); key(Qt::Key_Down); key(Qt::Key_Down); key(Qt::Key_Down); key(Qt::Key_Right); key(Qt::Key_Down); });
+        }, 900});
+        steps->push_back({"c05_cleared", [call] { call("automationCloseMenu"); call("automationClearQueue"); }, 900});
+        steps->push_back({"c06_now_queue", [call, &player] {
+            player.undoClearQueue();
+            call("automationQueue", false);
+            call("automationNowPlaying", true);
+            call("automationNowTab", QStringLiteral("queue"));
+        }, 1800});
+        steps->push_back({"c07_now_lyrics", [call] { call("automationNowTab", QStringLiteral("lyrics")); }, 1000});
+        steps->push_back({"c08_track_info", [call] { call("automationNowPlaying", false); call("automationTrackInfo", true); }, 1300});
+        steps->push_back({"c09_sleep_compact", [call, window, &player] {
+            call("automationTrackInfo", false);
+            call("automationSleep", 30);
+            window->resize(960, 640);
+            player.changeVolume(-0.1);
+        }, 500});
+        steps->push_back({"c10_songs_band", [call, window, wheel] {
+            window->resize(1280, 800);
+            call("automationGo", QStringLiteral("songs"));
+            QTimer::singleShot(900, [wheel] { wheel(-360); });
+        }, 2400});
+        steps->push_back({"c10b_songs_quality", [call] { call("automationSongsSort", 5); }, 1400});
+        steps->push_back({"c10c_songs_artist_keys", [call, key, window] {
+            call("automationSongsSort", 1);
+            window->requestActivate();
+            QTimer::singleShot(600, [key] { key(Qt::Key_Down); key(Qt::Key_Down); key(Qt::Key_Down); });
+        }, 1600});
+        steps->push_back({"c11_big_now", [call, window] {
+            call("automationSongsSort", 0);
+            call("automationSleep", 0);
+            window->resize(1920, 1080);
+            call("automationNowPlaying", true);
+        }, 2000});
     } else if (qEnvironmentVariableIsSet("KP_TEST_FINDPLAY")) {
         // 回归:只查找重复、只预览整理 (不动文件),然后点播放
         auto tools = [&engine]() { return qobject_cast<LibraryTools*>(engine.rootContext()->contextProperty("libtools").value<QObject*>()); };
@@ -145,7 +287,7 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         QMetaObject::invokeMethod(window, "automationBack");
         call("automationGo", QStringLiteral("artists"));
     }, 1600});
-    steps->push_back({"06_artist_detail", [call] { call("automationOpenArtist", QStringLiteral("久石让")); }, 1600});
+    steps->push_back({"06_artist_detail", [call] { call("automationOpenArtist", QStringLiteral("久石譲")); }, 1600});
     steps->push_back({"07_songs", [call] { call("automationGo", QStringLiteral("songs")); }, 1600});
     steps->push_back({"08_playlists", [&engine, &lib, call] {
         // 演示数据:两个歌单 + 几首收藏
@@ -350,10 +492,11 @@ int main(int argc, char* argv[]) {
     DecryptorRegistry::Instance().SetToolsDir((QCoreApplication::applicationDirPath() + "/tools").toStdWString());
     LibraryService library;
     PlayerController player(&library);
-    AlbumModel albums(&library);
+    // 播放历史先于专辑墙建立:曲库变化时它先更新,专辑墙「最近播放」排序用到它
+    PlaylistService playlists(&library);
+    AlbumModel albums(&library, &playlists);
     TrackListModel albumTracks(&library);
     SearchModel search(&library);
-    PlaylistService playlists(&library);
     DecryptService decrypt(&library);
     SettingsService settings(&library);
     ArtistModel artists(&library);
