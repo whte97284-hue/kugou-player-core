@@ -173,6 +173,7 @@ Item {
                 x: wall.gap / 2
                 width: parent.width - wall.gap
                 availableHeight: grid.height - wall.bottomInset
+                sortOpen: sortPop.shown
                 onOpenAlbum: (index, coverItem) => wall.openAlbum(index, coverItem)
                 onSortMenu: (anchor) => sortPop.open(anchor)
             }

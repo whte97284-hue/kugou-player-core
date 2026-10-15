@@ -7,6 +7,7 @@ Item {
     id: hero
     signal openAlbum(int index, Item coverItem)
     signal sortMenu(Item anchor)
+    property bool sortOpen: false   // 排序菜单开着 (箭头朝上、文字强调色)
     // 网格可见高度 (去掉底部播放栏):窗口矮时封面跟着缩小,第一排专辑不被挤出视野
     property real availableHeight: 640
     // 「换一张」:今日推荐依次往后挑
@@ -22,7 +23,7 @@ Item {
     // 矮窗口:文字列收紧,第一排专辑多露出一些
     readonly property bool tight: availableHeight < 560
     readonly property int artistIdx: library.generation >= 0 && hasAlbum ? library.artistIndexOf(info.artist || "") : -1
-    // 文字列比封套高时 (矮窗口) 整块下移,标题上方的说明不会被裁掉
+    // 封套与文字列顶端对齐;文字列比封套高时 (矮窗口) 横幅随之加高,下方内容不被盖住
     readonly property real block: Math.max(s, textCol.implicitHeight)
     height: (hasAlbum ? artTop + block + 34 : 24) + 36 + 14
     readonly property Item coverItem: sleeve
@@ -42,7 +43,7 @@ Item {
     Item {
         id: art
         visible: hero.hasAlbum
-        y: hero.artTop + hero.block - hero.s
+        y: hero.artTop
         width: hero.s
         height: hero.s
         Vinyl {
@@ -81,7 +82,7 @@ Item {
         visible: hero.hasAlbum
         x: hero.textX
         width: hero.width - x - (shelf.visible ? shelf.width + 48 : 0)
-        anchors.bottom: art.bottom
+        anchors.top: art.top
         spacing: hero.tight ? 6 : 10
 
         // 说明这里展示的是什么:正在播放 / 上次播放 / 今日推荐
@@ -338,25 +339,17 @@ Item {
                 }
             }
             Rectangle { anchors.verticalCenter: parent.verticalCenter; width: 1; height: 14; color: Theme.hairline }
-            // 排序:点开小菜单 (菜单放在专辑墙上层,不被网格裁切)
-            Capsule {
+            // 排序:与筛选标签同一种文字样式;点开小菜单 (菜单放在专辑墙上层,不被网格裁切)
+            SortTab {
                 id: sortCap
                 anchors.verticalCenter: parent.verticalCenter
                 height: 30
-                pad: 12
-                trailing: 14
+                centered: true
+                fontSize: 13
                 text: [qsTr("按标题"), qsTr("按歌手"), qsTr("按年份"), qsTr("最近添加"), qsTr("最近播放")][albumModel.sortMode]
-                accent: albumModel.sortMode !== 0
+                changed: albumModel.sortMode !== 0
+                open: hero.sortOpen
                 onClicked: hero.sortMenu(sortCap)
-                Icon {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 10
-                    anchors.verticalCenter: parent.verticalCenter
-                    name: "chevron"
-                    size: 12
-                    rotation: 90
-                    opacity: 0.6
-                }
             }
             IconButton {
                 anchors.verticalCenter: parent.verticalCenter

@@ -95,6 +95,14 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         steps->push_back({"p08_pure_json", [&player, lyr] { lyr("vip"); player.next(); player.next(); }, 1500});
         steps->push_back({"p09_zh", [&player, lyr, call] { lyr("purejson"); call("automationPlayTitle", QStringLiteral("THE BOOK")); }, 1500});
         steps->push_back({"p10_done", [&player, lyr] { lyr("zh"); }, 300});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_SORTUI")) {
+        // 排序入口与横幅对齐:专辑墙 (默认 / 菜单开着 / 播放中) 与歌曲页 (默认 / 改过排序),再看矮窗口
+        steps->push_back({"s01_wall", [call] { call("automationGo", QStringLiteral("albums")); }, 1600});
+        steps->push_back({"s02_wall_menu", [call] { call("automationWallSortMenu", true); }, 800});
+        steps->push_back({"s03_wall_playing", [call, &player] { call("automationWallSortMenu", false); player.playAlbum(0, 0); }, 1800});
+        steps->push_back({"s04_songs", [call] { call("automationGo", QStringLiteral("songs")); }, 1600});
+        steps->push_back({"s05_songs_sorted", [call] { call("automationSongsSort", 1); }, 1000});
+        steps->push_back({"s06_wall_short", [window, call] { call("automationSongsSort", 0); window->resize(1500, 760); call("automationGo", QStringLiteral("albums")); }, 1800});
     } else if (qEnvironmentVariableIsSet("KP_TEST_LYRSRC")) {
         // 歌词来源:自动找到的在线歌词 → 打开来源面板 (自动搜索) → 换一份 → 保存到本地;以及没有歌词时的样子
         // 配合 KP_TEST_LYRIC_FAKE=1 使用 (假的歌词接口)

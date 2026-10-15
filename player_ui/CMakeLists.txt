@@ -79,6 +79,7 @@ qt_add_qml_module(KugouPlayer
         qml/HoverTip.qml
         qml/SortPopup.qml
         qml/LyricSourcePanel.qml
+        qml/SortTab.qml
         qml/DetailBar.qml
 )
 

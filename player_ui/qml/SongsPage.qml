@@ -121,27 +121,24 @@ Item {
                     }
                 }
             }
-            // 排序 (只对「全部」):与专辑墙同一枚「按…」胶囊
-            Capsule {
-                id: sortCap
+            // 排序 (只对「全部」):与「全部 / 最近播放」同一种文字样式,中间一条细竖线隔开
+            Row {
+                id: sortGroup
                 visible: !page.showHistory
                 anchors.right: tabs.left
-                anchors.rightMargin: 24
-                y: 74 + 16 - height / 2
-                height: 30
-                pad: 12
-                trailing: 14
-                text: page.sortNames[songsModel.sortMode]
-                accent: songsModel.sortMode !== 0
-                onClicked: sortPop.open(sortCap)
-                Icon {
-                    anchors.right: parent.right
-                    anchors.rightMargin: 10
-                    anchors.verticalCenter: parent.verticalCenter
-                    name: "chevron"
-                    size: 12
-                    rotation: 90
-                    opacity: 0.6
+                anchors.rightMargin: 22
+                y: 74
+                spacing: 22
+                SortTab {
+                    id: sortCap
+                    text: page.sortNames[songsModel.sortMode]
+                    changed: songsModel.sortMode !== 0
+                    open: sortPop.shown
+                    onClicked: sortPop.open(sortCap)
+                }
+                Item {
+                    width: 1; height: 32
+                    Rectangle { y: 4; width: 1; height: 14; color: Theme.hairline }
                 }
             }
             // 全部 / 最近播放:两个文字标签,选中的那个用正文色并带一条强调色短线
