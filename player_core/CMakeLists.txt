@@ -21,6 +21,7 @@ add_library(player_core STATIC
     src/fft_visualizer.cpp
     src/audio_playback_engine.cpp
     src/lyric_manager.cpp
+    src/lyric_provider.cpp
     src/tinf.cpp
     src/kugou_track_bridge.cpp
 )

@@ -148,6 +148,13 @@ public:
     bool FetchOnline(const std::wstring& audioFilePath, const std::wstring& title, const std::wstring& artist,
                      uint32_t durationMs, ParsedLyrics& outLyrics);
 
+    // 【新】多源聚合拉取:并行查询 LRCLIB / 网易云 / 酷狗,择优合并。
+    // 相比 FetchOnline 单源(仅酷狗),覆盖面更广、成功率更高;结果同样写入缓存目录
+    // (LRC 源写 .lrc,酷狗 KRC 源写 .krc),之后 LoadLyricsForTrack 直接命中。
+    // query 为空时用 (audioFilePath, title, artist) 自动补全。
+    bool FetchOnlineMulti(const std::wstring& audioFilePath, const std::wstring& title, const std::wstring& artist,
+                          uint32_t durationMs, ParsedLyrics& outLyrics);
+
     // 在线歌词缓存目录 (同时加入本地歌词库索引)
     void SetCacheDirectory(const std::wstring& dir);
 

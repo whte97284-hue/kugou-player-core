@@ -2,6 +2,7 @@
 #define NOMINMAX
 #endif
 #include "../include/lyric_manager.hpp"
+#include "../include/lyric_provider.hpp"
 #include "../include/tinf.hpp"
 #include "../include/audio_tag_parser.hpp"
 #include "../include/platform_io.hpp"
@@ -1396,6 +1397,79 @@ bool LyricManager::FetchOnline(const std::wstring& audioFilePath, const std::wst
     if (!ok) return false;
     if (parsed.title.empty()) parsed.title = qTitle;
     if (parsed.artist.empty()) parsed.artist = qArtist;
+    outLyrics = std::move(parsed);
+    return true;
+}
+
+// 多源聚合在线拉取:并行查 LRCLIB / 网易云 / 酷狗,择优合并后再落缓存。
+// 与旧的 FetchOnline(仅酷狗)相比,中文曲目优先命中 LRCLIB/酷狗,冷门曲目有兜底。
+bool LyricManager::FetchOnlineMulti(const std::wstring& audioFilePath, const std::wstring& title,
+                                    const std::wstring& artist, uint32_t durationMs, ParsedLyrics& outLyrics) {
+    // 搜索词:与 FetchOnline 同样的补齐策略 (标签缺失时用「歌手 - 歌名」文件名)
+    std::wstring qTitle = title, qArtist = artist;
+    if (qTitle.empty() && !audioFilePath.empty())
+        SplitArtistTitle(StripDecorations(FileStem(audioFilePath)), qArtist, qTitle);
+    qTitle = StripTrackNumber(qTitle);
+    Trim(qTitle);
+    Trim(qArtist);
+    if (IsPlaceholderArtist(qArtist)) qArtist.clear();
+    if (qTitle.empty()) return false;
+
+    HttpGetFn providerHttp;
+    std::wstring cacheDir;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // 复用 http_ (若外部注入过),否则用 LyricProvider 默认的 WinHTTP
+        providerHttp = http_ ? http_ : HttpGetFn(&LyricProvider::DefaultHttpGet);
+        cacheDir = cache_dir_;
+    }
+
+    LyricProvider provider(providerHttp);
+    LyricQuery q;
+    q.title = qTitle;
+    q.artist = qArtist;
+    q.duration_ms = durationMs;
+
+    RawLyricDoc doc;
+    LyricCandidate picked;
+    if (!provider.SearchAndFetch(q, doc, &picked, nullptr)) return false;
+
+    // 载荷 → ParsedLyrics
+    ParsedLyrics parsed;
+    bool ok = false;
+    switch (doc.kind) {
+        case RawLyricDoc::Payload::Krc:
+            ok = KrcDecoder::DecodeMemory(reinterpret_cast<const uint8_t*>(doc.raw_payload.data()),
+                                          doc.raw_payload.size(), parsed);
+            break;
+        case RawLyricDoc::Payload::Lrc:
+            ok = KrcDecoder::ParseLrcText(doc.lrc_text, parsed);
+            break;
+        case RawLyricDoc::Payload::Plain:
+            ok = KrcDecoder::ParseLrcText(doc.raw_payload, parsed);
+            break;
+    }
+    if (!ok) return false;
+
+    if (parsed.title.empty()) parsed.title = picked.title.empty() ? qTitle : picked.title;
+    if (parsed.artist.empty()) parsed.artist = picked.artist.empty() ? qArtist : picked.artist;
+
+    // 写缓存:酷狗 KRC 原样存 .krc;其他源存标准 .lrc(带 BOM),下次 LoadLyricsForTrack 直接命中
+    if (!cacheDir.empty()) {
+        const std::wstring name = SafeFileName(parsed.artist.empty() ? parsed.title : parsed.artist + L" - " + parsed.title);
+        if (!name.empty()) {
+            const std::wstring sep = cacheDir.back() == L'/' || cacheDir.back() == L'\\' ? L"" : L"/";
+            if (doc.kind == RawLyricDoc::Payload::Krc) {
+                if (WriteWholeFile(cacheDir + sep + name + L".krc", doc.raw_payload)) {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    index_built_at_ = 0;
+                }
+            } else {
+                // 用 ExportLrcFile 落 .lrc(原子),不走索引(.lrc 由 LoadLyrics 层级直接读)
+                ExportLrcFile(parsed, cacheDir + sep + name + L".lrc");
+            }
+        }
+    }
     outLyrics = std::move(parsed);
     return true;
 }
