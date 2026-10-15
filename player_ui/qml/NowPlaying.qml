@@ -4,13 +4,14 @@ import PlayerUi
 // 沉浸播放页 v4:整窗铺满模糊封面,左边封面与控制,右边歌词占满整个高度,没有用不到的空白
 //  左栏:封面 → 歌名歌手 (居中) → 进度 (时间在两侧) → 控制 → 音量
 //  右栏:歌词居中排版,当前句停在视口偏上处、用强调色随演唱点亮,译文跟在原句下面;无歌词时为「接下来播放」
-//  顶栏:左收起、中间音质小胶囊 (在窗口拖动条下方,点得到);右下角歌词 / 队列切换
+//  顶栏:左上角收起;右下角一排同样式的图标按钮:歌词来源、音质、歌词 / 队列切换
 //  大屏时封面、字号、按钮按窗口高度等比放大 (k,最多 1.35 倍)
 Item {
     id: np
     property bool shown: false
     signal closeRequested()
     signal chainClicked()
+    property bool chainOpen: false   // 信号链详情是否展开 (音质按钮据此显示选中)
     // 共享元素飞行用:大封面。封面本身不参与进场位移,飞行落点在整个过程中保持不动
     readonly property Item coverItem: cover
     // 大封面的投影:飞行副本按它的参数带着投影落地
@@ -66,157 +67,62 @@ Item {
     readonly property real sideW: width - padX - sideX
 
     // ---------------- 顶栏 ----------------
+    // 收起:放进窗口顶栏那一行,与右上角窗口按钮同一条中线 (y = 17),离封面留出空当
+    // (标题栏的拖动区从左侧导航宽度之后才开始,这里点得到)
     IconButton {
-        x: 20
-        y: 44
+        x: 10
+        y: -3
         icon: "back"
-        iconSize: 18
+        iconSize: 16
         rotation: -90
         tip: qsTr("收起  Esc")
         onClicked: np.closeRequested()
     }
 
-    // 音质小胶囊:平时只有一个点与「24/96」这类简写;悬停时平滑拉宽、换成完整信号链,点击展开详情
-    Rectangle {
-        id: qcap
-        readonly property bool open: chainMouse.containsMouse
-        readonly property real shortW: shortText.implicitWidth + 40
-        readonly property real longW: Math.min(np.width * 0.5, longText.implicitWidth + 40)
-        anchors.horizontalCenter: parent.horizontalCenter
-        // 顶部 44px 是窗口拖动条,胶囊放在它下面,整枚都点得到
-        y: 50
-        height: 28
-        width: open ? longW : shortW
-        radius: 14
-        color: Qt.rgba(1, 0.96, 0.9, open ? 0.09 : 0.05)
-        border.width: 1
-        border.color: Theme.hairline
-        clip: true
-        visible: player.hasTrack
-        opacity: np.shown ? 1 : 0
-        Behavior on opacity { SequentialAnimation { PauseAnimation { duration: np.shown ? 260 : 0 } OpacityAnimator { duration: 360 } } }
-        Behavior on width { NumberAnimation { duration: 420; easing.type: Easing.OutQuint } }
-        Behavior on color { ColorAnimation { duration: Theme.normal } }
-        Rectangle {
-            x: 15
-            anchors.verticalCenter: parent.verticalCenter
-            width: 5; height: 5; radius: 2.5
-            color: player.bitPerfect ? Theme.accent : Theme.textTertiary
-        }
-        Text {
-            id: shortText
-            x: 27
-            anchors.verticalCenter: parent.verticalCenter
-            text: player.quality
-            opacity: qcap.open ? 0 : 1
-            color: Theme.textSecondary
-            font.family: Theme.fontFamily
-            font.pixelSize: 12
-            font.weight: Font.DemiBold
-            Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
-        }
-        Text {
-            id: longText
-            x: 27
-            width: qcap.longW - 40
-            anchors.verticalCenter: parent.verticalCenter
-            text: player.chainSummary
-            elide: Text.ElideRight
-            opacity: qcap.open ? 1 : 0
-            color: Theme.textSecondary
-            font.family: Theme.fontFamily
-            font.pixelSize: 12
-            Behavior on opacity { SequentialAnimation { PauseAnimation { duration: qcap.open ? 120 : 0 } OpacityAnimator { duration: Theme.normal } } }
-        }
-        MouseArea {
-            id: chainMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: np.chainClicked()
-        }
-    }
-
-    // 歌词 / 队列切换:放在右下角,避开顶部的窗口按钮
+    // 右下角按钮组:避开顶部的窗口按钮;四个按钮同尺寸、等间距
     Row {
         id: tabs
         anchors.right: parent.right
-        anchors.rightMargin: 20
+        anchors.rightMargin: 28
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: 14
+        anchors.bottomMargin: 18
         spacing: 4
         z: 2
         opacity: np.shown ? 1 : 0
         Behavior on opacity { SequentialAnimation { PauseAnimation { duration: np.shown ? 260 : 0 } OpacityAnimator { duration: 360 } } }
-        // 歌词来源胶囊:强调色来源图标 + 来源名;没有歌词时是「搜索歌词」。点开歌词来源面板
-        Rectangle {
-            id: sourceChip
-            readonly property bool has: !!(player.lyricSource.kind && player.lyricSource.kind !== "none")
-            readonly property bool open: lyricPanel.shown
-            visible: player.hasTrack
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.verticalCenterOffset: -2
-            width: chipRow.implicitWidth + 24
-            height: 28
-            radius: 14
-            color: open ? Theme.accentAlpha(0.16) : Qt.rgba(1, 0.96, 0.9, 0.05)
-            Behavior on color { ColorAnimation { duration: Theme.fast } }
-            Behavior on width { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
-            scale: chipMouse.pressed ? 0.96 : 1
-            Behavior on scale { ScaleAnimator { duration: Theme.fast; easing.type: Easing.OutCubic } }
-            Rectangle {
-                anchors.fill: parent
-                radius: parent.radius
-                color: Qt.rgba(1, 0.96, 0.9, 0.05)
-                opacity: chipMouse.containsMouse && !sourceChip.open ? 1 : 0
-                Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
-            }
-            Row {
-                id: chipRow
-                anchors.centerIn: parent
-                spacing: 6
-                Icon {
-                    anchors.verticalCenter: parent.verticalCenter
-                    name: Nav.lyricIcon(player.lyricSource.kind)
-                    size: 14
-                    tint: Theme.accent
-                }
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: sourceChip.has ? player.lyricSource.label : qsTr("搜索歌词")
-                    color: sourceChip.open ? Theme.accent : chipMouse.containsMouse ? Theme.text : Theme.textSecondary
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 12
-                    font.weight: sourceChip.open ? Font.DemiBold : Font.Medium
-                }
-            }
-            MouseArea {
-                id: chipMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                    if (lyricPanel.shown) { lyricPanel.close(); return }
-                    side.tab = "lyrics"
-                    lyricPanel.open()
-                }
-            }
-        }
-        Item { width: 8; height: 1 }
+        // 四个按钮同一种样式:图标 19px、40×38 点击区、强调色表示「开着 / 选中」,下方短横线标出当前项
+        //  歌词来源 (图标随来源变化,点开来源面板) · 音质 (悬停看完整信号链,点开详情;直通时强调色) · 歌词 · 队列
         Repeater {
-            model: [{ key: "lyrics", icon: "lyrics", tip: qsTr("歌词") }, { key: "queue", icon: "queue", tip: qsTr("播放队列") }]
+            model: [
+                { key: "source", tip: qsTr("歌词来源") },
+                { key: "quality", tip: qsTr("音质") },
+                { key: "lyrics", icon: "lyrics", tip: qsTr("歌词") },
+                { key: "queue", icon: "queue", tip: qsTr("播放队列") }
+            ]
             Item {
+                id: tabBtn
+                readonly property string key: modelData.key
                 width: 40
                 height: 38
-                readonly property bool active: side.tab === modelData.key
+                visible: player.hasTrack || key === "lyrics" || key === "queue"
+                readonly property bool active: key === "source" ? lyricPanel.shown : key === "quality" ? np.chainOpen : side.tab === key
+                readonly property bool lit: active || (key === "quality" && player.bitPerfect)
+                readonly property string icon: key === "source" ? Nav.lyricIcon(player.lyricSource.kind) : key === "quality" ? "hires" : modelData.icon
+                readonly property string tip: key === "source"
+                    ? (player.lyricSource.label ? qsTr("歌词来源 · %1").arg(player.lyricSource.label) : qsTr("搜索歌词"))
+                    : key === "quality" ? (player.chainSummary || player.quality || qsTr("音质"))
+                    : modelData.tip
+                onTipChanged: if (tm.containsMouse) Nav.hint(tabBtn, tip)
                 Icon {
                     anchors.centerIn: parent
                     anchors.verticalCenterOffset: -3
-                    name: modelData.icon
+                    name: tabBtn.icon
                     size: 19
-                    tint: active ? Theme.accent : "transparent"
-                    opacity: active || tm.containsMouse ? 1 : 0.5
+                    tint: tabBtn.lit ? Theme.accent : "transparent"
+                    opacity: tabBtn.lit || tm.containsMouse ? 1 : 0.5
+                    scale: tm.pressed ? 0.9 : 1
                     Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+                    Behavior on scale { ScaleAnimator { duration: Theme.fast; easing.type: Easing.OutCubic } }
                 }
                 Rectangle {
                     anchors.bottom: parent.bottom
@@ -226,8 +132,8 @@ Item {
                     height: 2
                     radius: 1
                     color: Theme.accent
-                    opacity: active ? 1 : 0
-                    scale: active ? 1 : 0.3
+                    opacity: tabBtn.active ? 1 : 0
+                    scale: tabBtn.active ? 1 : 0.3
                     Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
                     Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
                 }
@@ -236,8 +142,18 @@ Item {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onContainsMouseChanged: containsMouse ? Nav.hint(parent, modelData.tip) : Nav.unhint(parent)
-                    onClicked: side.tab = modelData.key
+                    onContainsMouseChanged: containsMouse ? Nav.hint(parent, tabBtn.tip) : Nav.unhint(parent)
+                    onClicked: {
+                        if (tabBtn.key === "source") {
+                            if (lyricPanel.shown) { lyricPanel.close(); return }
+                            side.tab = "lyrics"
+                            lyricPanel.open()
+                        } else if (tabBtn.key === "quality") {
+                            np.chainClicked()
+                        } else {
+                            side.tab = tabBtn.key
+                        }
+                    }
                 }
             }
         }
@@ -765,7 +681,7 @@ Item {
         // 接下来播放:标题 + 剩余
         Row {
             visible: side.tab === "queue"
-            // 在顶部音质胶囊 (y 50–78) 下方:窄窗时右栏会伸到窗口正中
+            // 在顶部窗口拖动条与收起按钮的高度以下
             y: 92
             x: 10
             spacing: 10

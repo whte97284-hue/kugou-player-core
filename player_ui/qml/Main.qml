@@ -293,6 +293,7 @@ Window {
             anchors.fill: parent
             z: 5
             onCloseRequested: shown = false
+            chainOpen: chain.shown
             onChainClicked: chain.shown = !chain.shown
             onShownChanged: { if (shown) queuePanel.shown = false; Qt.callLater(root.flyNowPlaying, shown) }
         }
