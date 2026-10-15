@@ -8,6 +8,8 @@ QtObject {
     // 带来源图块:头像从来源位置飞入详情页
     signal openArtistFrom(int index, Item item)
     signal openPlaylist(string id)
+    // 打开「导入歌单」卡片
+    signal openImport()
     // ctx: { playlistId } 等上下文 (在歌单中时菜单多出「从歌单移除」)
     signal trackMenu(real trackId, real x, real y, var ctx)
     signal toast(string icon, string text)

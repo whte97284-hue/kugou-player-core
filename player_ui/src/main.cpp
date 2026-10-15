@@ -19,6 +19,7 @@
 #include "models.h"
 #include "player_controller.h"
 #include "playlist_service.h"
+#include "playlist_importer.h"
 #include "decrypt_service.h"
 #include "settings_service.h"
 #include "decryptor.hpp"
@@ -95,6 +96,22 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         steps->push_back({"p08_pure_json", [&player, lyr] { lyr("vip"); player.next(); player.next(); }, 1500});
         steps->push_back({"p09_zh", [&player, lyr, call] { lyr("purejson"); call("automationPlayTitle", QStringLiteral("THE BOOK")); }, 1500});
         steps->push_back({"p10_done", [&player, lyr] { lyr("zh"); }, 300});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_IMPORT")) {
+        // 导入歌单:歌单墙的「导入」格 → 卡片 (空 / 识别出链接 / 纯数字选平台 / 读取中 / 结果 / 筛选) → 存为歌单
+        // 配合 KP_TEST_PLAYLIST_FAKE=1 使用 (用当前曲库拼的假歌单)
+        steps->push_back({"i01_wall", [call] { call("automationGo", QStringLiteral("playlists")); }, 1600});
+        steps->push_back({"i02_open_100", [call] { call("automationImport", true); }, 100});
+        steps->push_back({"i03_open", [] {}, 900});
+        steps->push_back({"i04_detect", [call] { call("automationImportLink", QStringLiteral("https://www.kugou.com/yy/special/single/1067062.html")); }, 500});
+        steps->push_back({"i05_platform", [call] { call("automationImportGo", QStringLiteral("1067062")); }, 600});
+        steps->push_back({"i06_loading", [call] { call("automationImportGo", QStringLiteral("kugou:1067062")); }, 300});
+        steps->push_back({"i07_ready_200", [] {}, 600});
+        steps->push_back({"i08_ready", [] {}, 1400});
+        steps->push_back({"i09_missing", [call] { call("automationImportFilter", 2); }, 900});
+        steps->push_back({"i10_local", [call] { call("automationImportFilter", 1); }, 900});
+        steps->push_back({"i11_small", [window, call] { call("automationImportFilter", 0); window->resize(980, 640); }, 1400});
+        steps->push_back({"i12_saved", [window, call] { window->resize(1600, 1000); call("automationImportSave"); }, 1800});
+        steps->push_back({"i13_err", [call] { call("automationImport", true); call("automationImportGo", QStringLiteral("https://example.com/abc")); }, 900});
     } else if (qEnvironmentVariableIsSet("KP_TEST_SORTUI")) {
         // 排序入口与横幅对齐:专辑墙 (默认 / 菜单开着 / 播放中) 与歌曲页 (默认 / 改过排序),再看矮窗口
         steps->push_back({"s01_wall", [call] { call("automationGo", QStringLiteral("albums")); }, 1600});
@@ -594,6 +611,7 @@ int main(int argc, char* argv[]) {
     QObject::connect(&player, &PlayerController::playingChanged, &playlists, recordPlay);
     WindowHelper windowHelper;
     LibraryTools libtools(&library, &playlists, &player);
+    PlaylistImporter importer(&library, &playlists);
 
     QQmlApplicationEngine engine;
     engine.addImageProvider("cover", new CoverProvider);
@@ -613,6 +631,7 @@ int main(int argc, char* argv[]) {
     ctx->setContextProperty("historyTracks", &historyTracks);
     ctx->setContextProperty("windowHelper", &windowHelper);
     ctx->setContextProperty("libtools", &libtools);
+    ctx->setContextProperty("importer", &importer);
 
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, []() { QCoreApplication::exit(1); },
                      Qt::QueuedConnection);

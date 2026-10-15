@@ -1,7 +1,7 @@
 import QtQuick
 import PlayerUi
 
-// 歌单墙:第一格是「新建」,其后是「我喜欢」与自建歌单;右键打开整个歌单的菜单
+// 歌单墙:前两格是「新建」与「导入」(酷狗 / 网易云歌单链接),其后是「我喜欢」与自建歌单;右键打开整个歌单的菜单
 // 格子密度、边距与专辑墙相同 (同样宽度下列数一致)
 Item {
     id: page
@@ -30,7 +30,7 @@ Item {
         boundsBehavior: Flickable.StopAtBounds
         topMargin: 64
         bottomMargin: page.bottomInset
-        model: [{ create: true }].concat(playlists.playlists)
+        model: [{ create: true }, { importing: true }].concat(playlists.playlists)
         SmoothScroll { flickable: grid }
 
         delegate: Item {
@@ -39,8 +39,10 @@ Item {
             height: grid.cellHeight
             readonly property real side: width - page.gap
             readonly property bool hovered: m.containsMouse || playBtn.hovered
+            // 「新建」「导入」两个操作格:虚线框 + 图标,悬停时强调色
+            readonly property bool action: !!modelData.create || !!modelData.importing
             // 当前队列就是这个歌单:播放键变成暂停 / 继续
-            readonly property bool isQueue: !modelData.create && player.queueTag === "playlist:" + modelData.id
+            readonly property bool isQueue: !cell.action && player.queueTag === "playlist:" + modelData.id
 
             Item {
                 id: art
@@ -49,7 +51,7 @@ Item {
                 height: cell.side
                 y: cell.hovered ? -5 : 0
                 // 悬停略微放大 (与专辑卡片一致),按下轻收
-                scale: m.pressed ? 0.97 : (cell.hovered && !modelData.create ? 1.02 : 1)
+                scale: m.pressed ? 0.97 : (cell.hovered && !cell.action ? 1.02 : 1)
                 Behavior on y { YAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
                 Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
 
@@ -57,13 +59,13 @@ Item {
                     target: tile
                     spread: 20
                     offsetY: cell.hovered ? 18 : 10
-                    strength: modelData.create ? 0 : (cell.hovered ? 0.9 : 0.55)
+                    strength: cell.action ? 0 : (cell.hovered ? 0.9 : 0.55)
                     Behavior on offsetY { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
                 }
                 Mosaic {
                     id: tile
                     anchors.fill: parent
-                    visible: !modelData.create
+                    visible: !cell.action
                     covers: modelData.covers || []
                     favorite: !!modelData.builtin
                     decodeSize: Math.ceil(cell.side * 1.4)
@@ -71,7 +73,7 @@ Item {
                 // 新建
                 Rectangle {
                     anchors.fill: parent
-                    visible: !!modelData.create
+                    visible: !!cell.action
                     radius: 10
                     color: cell.hovered ? Theme.accentAlpha(0.08) : "transparent"
                     border.width: 1.5
@@ -79,7 +81,7 @@ Item {
                     Behavior on color { ColorAnimation { duration: Theme.normal } }
                     Icon {
                         anchors.centerIn: parent
-                        name: "plus"
+                        name: modelData.importing ? "import" : "plus"
                         size: 34
                         tint: cell.hovered ? Theme.accent : "transparent"
                         opacity: cell.hovered ? 1 : 0.45
@@ -89,7 +91,7 @@ Item {
                 IconButton {
                     id: playBtn
                     readonly property bool shown: cell.hovered || (cell.isQueue && !player.playing)
-                    enabled: !modelData.create && (modelData.count || 0) > 0
+                    enabled: !cell.action && (modelData.count || 0) > 0
                     visible: enabled && opacity > 0
                     anchors.right: parent.right
                     anchors.bottom: parent.bottom
@@ -113,9 +115,9 @@ Item {
                 x: art.x
                 y: cell.side + 14
                 width: cell.side
-                text: modelData.create ? qsTr("新建歌单") : (modelData.name || "")
+                text: cell.action ? (modelData.importing ? qsTr("导入歌单") : qsTr("新建歌单")) : (modelData.name || "")
                 elide: Text.ElideRight
-                color: !modelData.create ? (cell.isQueue ? Theme.accent : Theme.text) : (cell.hovered ? Theme.accent : Theme.textSecondary)
+                color: !cell.action ? (cell.isQueue ? Theme.accent : Theme.text) : (cell.hovered ? Theme.accent : Theme.textSecondary)
                 font.family: Theme.fontFamily
                 font.pixelSize: 14
                 font.weight: Font.DemiBold
@@ -124,7 +126,7 @@ Item {
                 x: art.x
                 y: cell.side + 34
                 width: cell.side
-                visible: !modelData.create
+                visible: !cell.action
                 text: modelData.summary || ""
                 color: Theme.textTertiary
                 font.family: Theme.fontFamily
@@ -142,10 +144,11 @@ Item {
                 z: -1
                 onClicked: (e) => {
                     if (e.button === Qt.RightButton) {
-                        if (!modelData.create) page.openMenu(m, e.x, e.y, modelData)
+                        if (!cell.action) page.openMenu(m, e.x, e.y, modelData)
                         return
                     }
-                    if (modelData.create) {
+                    if (modelData.importing) Nav.openImport()
+                    else if (modelData.create) {
                         const id = playlists.create(playlists.suggestName())
                         Nav.renameNext = id
                         Nav.openPlaylist(id)

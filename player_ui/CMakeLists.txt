@@ -9,6 +9,7 @@ qt_add_executable(KugouPlayer
     src/player_controller.h src/player_controller.cpp
     src/window_helper.h src/window_helper.cpp
     src/playlist_service.h src/playlist_service.cpp
+    src/playlist_importer.h src/playlist_importer.cpp
     src/decrypt_service.h src/decrypt_service.cpp
     src/folder_watcher.h src/folder_watcher.cpp
     src/settings_service.h src/settings_service.cpp
@@ -79,6 +80,7 @@ qt_add_qml_module(KugouPlayer
         qml/HoverTip.qml
         qml/SortPopup.qml
         qml/LyricSourcePanel.qml
+        qml/PlaylistImport.qml
         qml/SortTab.qml
         qml/DetailBar.qml
 )

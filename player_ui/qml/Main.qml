@@ -161,6 +161,7 @@ Window {
         function onOpenArtist(i) { if (i >= 0) { root.closeOverlays(); root.openArtist(i, null) } }
         function onOpenArtistFrom(i, item) { root.closeOverlays(); root.openArtist(i, item) }
         function onOpenPlaylist(id) { root.closeOverlays(); root.openPlaylist(id) }
+        function onOpenImport() { root.closeOverlays(); playlistImport.open() }
         function onToggleMute() { root.toggleMute() }
         function onHintRight(item, text) { hoverTip.show(item, text, "right") }
         function onTrackMenu(id, x, y, ctx) { trackMenu.open(id, x, y, ctx) }
@@ -700,6 +701,10 @@ Window {
         z: 44
         onShownChanged: if (!shown) typeCatcher.forceActiveFocus()
     }
+    PlaylistImport {
+        id: playlistImport
+        z: 44
+    }
     CoverViewer {
         id: coverViewer
         z: 45
@@ -818,6 +823,7 @@ Window {
         enabled: !root.typing
         onActivated: {
             if (trackMenu.shown) trackMenu.close()
+            else if (playlistImport.shown) playlistImport.close()
             else if (coverViewer.shown) coverViewer.close()
             else if (trackInfo.shown) trackInfo.close()
             else if (libraryPanel.shown) libraryPanel.close()
@@ -847,7 +853,7 @@ Window {
                 if (e.key === Qt.Key_Up || e.key === Qt.Key_Down) { player.changeVolume(e.key === Qt.Key_Up ? 0.05 : -0.05); e.accepted = true }
                 return
             }
-            if (trackInfo.shown || libraryPanel.shown || coverViewer.shown) return
+            if (trackInfo.shown || libraryPanel.shown || coverViewer.shown || playlistImport.shown) return
             if (e.modifiers & (Qt.ControlModifier | Qt.AltModifier)) return
             // 专辑详情:上下键选曲、回车播放
             // 专辑 / 歌曲 / 歌手 / 歌单的曲目列表:上下键选曲、回车播放
@@ -917,6 +923,11 @@ Window {
     function automationQueueMenu(row) { queuePanel.automationMenu(row) }
     function automationClearQueue() { queuePanel.clearWithUndo() }
     function automationNowTab(t) { nowPlaying.automationTab(t) }
+    function automationImport(on) { on ? playlistImport.open() : playlistImport.close() }
+    function automationImportLink(t) { playlistImport.automationLink(String(t), false) }
+    function automationImportGo(t) { playlistImport.automationLink(String(t), true) }
+    function automationImportFilter(f) { playlistImport.filter = Number(f) }
+    function automationImportSave() { playlistImport.save() }
     function automationLyricPanel(on) { nowPlaying.automationLyricPanel(!!on) }
     function automationLyricPick(i) { nowPlaying.automationLyricPick(Number(i)) }
     function automationLyricHover(i) { nowPlaying.automationLyricHover(Number(i)) }
