@@ -40,6 +40,16 @@ Item {
         RotationAnimator on rotation { from: 0; to: 360; duration: 900; loops: Animation.Infinite; running: sp.visible }
     }
     function close() { shown = false; query.focus = false }
+    // 面板内各块错峰浮现:order 越大越晚 (每级 45ms);收起时一起快速淡出
+    component Stagger: QtObject {
+        property Item target
+        property int order: 0
+        readonly property bool on: panelRoot.shown
+        property real t: on ? 1 : 0
+        Behavior on t { SequentialAnimation { PauseAnimation { duration: panelRoot.shown ? 80 + order * 45 : 0 }
+                NumberAnimation { duration: panelRoot.shown ? 360 : 100; easing.type: Easing.OutCubic } } }
+        onTChanged: if (target) { target.opacity = t; target.lift = (1 - t) * 8 }
+    }
     function fmt(sec) {
         if (!(sec > 0)) return ""
         const s = Math.round(sec)
@@ -61,7 +71,8 @@ Item {
         onWheel: (w) => w.accepted = true
     }
 
-    // 面板连同投影一起从右下角 (来源胶囊处) 轻轻放大淡入
+    // 面板连同投影一起从右侧按钮处滑出:向左平移 + 轻微放大 + 淡入 (收起时原路退回,更快);
+    // 面板里的各块再依次浮现
     Item {
         id: pop
         width: Math.min(420, panelRoot.width - 40)
@@ -72,9 +83,13 @@ Item {
         y: panelRoot.anchorBottom - height
         transformOrigin: Item.BottomRight
         opacity: panelRoot.shown ? 1 : 0
-        scale: panelRoot.shown ? 1 : 0.94
-        Behavior on opacity { OpacityAnimator { duration: panelRoot.shown ? 220 : 140; easing.type: Easing.OutCubic } }
-        Behavior on scale { ScaleAnimator { duration: panelRoot.shown ? 420 : 160; easing.type: Easing.OutQuint } }
+        scale: panelRoot.shown ? 1 : 0.97
+        Behavior on opacity { OpacityAnimator { duration: panelRoot.shown ? 260 : 150; easing.type: Easing.OutCubic } }
+        Behavior on scale { ScaleAnimator { duration: panelRoot.shown ? 520 : 180; easing.type: panelRoot.shown ? Easing.OutQuint : Easing.InCubic } }
+        transform: Translate {
+            x: panelRoot.shown ? 0 : 28
+            Behavior on x { NumberAnimation { duration: panelRoot.shown ? 560 : 180; easing.type: panelRoot.shown ? Easing.OutQuint : Easing.InCubic } }
+        }
         SoftShadow { target: card; strength: 0.85; spread: 30; offsetY: 16 }
 
         Rectangle {
@@ -91,8 +106,14 @@ Item {
             readonly property int pad: 20
 
             // ---- 标题 ----
+            Stagger { target: heading; order: 0 }
+            Stagger { target: current; order: 1 }
+            Stagger { target: field; order: 2 }
+            Stagger { target: status; order: 3 }
             Text {
                 id: heading
+                property real lift: 0
+                transform: Translate { y: heading.lift }
                 x: card.pad
                 y: 22
                 text: qsTr("歌词来源")
@@ -114,6 +135,8 @@ Item {
             // ---- 当前来源 ----
             Rectangle {
                 id: current
+                property real lift: 0
+                transform: Translate { y: current.lift }
                 x: card.pad
                 y: heading.y + heading.height + 16
                 width: card.width - card.pad * 2
@@ -192,6 +215,8 @@ Item {
             // ---- 搜索框 ----
             Rectangle {
                 id: field
+                property real lift: 0
+                transform: Translate { y: field.lift }
                 x: card.pad
                 y: current.y + current.height + 16
                 width: card.width - card.pad * 2
@@ -250,6 +275,8 @@ Item {
             // ---- 结果状态 ----
             Item {
                 id: status
+                property real lift: 0
+                transform: Translate { y: status.lift }
                 x: card.pad
                 y: field.y + field.height + 14
                 width: card.width - card.pad * 2
@@ -300,10 +327,16 @@ Item {
                     property real lift: 8
                     transform: Translate { y: row.lift }
                     Component.onCompleted: appear.start()
+                    // 重新打开面板时结果行也跟着各块之后依次浮现
+                    property int delayBase: 0
+                    Connections {
+                        target: panelRoot
+                        function onShownChanged() { if (panelRoot.shown) { row.delayBase = 200; row.opacity = 0; row.lift = 8; appear.restart() } }
+                    }
                     ParallelAnimation {
                         id: appear
                         SequentialAnimation {
-                            PauseAnimation { duration: Math.min(index, 8) * 30 }
+                            PauseAnimation { duration: row.delayBase + Math.min(index, 8) * 30 }
                             ParallelAnimation {
                                 OpacityAnimator { target: row; from: 0; to: 1; duration: 260; easing.type: Easing.OutCubic }
                                 NumberAnimation { target: row; property: "lift"; from: 8; to: 0; duration: 420; easing.type: Easing.OutQuint }

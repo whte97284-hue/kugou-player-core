@@ -44,7 +44,7 @@ Item {
     Behavior on opacity { OpacityAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
     // 完全淡入后为 true:此时底下的曲库页面与极光背景被整屏盖住,可以停止绘制它们
     property bool covering: false
-    onShownChanged: if (shown) { coverDelay.restart(); wake() } else { coverDelay.stop(); covering = false }
+    onShownChanged: if (shown) { coverDelay.restart(); introduceChrome() } else { coverDelay.stop(); covering = false }
     Timer { id: coverDelay; interval: Theme.normal + 40; onTriggered: np.covering = true }
 
     // ---------------- 背景 ----------------
@@ -73,7 +73,9 @@ Item {
     readonly property bool chromeShown: chromeAwake || lyricPanel.shown || chainOpen || tabsHover.hovered || backHover.hovered
     property real chrome: chromeShown ? 1 : 0
     Behavior on chrome { NumberAnimation { duration: np.chromeShown ? 220 : 700; easing.type: Easing.OutCubic } }
-    function wake() { chromeAwake = true; chromeIdle.restart() }
+    function wake() { chromeAwake = true; chromeIdle.interval = 2500; chromeIdle.restart() }
+    // 进入播放页:控件随页面淡入后先停留约一秒再淡出,让人知道它们在那里
+    function introduceChrome() { chromeAwake = true; chromeIdle.interval = 1700; chromeIdle.restart() }
     Timer { id: chromeIdle; interval: 2500; onTriggered: np.chromeAwake = false }
     // 只认鼠标真的移动:歌词在静止的光标下滚动也会产生悬停事件,不能因此一直显示
     HoverHandler {
@@ -103,13 +105,13 @@ Item {
         onClicked: np.closeRequested()
     }
 
-    // 右下角按钮组:避开顶部的窗口按钮;四个按钮同尺寸、等间距
-    Row {
+    // 右下角按钮组:竖排贴着右缘,不伸进歌词栏;四个按钮同尺寸、等间距
+    Column {
         id: tabs
         anchors.right: parent.right
-        anchors.rightMargin: 28
+        anchors.rightMargin: 14
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: 18
+        anchors.bottomMargin: 22
         spacing: 4
         z: 2
         property real entry: np.shown ? 1 : 0
@@ -117,7 +119,7 @@ Item {
         opacity: entry * np.chrome
         visible: opacity > 0.01
         HoverHandler { id: tabsHover }
-        // 四个按钮同一种样式:图标 19px、40×38 点击区、强调色表示「开着 / 选中」,下方短横线标出当前项
+        // 四个按钮同一种样式:图标 19px、40×40 点击区、强调色表示「开着 / 选中」,右侧短竖线标出当前项
         //  歌词来源 (图标随来源变化,点开来源面板) · 音质 (悬停看完整信号链,点开详情;直通时强调色) · 歌词 · 队列
         Repeater {
             model: [
@@ -130,7 +132,7 @@ Item {
                 id: tabBtn
                 readonly property string key: modelData.key
                 width: 40
-                height: 38
+                height: 40
                 visible: player.hasTrack || key === "lyrics" || key === "queue"
                 readonly property bool active: key === "source" ? lyricPanel.shown : key === "quality" ? np.chainOpen : side.tab === key
                 readonly property bool lit: active || (key === "quality" && player.bitPerfect)
@@ -142,7 +144,6 @@ Item {
                 onTipChanged: if (tm.containsMouse) Nav.hint(tabBtn, tip)
                 Icon {
                     anchors.centerIn: parent
-                    anchors.verticalCenterOffset: -3
                     name: tabBtn.icon
                     size: 19
                     tint: tabBtn.lit ? Theme.accent : "transparent"
@@ -152,11 +153,11 @@ Item {
                     Behavior on scale { ScaleAnimator { duration: Theme.fast; easing.type: Easing.OutCubic } }
                 }
                 Rectangle {
-                    anchors.bottom: parent.bottom
-                    anchors.bottomMargin: 2
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    width: 16
-                    height: 2
+                    anchors.right: parent.right
+                    anchors.rightMargin: -2
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 2
+                    height: 16
                     radius: 1
                     color: Theme.accent
                     opacity: tabBtn.active ? 1 : 0
@@ -189,8 +190,9 @@ Item {
     // 歌词来源面板:右下角对齐来源胶囊,从那里弹出
     LyricSourcePanel {
         id: lyricPanel
-        anchorRight: tabs.x + tabs.width
-        anchorBottom: tabs.y - 6
+        // 从竖排按钮左侧展开,底边与按钮组对齐
+        anchorRight: tabs.x - 10
+        anchorBottom: tabs.y + tabs.height
         Connections { target: np; function onShownChanged() { if (!np.shown) lyricPanel.close() } }
     }
 

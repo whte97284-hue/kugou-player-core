@@ -108,7 +108,7 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         // 配合 KP_TEST_LYRIC_FAKE=1 使用 (假的歌词接口)
         const QString album = qEnvironmentVariable("KP_LYR_ALBUM", QStringLiteral("async"));
         steps->push_back({"l01_auto_online", [call, album] { call("automationPlayTitle", album); call("automationNowPlaying", true); }, 2600});
-        steps->push_back({"l02_panel_open_80", [call] { call("automationLyricPanel", true); }, 80});
+        steps->push_back({"l02_panel_open_80", [call] { call("automationLyricPanel", true); }, 120});
         steps->push_back({"l03_panel_searching", [] {}, 160});
         steps->push_back({"l04_panel_results", [] {}, 1400});
         steps->push_back({"l05_hover_row", [call] { call("automationLyricHover", 2); }, 500});
