@@ -325,6 +325,21 @@ Window {
         property int loDecode: 640
         property string hiSource
         property int hiDecode: 640
+        // 副本自带的投影 (落点尺寸坐标):飞向大封面时随落地渐浓,交接时与落点自己的投影无缝衔接
+        property real shadow: 0
+        property real shadowSpread: 44
+        property real shadowOffset: 24
+        BorderImage {
+            x: -flying.shadowSpread
+            y: -flying.shadowSpread + flying.shadowOffset
+            width: flying.width + flying.shadowSpread * 2
+            height: flying.height + flying.shadowSpread * 2
+            visible: flying.shadow > 0.01
+            opacity: flying.shadow
+            source: "qrc:/images/shadow.png"
+            border { left: 64; top: 64; right: 64; bottom: 64 }
+            smooth: true
+        }
 
         // 起落点是旋转中的黑胶标签时,副本带着标签此刻的角度起飞 / 落地,不会一下子摆正
         Item {
@@ -361,12 +376,16 @@ Window {
             property Item origin: null  // 起点:飞行期间隐藏,避免同一张封面出现两份
             property Item waitFor: null // 落地前要等它解码完成的图片
             property int duration: 460
+            property real toShadow: 0
+            property int shadowEasing: Easing.InQuad
+            property Item landingShadow: null // 落点的投影:交接时直接到位,不再从零淡入
             XAnimator { target: flying; to: flight.toX; duration: flight.duration; easing.type: Easing.OutQuint }
             YAnimator { target: flying; to: flight.toY; duration: flight.duration; easing.type: Easing.OutQuint }
             ScaleAnimator { target: flying; to: flight.toScale; duration: flight.duration; easing.type: Easing.OutQuint }
             // 缩放会连带缩小圆角:同步补偿,让屏幕上的圆角从起点平滑过渡到落点
             NumberAnimation { target: flying; property: "radius"; to: flight.toRadius; duration: flight.duration; easing.type: Easing.OutQuint }
             RotationAnimator { target: flyingSpin; to: flight.toAngle; duration: flight.duration; easing.type: Easing.OutQuint }
+            NumberAnimation { target: flying; property: "shadow"; to: flight.toShadow; duration: flight.duration; easing.type: flight.shadowEasing }
             onFinished: handoff.start()
         }
         // 落地交接:等落点图片解码完成再显示它,随后再撤掉飞行副本 (落点自己的淡入在副本下面完成,看不出切换)
@@ -382,6 +401,8 @@ Window {
                 if (img && img.status !== Image.Ready && img.status !== Image.Error && waited < 1500) return
                 stop()
                 const hidden = flight.landing
+                if (flight.landingShadow) flight.landingShadow.snap = true
+                flight.landingShadow = null
                 if (flight.landing) flight.landing.opacity = 1
                 if (flight.origin) flight.origin.opacity = 1
                 if (detail.heroCover) detail.heroCover.opacity = 1
@@ -430,6 +451,7 @@ Window {
         if (flight.origin) flight.origin.opacity = 1
         flight.landing = null
         flight.origin = null
+        flight.landingShadow = null
 
         const fromImg = imageIn(fromItem), toImg = imageIn(toItem)
         if (!fromImg || !toImg || fromItem.width <= 0 || toItem.width <= 0) return false
@@ -460,6 +482,14 @@ Window {
         flight.toAngle = fromAngle + norm((opts.toAngle || 0) - fromAngle)
         flight.duration = opts.duration || 460
         flight.waitFor = toImg
+        // 副本投影:opts.shadow = { from, to, spread, offsetY, shadowItem (落点投影) }
+        const sh = opts.shadow || { from: 0, to: 0 }
+        flying.shadow = sh.from || 0
+        flight.toShadow = sh.to || 0
+        flying.shadowSpread = sh.spread || 44
+        flying.shadowOffset = sh.offsetY || 0
+        flight.shadowEasing = (sh.to || 0) >= (sh.from || 0) ? Easing.InQuad : Easing.OutCubic
+        flight.landingShadow = sh.shadowItem || null
         flight.landing = opts.hideTo === false ? null : toItem
         flight.origin = opts.hideFrom === false ? null : fromItem
         if (flight.landing) flight.landing.opacity = 0
@@ -482,18 +512,23 @@ Window {
     }
     // 展开沉浸页:封面从黑胶标签里「升起」放大成大封面;收起时缩回标签
     function flyNowPlaying(open) {
-        if (!player.hasTrack || Theme.reduced) return
+        if (!player.hasTrack) return
         const big = nowPlaying.coverItem
         if (!big) return
         const disc = island.disc
+        const label = discLabelRect()
+        // 投影只在大封面这一端:打开时随落地渐浓并和落点投影无缝交接;收起时起飞即开始变淡
+        const s = nowPlaying.coverShadow
+        const shadow = s ? { spread: s.spread, offsetY: s.offsetY, shadowItem: open ? s : null,
+                             from: open ? 0 : s.strength, to: open ? s.strength : 0 } : null
+        // 减弱动效:飞行照常 (这是界面的空间线索),只是更短
         if (open) {
-            const label = discLabelRect()
             fly(disc, null, big, null, { fromRect: label, fromRadius: label.width / 2, fromAngle: disc.angleAfter(0),
-                                         hideFrom: false, duration: 620 })
+                                         hideFrom: false, duration: Theme.reduced ? 360 : 620, shadow: shadow })
         } else {
-            const label = discLabelRect()
-            fly(big, null, disc, null, { toRect: label, toRadius: label.width / 2, toAngle: disc.angleAfter(520 + 16),
-                                         hideTo: false, duration: 520 })
+            const d = Theme.reduced ? 320 : 520
+            fly(big, null, disc, null, { toRect: label, toRadius: label.width / 2, toAngle: disc.angleAfter(d + 16),
+                                         hideTo: false, duration: d, shadow: shadow })
         }
     }
 

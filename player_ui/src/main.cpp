@@ -67,6 +67,18 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         steps->push_back({"o6_dedupe", [tools, call] { call("automationGo", QStringLiteral("dedupe")); tools()->findDuplicates(); }, 6000});
         steps->push_back({"o7_applied", [tools] { tools()->applyDedupe(1); }, 6000});
         steps->push_back({"o8_play_after", [&player] { player.playAlbum(1, 0); player.next(); }, 2000});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_FLIGHT")) {
+        // 打开 / 收起播放页的过程:封面从底栏黑胶飞出、投影与内容的出场时机
+        steps->push_back({"f00_playing", [call] { call("automationPlayTitle", QStringLiteral("async")); }, 1800});
+        steps->push_back({"f01_open_60", [call] { call("automationNowPlaying", true); }, 60});
+        steps->push_back({"f02_open_mid", [] {}, 120});
+        steps->push_back({"f03_open_late", [] {}, 160});
+        steps->push_back({"f04_open_land", [] {}, 200});
+        steps->push_back({"f05_open_done", [] {}, 900});
+        steps->push_back({"f06_close_60", [call] { call("automationNowPlaying", false); }, 60});
+        steps->push_back({"f07_close_mid", [] {}, 120});
+        steps->push_back({"f08_close_late", [] {}, 160});
+        steps->push_back({"f09_close_done", [] {}, 900});
     } else if (qEnvironmentVariableIsSet("KP_TEST_ALBUM")) {
         // 专辑页:详情 / 播放中 / 滚动后的精简栏 / 页尾 / 专辑菜单 / 封面大图 / 多碟 / 宽窗与小窗
         const QString hires = qEnvironmentVariable("KP_ALBUM_A", QStringLiteral("async"));

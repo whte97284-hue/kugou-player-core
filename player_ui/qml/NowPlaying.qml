@@ -13,6 +13,8 @@ Item {
     signal chainClicked()
     // 共享元素飞行用:大封面。封面本身不参与进场位移,飞行落点在整个过程中保持不动
     readonly property Item coverItem: cover
+    // 大封面的投影:飞行副本按它的参数带着投影落地
+    readonly property Item coverShadow: coverShadow
     function automationTab(t) { side.tab = String(t) }
     function openMenu(item, px, py) {
         const p = item.mapToItem(null, px, py)
@@ -218,7 +220,7 @@ Item {
             height: np.coverSize
             scale: player.playing || !player.hasTrack ? 1 : 0.9
             Behavior on scale { ScaleAnimator { duration: player.playing ? 680 : 520; easing.type: player.playing ? Easing.OutBack : Easing.OutQuint; easing.overshoot: 1.2 } }
-            SoftShadow { target: cover; spread: 44; offsetY: player.playing ? 24 : 12; strength: player.playing ? 0.9 : 0.6
+            SoftShadow { id: coverShadow; target: cover; spread: 44; offsetY: player.playing ? 24 : 12; strength: player.playing ? 0.9 : 0.6
                 Behavior on offsetY { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } }
                 Behavior on strength { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } } }
             CrossfadeCover {
