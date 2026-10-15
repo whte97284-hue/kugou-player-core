@@ -1772,10 +1772,9 @@ bool LyricManager::FindTranslatedVersion(const ParsedLyrics& local, const std::w
         outLyrics = std::move(p);
         return true;
     }
-    // 各源都有应答、拉取也没出错,才算确认没有;断网 / 接口抖动时下次再试
-    bool allAnswered = all.answered > 0;
-    for (const auto& e : all.source_errors) allAnswered = allAnswered && e.find("failed") == std::string::npos;
-    if (allAnswered && !fetchFailed) {
+    // 至少两个源有正常应答、拉取也没出错,才算确认没有 (单个源连不上不影响判断);
+    // 只有一个源或都没应答多半是断网 / 接口抖动,下次再试
+    if (all.answered >= 2 && !fetchFailed) {
         std::lock_guard<std::mutex> lock(mutex_);
         tr_misses_[missKey] = WallSeconds();
         SaveTranslationMissesLocked();
