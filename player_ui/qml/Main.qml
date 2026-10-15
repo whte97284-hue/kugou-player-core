@@ -51,6 +51,9 @@ Window {
     property string lastArtistName: ""
     property string lastPlaylist: ""
     // 离开搜索页时把键盘焦点从 (已隐藏的) 搜索框收回:空格、方向键、直接打字照常可用
+    // 关掉主窗口就退出整个程序:桌面歌词是另一个顶层窗口,否则它会留在桌面上、进程也不退出,
+    // 再打开软件就会出现两个桌面歌词
+    onClosing: Qt.quit()
     onViewChanged: { trackMenu.close(); if (view !== "search") typeCatcher.forceActiveFocus() }
     // 焦点落空 (编辑框 / 弹出卡片隐去) 时回到按键捕获
     onActiveFocusItemChanged: if (activeFocusItem === null || activeFocusItem === contentItem) Qt.callLater(root.restoreKeys)

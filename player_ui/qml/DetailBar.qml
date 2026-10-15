@@ -31,23 +31,34 @@ Item {
     visible: opacity > 0
     Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
 
-    // 背景:与播放栏同一做法,铺一份与窗口背景对齐的模糊封面再压暗,像磨砂玻璃
-    Rectangle { anchors.fill: parent; color: Theme.base }
+    // 背景:与播放栏同一做法,铺一份与窗口背景对齐的模糊封面再压暗,像磨砂玻璃。
+    // 底边不画实线、不硬切:背景往下多延伸一截并渐隐,列表内容柔和地隐入栏下,不会像一块突兀的黑条
     Item {
-        anchors.fill: parent
-        clip: true
-        Backdrop {
-            x: -Theme.navWidth
-            y: 0
-            width: bar.width + Theme.navWidth
-            height: bar.Window.window ? bar.Window.window.height : bar.height
-            source: player.cover
-            solid: false
-            opacity: player.hasTrack ? 1 : 0
+        id: glass
+        width: parent.width
+        height: parent.height + 40
+        layer.enabled: bar.visible
+        layer.effect: ShaderEffect {
+            property real fadeTop: 0.001
+            property real fadeBottom: 44 / glass.height
+            fragmentShader: "qrc:/shaders/fade.frag.qsb"
         }
+        Rectangle { anchors.fill: parent; color: Theme.base }
+        Item {
+            anchors.fill: parent
+            clip: true
+            Backdrop {
+                x: -Theme.navWidth
+                y: 0
+                width: bar.width + Theme.navWidth
+                height: bar.Window.window ? bar.Window.window.height : bar.height
+                source: player.cover
+                solid: false
+                opacity: player.hasTrack ? 1 : 0
+            }
+        }
+        Rectangle { anchors.fill: parent; color: Qt.rgba(0.05, 0.045, 0.04, player.hasTrack ? 0.5 : 0.9) }
     }
-    Rectangle { anchors.fill: parent; color: Qt.rgba(0.05, 0.045, 0.04, player.hasTrack ? 0.66 : 0.97) }
-    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.hairline }
     // 挡住下面的列表 (精简栏本身不吃滚轮,滚轮照常滚列表)
     MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: (w) => w.accepted = false }
 
