@@ -542,11 +542,10 @@ void LyricProvider::RankCandidates(const LyricQuery& q, std::vector<LyricCandida
             else if (diff <= 8000) score += 10;
             else score -= 60;
         }
-        // 有逐字/同步标记略加分;来源无优劣,只是酷狗 KRC 带逐字染色信息,略高一点
-        if (c.source == "kugou") score += 6;
-        else if (c.source == "lrclib") score += 4;
-        else if (c.source == "netease") score += 4;
-        if (!c.has_synced) score -= 10;
+        // 来源:酷狗 KRC 带逐字时间与中文翻译,明显优先 (同一首歌的酷狗版本总排在别的源前面;
+        // 但不足以盖过歌名 / 时长对不上的扣分);没有时间轴的纯文本排到后面
+        if (c.source == "kugou") score += 45;
+        if (!c.has_synced) score -= 30;
 
         c.match_score = score;
     }

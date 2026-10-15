@@ -594,6 +594,8 @@ Window {
 
     // ======================= 隐形标题栏 =======================
     TitleBar {
+        // 沉浸播放页里窗口按钮与页内控件一起随鼠标隐现 (拖动区仍然有效)
+        opacity: nowPlaying.shown ? nowPlaying.chrome : 1
         anchors.left: parent.left
         anchors.leftMargin: Theme.navWidth
         anchors.right: parent.right

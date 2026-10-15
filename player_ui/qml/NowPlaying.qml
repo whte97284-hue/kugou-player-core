@@ -44,7 +44,7 @@ Item {
     Behavior on opacity { OpacityAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
     // 完全淡入后为 true:此时底下的曲库页面与极光背景被整屏盖住,可以停止绘制它们
     property bool covering: false
-    onShownChanged: if (shown) coverDelay.restart(); else { coverDelay.stop(); covering = false }
+    onShownChanged: if (shown) { coverDelay.restart(); wake() } else { coverDelay.stop(); covering = false }
     Timer { id: coverDelay; interval: Theme.normal + 40; onTriggered: np.covering = true }
 
     // ---------------- 背景 ----------------
@@ -66,11 +66,35 @@ Item {
     readonly property real sideX: leftW + Math.max(16, width * 0.02)
     readonly property real sideW: width - padX - sideX
 
+    // ---------------- 界面控件随鼠标隐现 ----------------
+    // 收起按钮、右下角按钮组 (以及窗口按钮) 平时淡出,不和封面、歌词抢眼;鼠标一动就淡入,
+    // 停下约 2.5 秒后再淡出。指着控件、面板或信号链开着时保持显示
+    property bool chromeAwake: true
+    readonly property bool chromeShown: chromeAwake || lyricPanel.shown || chainOpen || tabsHover.hovered || backHover.hovered
+    property real chrome: chromeShown ? 1 : 0
+    Behavior on chrome { NumberAnimation { duration: np.chromeShown ? 220 : 700; easing.type: Easing.OutCubic } }
+    function wake() { chromeAwake = true; chromeIdle.restart() }
+    Timer { id: chromeIdle; interval: 2500; onTriggered: np.chromeAwake = false }
+    // 只认鼠标真的移动:歌词在静止的光标下滚动也会产生悬停事件,不能因此一直显示
+    HoverHandler {
+        id: npHover
+        property point last: Qt.point(-1, -1)
+        onPointChanged: {
+            const p = point.scenePosition
+            if (Math.abs(p.x - last.x) + Math.abs(p.y - last.y) < 3) return
+            last = p
+            np.wake()
+        }
+    }
+
     // ---------------- 顶栏 ----------------
     // 收起:放进窗口顶栏那一行,与右上角窗口按钮同一条中线 (y = 17),离封面留出空当
     // (标题栏的拖动区从左侧导航宽度之后才开始,这里点得到)
     IconButton {
         x: 10
+        opacity: np.chrome
+        visible: opacity > 0.01
+        HoverHandler { id: backHover }
         y: -3
         icon: "back"
         iconSize: 16
@@ -88,8 +112,11 @@ Item {
         anchors.bottomMargin: 18
         spacing: 4
         z: 2
-        opacity: np.shown ? 1 : 0
-        Behavior on opacity { SequentialAnimation { PauseAnimation { duration: np.shown ? 260 : 0 } OpacityAnimator { duration: 360 } } }
+        property real entry: np.shown ? 1 : 0
+        Behavior on entry { SequentialAnimation { PauseAnimation { duration: np.shown ? 260 : 0 } NumberAnimation { duration: 360 } } }
+        opacity: entry * np.chrome
+        visible: opacity > 0.01
+        HoverHandler { id: tabsHover }
         // 四个按钮同一种样式:图标 19px、40×38 点击区、强调色表示「开着 / 选中」,下方短横线标出当前项
         //  歌词来源 (图标随来源变化,点开来源面板) · 音质 (悬停看完整信号链,点开详情;直通时强调色) · 歌词 · 队列
         Repeater {
