@@ -118,6 +118,22 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         steps->push_back({"l09_reopen", [call] { call("automationLyricPanel", true); }, 900});
         steps->push_back({"l10_small", [window, call] { call("automationLyricPanel", false); window->resize(980, 640); }, 1200});
         steps->push_back({"l11_small_panel", [call] { call("automationLyricPanel", true); }, 1400});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_LYRTR")) {
+        // 外语歌补翻译:本地只有原文的歌 → 自动换成带翻译的在线版 → 来源面板 (候选预取、「翻译」标签、只看带翻译) → 用本地歌词
+        const QString title = qEnvironmentVariable("KP_LYR_TITLE", QStringLiteral("aLIEz"));
+        auto lyr = [&player](const char* tag) {
+            int tr = 0;
+            const QVariantList l = player.lyrics();
+            for (const QVariant& v : l) tr += v.toMap().contains("translation");
+            qInfo().noquote() << "qml LYRTR" << tag << player.title() << "source" << player.lyricSource().value("label").toString()
+                              << "local" << player.lyricSource().value("local").toString() << "lines" << l.size() << "translated" << tr
+                              << "tags" << QVariant(player.lyricCandidateTags()).toStringList().join(",");
+        };
+        steps->push_back({"t01_auto", [call, title] { call("automationPlayTrackTitle", title); call("automationNowPlaying", true); }, 7000});
+        steps->push_back({"t02_panel", [call, lyr] { lyr("auto"); call("automationLyricPanel", true); }, 7000});
+        steps->push_back({"t03_only_tr", [call, lyr] { lyr("panel"); call("automationLyricOnlyTranslated", true); }, 1200});
+        steps->push_back({"t04_local", [&player, call] { call("automationLyricOnlyTranslated", false); player.useLocalLyrics(); }, 1200});
+        steps->push_back({"t05_done", [lyr] { lyr("local"); }, 300});
     } else if (qEnvironmentVariableIsSet("KP_TEST_FLIGHT")) {
         // 打开 / 收起播放页的过程:封面从底栏黑胶飞出、投影与内容的出场时机
         steps->push_back({"f00_playing", [call] { call("automationPlayTitle", QStringLiteral("async")); }, 1800});

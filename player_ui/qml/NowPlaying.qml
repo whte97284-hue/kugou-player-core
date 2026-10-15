@@ -21,6 +21,7 @@ Item {
     function automationLyricPick(i) { lyricPanel.pick(i) }
     function automationLyricHover(i) { lyricPanel.hoverRow = i }
     function automationLyricSave() { lyricPanel.save() }
+    function automationLyricOnlyTranslated(on) { lyricPanel.onlyTranslated = on }
     function openMenu(item, px, py) {
         const p = item.mapToItem(null, px, py)
         Nav.trackMenu(player.trackId, p.x, p.y, {})

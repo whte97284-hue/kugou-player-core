@@ -921,6 +921,14 @@ Window {
     function automationLyricPick(i) { nowPlaying.automationLyricPick(Number(i)) }
     function automationLyricHover(i) { nowPlaying.automationLyricHover(Number(i)) }
     function automationLyricSave() { nowPlaying.automationLyricSave() }
+    function automationLyricOnlyTranslated(on) { nowPlaying.automationLyricOnlyTranslated(!!on) }
+    function automationPlayTrackTitle(t) {
+        for (let i = 0; i < library.albumCount; ++i) {
+            const ids = library.albumTrackIds(i)
+            for (let j = 0; j < ids.length; ++j)
+                if (library.trackInfo(ids[j]).title === String(t)) { player.playTrack(ids[j]); return }
+        }
+    }
     function automationSleep(m) { player.setSleepTimer(Number(m)) }
     function automationSongsSort(m) { songsModel.sortMode = Number(m) }
     function automationDecryptPrompt(on) { on ? decryptPrompt.open() : decryptPrompt.close() }

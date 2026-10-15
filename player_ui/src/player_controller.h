@@ -18,6 +18,13 @@
 #include "audio_playback_engine.hpp"
 #include "library_service.h"
 
+// 显示用的歌词:LRC (不含翻译)、保存用 LRC (含翻译)、每句时长与翻译 (键为 10ms 精度的时间戳)
+struct PreparedLyrics {
+    QString lrc, saved;
+    QHash<qint64, qint64> durations;
+    QHash<qint64, QString> translations;
+};
+
 // 播放队列模型 (歌曲很多时比 QVariantList 便宜得多):整体换队列时重置,单条增删 / 挪动只发对应的行信号,
 // 列表保持滚动位置并能播放过渡动画。行与 queue_ 一一对应 (找不到的曲目留空行,下标不会错位)
 class QueueModel : public QAbstractListModel {
@@ -99,6 +106,8 @@ class PlayerController : public QObject {
     Q_PROPERTY(bool lyricSearching READ lyricSearching NOTIFY lyricSearchChanged)
     Q_PROPERTY(int lyricPicked READ lyricPicked NOTIFY lyricSearchChanged)
     Q_PROPERTY(QString lyricSearchNote READ lyricSearchNote NOTIFY lyricSearchChanged)
+    // 候选是否带中文翻译 (与 lyricCandidates 下标对应):1 带 / 0 外语但没有 / -1 还不知道或不适用。后台预取后陆续填上
+    Q_PROPERTY(QVariantList lyricCandidateTags READ lyricCandidateTags NOTIFY lyricCandidateTagsChanged)
     Q_PROPERTY(QString chainSummary READ chainSummary NOTIFY signalChainChanged)
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorChanged)
     // 定时关闭:0 = 关闭,-1 = 播完当前歌曲后停止,N = N 分钟后暂停;sleepRemaining 为剩余秒数
@@ -160,6 +169,8 @@ public:
     Q_INVOKABLE void searchLyrics(const QString& keyword);
     Q_INVOKABLE void useLyricCandidate(int index);
     Q_INVOKABLE bool saveLyrics();
+    // 自动换成带翻译的在线版后,换回本地歌词;这首歌以后也不再自动换
+    Q_INVOKABLE void useLocalLyrics();
     // 某一时刻 (秒) 正在唱的那句歌词;没有同步歌词或尚未开始时为空 (进度条悬停提示用)
     Q_INVOKABLE QString lyricAt(double seconds) const;
     int repeatMode() const { return repeat_; }
@@ -176,6 +187,7 @@ public:
     bool lyricSearching() const { return lyricSearching_; }
     int lyricPicked() const { return lyricPicked_; }
     QString lyricSearchNote() const { return lyricSearchNote_; }
+    QVariantList lyricCandidateTags() const { return lyricCandidateTags_; }
     QString chainSummary() const;
 
     Q_INVOKABLE void playAlbum(int albumIndex, int startRow = 0);
@@ -225,6 +237,7 @@ signals:
     void lyricsChanged();
     void lyricSourceChanged();
     void lyricSearchChanged();
+    void lyricCandidateTagsChanged();
     void lyricIndexChanged();
     void devicesChanged();
     void sleepChanged();
@@ -263,6 +276,8 @@ private:
     void onFrameTimer();
     void loadLyrics();
     void loadKugouLyrics();
+    void loadTranslatedLyrics(const QString& localText);
+    void applyTranslated(const PreparedLyrics& p, const QString& sourceName);
     void setLyricSource(const QString& kind, const QString& label, const QString& detail, const QString& path = {});
     void applyLyricsText(const QString& text, bool wholeFileTimeline, const QHash<qint64, qint64>& durations = {},
                          const QHash<qint64, QString>& translations = {});
@@ -334,6 +349,10 @@ private:
     QString lyricText_;          // 当前显示的歌词 (标准 LRC,含翻译),「保存到本地」写的就是它
     quint64 lyricSearchGen_ = 0; // 每次搜索 / 换歌递增,丢弃过期的搜索结果
     std::vector<lyric_core::LyricCandidate> lyricCandRaw_; // 上一次搜索的原始候选
+    QVariantList lyricCandidateTags_;
+    QHash<int, PreparedLyrics> lyricPrefetch_; // 后台预取好的候选 (下标 -> 歌词),点了立即换上不用再等
+    QString lyricLocalText_;      // 自动换成带翻译版本前的本地歌词,供「用本地歌词」换回
+    QVariantMap lyricLocalSource_;
     quint64 lyricsGen_ = 0; // 每次重新加载歌词递增,丢弃过期的后台结果
     int sleepMinutes_ = 0;
     qint64 sleepDeadline_ = 0; // QDateTime 毫秒;按分钟定时时有效

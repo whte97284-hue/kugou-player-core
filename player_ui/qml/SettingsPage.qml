@@ -442,8 +442,14 @@ Item {
                 }
                 SettingRow {
                     label: qsTr("在线查找")
-                    hint: qsTr("本地没有歌词时从酷狗找,并存到本地")
+                    hint: qsTr("本地没有歌词时从酷狗、网易云、LRCLIB 找,并存到本地")
                     Toggle { checked: settings.onlineLyrics; onToggled: (v) => { settings.onlineLyrics = v; player.reloadLyrics() } }
+                }
+                SettingRow {
+                    visible: settings.onlineLyrics
+                    label: qsTr("外语歌补翻译")
+                    hint: qsTr("本地歌词没有中文翻译时,在线找一份时间轴一致的带翻译版本;找不到就用本地的")
+                    Toggle { checked: settings.lyricsTranslate; onToggled: (v) => { settings.lyricsTranslate = v; player.reloadLyrics() } }
                 }
                 SettingRow {
                     label: qsTr("桌面歌词")

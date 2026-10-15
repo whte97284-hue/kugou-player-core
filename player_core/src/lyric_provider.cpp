@@ -368,6 +368,62 @@ std::wstring NormalizeImpl(const std::wstring& in) {
     return out;
 }
 
+// 歌名主干:去掉括号 / 书名号 / 波浪号里的附注 (「aLIEz (《ALDNOAH.ZERO》片尾曲)」「secret base ~君がくれたもの~」)
+// 和「 - 」之后的副标题,再规范化。去完为空时保留原名
+std::wstring TitleCoreImpl(const std::wstring& in) {
+    std::wstring out;
+    int depth = 0;
+    bool tilde = false;
+    for (size_t i = 0; i < in.size(); ++i) {
+        const wchar_t c = in[i];
+        if (c == L'(' || c == L'[' || c == L'（' || c == L'【' || c == L'《' || c == L'<') { ++depth; continue; }
+        if (c == L')' || c == L']' || c == L'）' || c == L'】' || c == L'》' || c == L'>') { if (depth) --depth; continue; }
+        if (c == L'~' || c == L'～' || c == L'〜') { tilde = !tilde; continue; }
+        if (depth || tilde) continue;
+        if (c == L'-' && i > 0 && i + 1 < in.size() && in[i - 1] == L' ' && in[i + 1] == L' ') break;
+        out.push_back(c);
+    }
+    std::wstring core = NormalizeImpl(out);
+    return core.empty() ? NormalizeImpl(in) : core;
+}
+
+// 多位歌手 (「/」「、」「,」「&」分隔,各家顺序和写法不同) 里有任意一位对得上;
+// 每位再去掉括号附注,「瑞葵 (mizuki)」与「瑞葵(mizuki)」「SawanoHiroyuki(nZk) (泽野弘之)」与「SawanoHiroyuki[nZk]」都算同一人
+bool ArtistsOverlapImpl(const std::wstring& a, const std::wstring& b) {
+    auto split = [](const std::wstring& s) {
+        std::vector<std::wstring> parts;
+        std::wstring cur;
+        int depth = 0;
+        auto flush = [&]() {
+            std::wstring n = NormalizeImpl(cur);
+            if (n.size() >= 2) parts.push_back(n);
+            cur.clear();
+        };
+        for (wchar_t c : s) {
+            if (c == L'(' || c == L'[' || c == L'（' || c == L'【') { ++depth; continue; }
+            if (c == L')' || c == L']' || c == L'）' || c == L'】') { if (depth) --depth; continue; }
+            if (depth) continue;
+            if (c == L'/' || c == L'、' || c == L',' || c == L'，' || c == L'&' || c == L';') flush();
+            else cur.push_back(c);
+        }
+        flush();
+        return parts;
+    };
+    for (const auto& x : split(a))
+        for (const auto& y : split(b))
+            if (x == y) return true;
+    return false;
+}
+
+// 现场 / 演唱会版本 (时间轴通常和录音室版对不上)
+bool IsLiveImpl(const std::wstring& s) {
+    std::wstring low;
+    for (wchar_t c : s) low.push_back(static_cast<wchar_t>(std::towlower(c)));
+    for (const wchar_t* k : {L"live", L"现场", L"演唱会", L"ライブ", L"concert"})
+        if (low.find(k) != std::wstring::npos) return true;
+    return false;
+}
+
 // 粗判是否含 [mm:ss] / [mm:ss.xx] 时间轴
 bool LooksLikeLrcImpl(const std::string& text) {
     for (size_t i = 0; i + 4 < text.size(); ++i) {
@@ -510,6 +566,8 @@ bool LyricProvider::SourceEnabled(const std::string& source) const {
 void LyricProvider::RankCandidates(const LyricQuery& q, std::vector<LyricCandidate>& list) {
     const std::wstring wantTitle = NormalizeImpl(q.title);
     const std::wstring wantArtist = NormalizeImpl(q.artist);
+    const std::wstring wantCore = TitleCoreImpl(q.title);
+    const bool queryLive = IsLiveImpl(q.title) || IsLiveImpl(q.album);
 
     for (auto& c : list) {
         int score = 0;
@@ -525,13 +583,17 @@ void LyricProvider::RankCandidates(const LyricQuery& q, std::vector<LyricCandida
         c.title_match = false;
         if (!wantTitle.empty() && !ct.empty()) {
             if (ct == wantTitle) { score += 100; c.title_match = true; }
+            else if (TitleCoreImpl(c.title) == wantCore) { score += 70; c.title_match = true; } // 只差括号里的附注
             else if (contains(ct, wantTitle)) { score += 40; c.title_match = true; }
             else if (!q.loose) score -= 40;
         }
+        // 查的不是现场版,候选却是:排到录音室版后面
+        if (!queryLive && (IsLiveImpl(c.title) || IsLiveImpl(c.album))) score -= 35;
         // 歌手:相同加权重,包含次之
         if (!wantArtist.empty() && !ca.empty()) {
             if (ca == wantArtist) score += 60;
-            else if (ca.find(wantArtist) != std::wstring::npos || wantArtist.find(ca) != std::wstring::npos) score += 25;
+            else if (ca.find(wantArtist) != std::wstring::npos || wantArtist.find(ca) != std::wstring::npos ||
+                     ArtistsOverlapImpl(q.artist, c.artist)) score += 25;
             else if (!q.loose) score -= 20;
         }
         // 时长:5 秒内命中,8 秒内算勉强,否则视为别的版本
@@ -763,6 +825,13 @@ bool LyricProvider::SearchNetease(const LyricQuery& q, std::vector<LyricCandidat
     if (!ParseJson(body, root)) {
         if (error) *error = "netease: bad json";
         return false;
+    }
+    // 请求太频繁时接口返回 {"code":405,"msg":"操作频繁..."}:当作没连上 (不能当成「查无此歌」记下来)
+    if (const JVal* code = root.Get("code")) {
+        if (code->type == JVal::Number && code->AsNumber() != 200) {
+            if (error) *error = "netease: http failed (code " + std::to_string(static_cast<long long>(code->AsNumber())) + ")";
+            return false;
+        }
     }
     const JVal* result = root.Get("result");
     if (!result) {

@@ -1261,6 +1261,8 @@ void LyricManager::SetCacheDirectory(const std::wstring& dir) {
     if (!dir.empty() && std::find(search_dirs_.begin(), search_dirs_.end(), dir) == search_dirs_.end()) search_dirs_.push_back(dir);
     index_.clear();
     index_built_at_ = 0;
+    tr_misses_.clear();
+    tr_misses_loaded_ = false;
 }
 
 void LyricManager::SetHttpGetter(KuGouOnlineLyrics::HttpGetFn http) {
@@ -1442,20 +1444,149 @@ bool LyricManager::ParseDoc(const RawLyricDoc& doc, ParsedLyrics& outLyrics) {
     return false;
 }
 
-// 多源聚合在线拉取:依次查 LRCLIB / 网易云 / 酷狗,统一排名后按名次拉取,结果落缓存。
-// 与旧的 FetchOnline(仅酷狗)相比,冷门和外文曲目也有兜底
-bool LyricManager::FetchOnlineMulti(const std::wstring& audioFilePath, const std::wstring& title,
-                                    const std::wstring& artist, uint32_t durationMs, ParsedLyrics& outLyrics,
-                                    LyricCandidate* picked) {
-    // 搜索词:与 FetchOnline 同样的补齐策略 (标签缺失时用「歌手 - 歌名」文件名)
-    std::wstring qTitle = title, qArtist = artist;
+// ============================================================================
+// 外语歌的翻译:语种判断、时间轴一致性、在线找带翻译的版本
+// ============================================================================
+
+namespace {
+
+// 按字符类别计数:假名 / 谚文 / 汉字 / 拉丁字母
+struct ScriptCount {
+    size_t kana = 0, hangul = 0, han = 0, latin = 0;
+};
+
+ScriptCount CountScripts(const ParsedLyrics& l) {
+    ScriptCount n;
+    for (const auto& line : l.lines) {
+        for (wchar_t c : line.full_text) {
+            if ((c >= 0x3041 && c <= 0x30FF && c != 0x30FB && c != 0x30FC) || (c >= 0x31F0 && c <= 0x31FF) ||
+                (c >= 0xFF66 && c <= 0xFF9D)) ++n.kana;
+            else if ((c >= 0xAC00 && c <= 0xD7AF) || (c >= 0x1100 && c <= 0x11FF) || (c >= 0x3130 && c <= 0x318F)) ++n.hangul;
+            else if ((c >= 0x4E00 && c <= 0x9FFF) || (c >= 0x3400 && c <= 0x4DBF)) ++n.han;
+            else if ((c >= L'A' && c <= L'Z') || (c >= L'a' && c <= L'z') || (c >= 0xC0 && c <= 0x24F && c != 0xD7 && c != 0xF7)) ++n.latin;
+        }
+    }
+    return n;
+}
+
+// 比对用的歌词文本:只留字母、数字和 CJK,全角转半角、小写
+std::wstring LineKey(const std::wstring& s) {
+    std::wstring out;
+    for (wchar_t c : s) {
+        if (c >= 0xFF01 && c <= 0xFF5E) c = static_cast<wchar_t>(c - 0xFEE0);
+        if (std::iswalnum(c) || c >= 0x3040) out.push_back(static_cast<wchar_t>(std::towlower(c)));
+    }
+    return out;
+}
+
+// 两句是不是同一句:短的一方的相邻二字组有六成以上出现在长的一方
+// (各家断句不同:酷狗常把网易云的一行拆成两行;繁简 / 新旧字形也会有个别字不同)
+bool SameLine(const std::wstring& a, const std::wstring& b) {
+    if (a.empty() || b.empty()) return false;
+    if (a == b) return true;
+    const std::wstring& s = a.size() <= b.size() ? a : b;
+    const std::wstring& t = a.size() <= b.size() ? b : a;
+    if (s.size() < 2) return t.find(s) == 0;
+    size_t hit = 0;
+    for (size_t i = 0; i + 1 < s.size(); ++i)
+        if (t.find(s.substr(i, 2)) != std::wstring::npos) ++hit;
+    return hit * 10 >= (s.size() - 1) * 6;
+}
+
+bool Timed(const ParsedLyrics& l) {
+    for (const auto& line : l.lines)
+        if (line.start_ms > 0) return true;
+    return false;
+}
+
+int64_t WallSeconds() {
+    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+std::string ReadSmallFile(const std::wstring& path) {
+    platform::ReadOnlyFile f;
+    if (!f.Open(path, false)) return {};
+    const uint64_t size = f.Size();
+    if (size == 0 || size > (1u << 20)) return {};
+    std::string data(static_cast<size_t>(size), '\0');
+    if (f.ReadAt(0, &data[0], data.size()) != data.size()) return {};
+    return data;
+}
+
+constexpr int64_t kTranslationMissTtl = 30LL * 24 * 3600; // 确认没有翻译的曲目,30 天后再试 (平台会陆续补上)
+
+} // namespace
+
+bool LyricManager::IsForeignLyrics(const ParsedLyrics& lyrics) {
+    const ScriptCount n = CountScripts(lyrics);
+    const size_t kh = n.kana + n.hangul;
+    // 日 / 韩文:假名或谚文至少 8 个,且占 CJK 字符的两成以上 (中文歌里夹几句日文不算)
+    if (kh >= 8 && kh * 5 >= kh + n.han) return true;
+    // 英文等:拉丁字母为主,几乎没有汉字
+    return kh == 0 && n.latin >= 40 && n.han * 20 <= n.latin;
+}
+
+// 「有翻译」按中文译文算:译文行有汉字、没有假名 / 谚文,且至少占正文三成。
+// 只精确到秒的 LRC 会把同一秒的两句并成「原文 + 翻译」,罗马音也会被当成翻译,这两种都不算
+bool LyricManager::NeedsTranslation(const ParsedLyrics& lyrics) {
+    if (lyrics.IsEmpty() || !IsForeignLyrics(lyrics)) return false;
+    size_t body = 0, translated = 0;
+    for (const auto& line : lyrics.lines) {
+        if (LineKey(line.full_text).empty()) continue;
+        ++body;
+        if (line.translation.empty()) continue;
+        ParsedLyrics one;
+        one.lines.emplace_back();
+        one.lines.back().full_text = line.translation;
+        const ScriptCount n = CountScripts(one);
+        if (n.han > 0 && n.kana == 0 && n.hangul == 0) ++translated;
+    }
+    return translated * 10 < body * 3;
+}
+
+double LyricManager::TimelineAgreement(const ParsedLyrics& local, const ParsedLyrics& online) {
+    std::vector<std::pair<uint32_t, std::wstring>> other;
+    other.reserve(online.lines.size());
+    for (const auto& o : online.lines) {
+        std::wstring k = LineKey(o.full_text);
+        if (!k.empty()) other.emplace_back(o.start_ms, std::move(k));
+    }
+    size_t total = 0, hit = 0, j = 0;
+    for (const auto& line : local.lines) {
+        const std::wstring k = LineKey(line.full_text);
+        if (k.empty()) continue;
+        ++total;
+        // 两边都按时间有序:窗口 [t-1s, t+1s] 随 t 单调右移
+        while (j < other.size() && other[j].first + 1000 < line.start_ms) ++j;
+        for (size_t i = j; i < other.size() && other[i].first <= line.start_ms + 1000; ++i) {
+            if (SameLine(k, other[i].second)) { ++hit; break; }
+        }
+    }
+    return total ? static_cast<double>(hit) / static_cast<double>(total) : 0.0;
+}
+
+// 搜索词:标签缺失时用「歌手 - 歌名」文件名,去掉音轨号与占位歌手
+static bool BuildOnlineQuery(const std::wstring& audioFilePath, const std::wstring& title, const std::wstring& artist,
+                             std::wstring& qTitle, std::wstring& qArtist) {
+    qTitle = title;
+    qArtist = artist;
     if (qTitle.empty() && !audioFilePath.empty())
         SplitArtistTitle(StripDecorations(FileStem(audioFilePath)), qArtist, qTitle);
     qTitle = StripTrackNumber(qTitle);
     Trim(qTitle);
     Trim(qArtist);
     if (IsPlaceholderArtist(qArtist)) qArtist.clear();
-    if (qTitle.empty()) return false;
+    return !qTitle.empty();
+}
+
+// 多源聚合在线拉取:依次查 LRCLIB / 网易云 / 酷狗,统一排名后按名次拉取,结果落缓存。
+// 与旧的 FetchOnline(仅酷狗)相比,冷门和外文曲目也有兜底。
+// 外语歌第一名没有翻译时,再往下试几份歌名对得上、时间轴与第一名一致的,有翻译就用它
+bool LyricManager::FetchOnlineMulti(const std::wstring& audioFilePath, const std::wstring& title,
+                                    const std::wstring& artist, uint32_t durationMs, ParsedLyrics& outLyrics,
+                                    LyricCandidate* picked) {
+    std::wstring qTitle, qArtist;
+    if (!BuildOnlineQuery(audioFilePath, title, artist, qTitle, qArtist)) return false;
 
     const std::wstring key = L"multi\n" + Normalize(qArtist) + L"\n" + Normalize(qTitle) + L"\n" + std::to_wstring(durationMs / 1000);
     HttpGetFn providerHttp;
@@ -1474,11 +1605,34 @@ bool LyricManager::FetchOnlineMulti(const std::wstring& audioFilePath, const std
     q.artist = qArtist;
     q.duration_ms = durationMs;
 
-    LyricSearchResult all;
+    const LyricSearchResult all = provider.SearchAll(q);
     RawLyricDoc doc;
     LyricCandidate chosen;
     ParsedLyrics parsed;
-    if (!provider.SearchAndFetch(q, doc, &chosen, &all) || !ParseDoc(doc, parsed)) {
+    bool found = false;
+    int tried = 0;
+    for (const auto& c : all.candidates) {
+        if (!c.title_match) continue; // 自动挑选只认歌名对得上的,宁可没有也不要同一歌手的另一首歌
+        if (++tried > 4) break;
+        RawLyricDoc d;
+        ParsedLyrics p;
+        if (!provider.Fetch(c, d) || d.kind == RawLyricDoc::Payload::Plain || !ParseDoc(d, p)) continue;
+        if (!found) {
+            doc = std::move(d);
+            chosen = c;
+            parsed = std::move(p);
+            found = true;
+            if (!NeedsTranslation(parsed)) break;
+            continue;
+        }
+        if (p.HasTranslation() && !NeedsTranslation(p) && TimelineAgreement(parsed, p) >= 0.6) {
+            doc = std::move(d);
+            chosen = c;
+            parsed = std::move(p);
+            break;
+        }
+    }
+    if (!found) {
         // 各源有应答却没有歌名对得上的候选,才记为查不到;都没应答多半是断网,下次播放再试
         bool anyMatch = false;
         for (const auto& c : all.candidates) anyMatch = anyMatch || c.title_match;
@@ -1509,6 +1663,124 @@ bool LyricManager::FetchOnlineMulti(const std::wstring& audioFilePath, const std
     if (picked) *picked = chosen;
     outLyrics = std::move(parsed);
     return true;
+}
+
+// 翻译缓存放在在线缓存目录旁边的「<缓存目录>_translated」:不进歌词库索引 (文件名里带来源),
+// 「<歌手 - 歌名>#<来源>.krc|.lrc」是找到的版本,misses.txt 记着确认没有翻译的曲目与时间
+std::wstring LyricManager::TranslationDirLocked() const {
+    if (cache_dir_.empty()) return {};
+    std::wstring d = cache_dir_;
+    while (!d.empty() && (d.back() == L'/' || d.back() == L'\\')) d.pop_back();
+    return d + L"_translated";
+}
+
+void LyricManager::LoadTranslationMissesLocked() {
+    if (tr_misses_loaded_) return;
+    tr_misses_loaded_ = true;
+    const std::wstring dir = TranslationDirLocked();
+    if (dir.empty()) return;
+    std::istringstream iss(ReadSmallFile(dir + L"/misses.txt"));
+    std::string row;
+    const int64_t now = WallSeconds();
+    while (std::getline(iss, row)) {
+        const size_t tab = row.rfind('\t');
+        if (tab == std::string::npos) continue;
+        const int64_t at = std::atoll(row.c_str() + tab + 1);
+        if (now - at < kTranslationMissTtl) tr_misses_[Utf8ToWide(row.substr(0, tab))] = at;
+    }
+}
+
+void LyricManager::SaveTranslationMissesLocked() {
+    const std::wstring dir = TranslationDirLocked();
+    if (dir.empty()) return;
+    std::string data;
+    for (const auto& kv : tr_misses_) data += WideToUtf8(kv.first) + "\t" + std::to_string(kv.second) + "\n";
+    platform::CreateDirectories(dir);
+    WriteWholeFile(dir + L"/misses.txt", data);
+}
+
+bool LyricManager::FindTranslatedVersion(const ParsedLyrics& local, const std::wstring& audioFilePath,
+                                         const std::wstring& title, const std::wstring& artist, uint32_t durationMs,
+                                         ParsedLyrics& outLyrics, LyricCandidate* picked, bool allowNetwork) {
+    if (!NeedsTranslation(local)) return false;
+    std::wstring qTitle, qArtist;
+    if (!BuildOnlineQuery(audioFilePath, title, artist, qTitle, qArtist)) return false;
+    const bool localTimed = Timed(local);
+    // 本地是纯文本 (没有时间轴) 时没法比对,带时间轴、带翻译的就比它好
+    auto fits = [&](const ParsedLyrics& p) { return p.HasTranslation() && !NeedsTranslation(p) && (!localTimed || TimelineAgreement(local, p) >= 0.6); };
+
+    const std::wstring missKey = Normalize(qArtist) + L"\x1f" + Normalize(qTitle) + L"\x1f" + std::to_wstring(durationMs / 1000);
+    const std::wstring name = SafeFileName(qArtist.empty() ? qTitle : qArtist + L" - " + qTitle);
+    HttpGetFn providerHttp;
+    std::wstring dir;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        dir = TranslationDirLocked();
+        LoadTranslationMissesLocked();
+        providerHttp = http_ ? http_ : HttpGetFn(&LyricProvider::DefaultHttpGet);
+    }
+
+    // 1. 之前找到过:直接用 (本地歌词改过、对不上了就重新找)
+    if (!dir.empty() && !name.empty()) {
+        for (const char* src : {"kugou", "netease", "lrclib"}) {
+            for (const wchar_t* ext : {L".krc", L".lrc"}) {
+                const std::wstring path = dir + L"/" + name + L"#" + Utf8ToWide(src) + ext;
+                ParsedLyrics cached;
+                if (!platform::PathExists(path) || !KrcDecoder::DecodeFile(path, cached) || !fits(cached)) continue;
+                if (picked) {
+                    *picked = LyricCandidate();
+                    picked->source = src;
+                    picked->title = cached.title.empty() ? qTitle : cached.title;
+                    picked->artist = cached.artist.empty() ? qArtist : cached.artist;
+                }
+                outLyrics = std::move(cached);
+                return true;
+            }
+        }
+    }
+    // 2. 近期确认过没有
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!allowNetwork || tr_misses_.count(missKey)) return false;
+    }
+
+    // 3. 多源搜索,按排名试歌名对得上的候选,取第一份带翻译且时间轴对得上的
+    LyricProvider provider(providerHttp);
+    LyricQuery q;
+    q.title = qTitle;
+    q.artist = qArtist;
+    q.duration_ms = durationMs;
+    const LyricSearchResult all = provider.SearchAll(q);
+    int tried = 0;
+    bool fetchFailed = false;
+    for (const auto& c : all.candidates) {
+        if (!c.title_match) continue;
+        if (++tried > 4) break;
+        RawLyricDoc d;
+        ParsedLyrics p;
+        if (!provider.Fetch(c, d)) { fetchFailed = true; continue; }
+        if (d.kind == RawLyricDoc::Payload::Plain || !ParseDoc(d, p) || !fits(p)) continue;
+        if (p.title.empty()) p.title = qTitle;
+        if (p.artist.empty()) p.artist = qArtist;
+        if (!dir.empty() && !name.empty()) {
+            platform::CreateDirectories(dir);
+            const std::wstring base = dir + L"/" + name + L"#" + Utf8ToWide(c.source);
+            if (d.kind == RawLyricDoc::Payload::Krc) WriteWholeFile(base + L".krc", d.raw_payload);
+            else ExportLrcFile(p, base + L".lrc");
+        }
+        if (picked) *picked = c;
+        outLyrics = std::move(p);
+        return true;
+    }
+    // 各源都有应答、拉取也没出错,才算确认没有;断网 / 接口抖动时下次再试
+    bool allAnswered = all.answered > 0;
+    for (const auto& e : all.source_errors) allAnswered = allAnswered && e.find("failed") == std::string::npos;
+    if (allAnswered && !fetchFailed) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        tr_misses_[missKey] = WallSeconds();
+        SaveTranslationMissesLocked();
+    }
+    return false;
 }
 
 bool LyricManager::ExportLrcFile(const ParsedLyrics& lyrics, const std::wstring& targetLrcPath) {

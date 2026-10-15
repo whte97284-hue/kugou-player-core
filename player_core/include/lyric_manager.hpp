@@ -158,6 +158,21 @@ public:
     // 把任一歌词源拉到的载荷转成结构化歌词:KRC 解密、LRC 解析 (另附的翻译按时间戳并入),纯文本按行切分 (无时间轴)
     static bool ParseDoc(const RawLyricDoc& doc, ParsedLyrics& outLyrics);
 
+    // 外语歌词 (假名 / 谚文占 CJK 两成以上,或以拉丁字母为主、几乎没有汉字);中文歌夹几句日文不算
+    static bool IsForeignLyrics(const ParsedLyrics& lyrics);
+    // 外语且没有翻译:值得在线找一份带翻译的
+    static bool NeedsTranslation(const ParsedLyrics& lyrics);
+    // 时间轴一致程度:local 的正文行里,能在 online 中前后 1 秒内找到同一句的比例 (0~1)。
+    // 各家断句不同 (酷狗常把一行拆成两行),按二字组重合判同一句
+    static double TimelineAgreement(const ParsedLyrics& local, const ParsedLyrics& online);
+
+    // 本地歌词 (同名 .lrc / 内嵌) 是外语又没有翻译时,在线找一份带翻译、且时间轴与本地一致 (>= 60% 行对得上) 的版本。
+    // 找到过的存在翻译缓存里,下次不联网;确认没有的 30 天内不再查;对不上的版本宁可不用 (本地兜底)。
+    // allowNetwork=false 时只查缓存 (几个小文件,可在界面线程里调用,载入时直接显示,不先闪一下本地版)
+    bool FindTranslatedVersion(const ParsedLyrics& local, const std::wstring& audioFilePath, const std::wstring& title,
+                               const std::wstring& artist, uint32_t durationMs, ParsedLyrics& outLyrics,
+                               LyricCandidate* picked = nullptr, bool allowNetwork = true);
+
     // 在线歌词缓存目录 (同时加入本地歌词库索引)
     void SetCacheDirectory(const std::wstring& dir);
 
@@ -180,6 +195,11 @@ private:
     bool EnsureIndexLocked(bool onMiss); // 返回是否重建了索引
     std::vector<uint64_t> DirStampsLocked() const;
     std::wstring MatchLocked(const std::wstring& title, const std::wstring& artist) const;
+    std::wstring TranslationDirLocked() const;
+    void LoadTranslationMissesLocked();
+    void SaveTranslationMissesLocked();
+    std::unordered_map<std::wstring, int64_t> tr_misses_; // 确认没有翻译的曲目 -> 记录时间 (秒)
+    bool tr_misses_loaded_ = false;
 
     std::vector<std::wstring> search_dirs_;
     std::wstring cache_dir_;

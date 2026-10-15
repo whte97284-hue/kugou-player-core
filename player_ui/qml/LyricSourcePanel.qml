@@ -4,6 +4,7 @@ import PlayerUi
 // 歌词来源面板:从右下角的来源胶囊弹出,盖在歌词栏上
 //  当前来源 (强调色来源图标 + 来源名 + 文件 / 歌名;可保存到本地、在文件夹中显示)
 //  → 搜索框 (默认「歌名 歌手」,打开时自动搜一次) → 候选列表 (点一下立即换上,勾号标出正在用的)
+// 外语歌:候选在后台预取后标出「翻译」,可只看带翻译的;自动 / 手动换成在线版后可「用本地歌词」换回
 // 只用强调色与文字的明暗,不给各个来源配颜色
 Item {
     id: panelRoot
@@ -18,6 +19,10 @@ Item {
     readonly property var src: player.lyricSource
     readonly property bool hasSource: !!(src && src.kind && src.kind !== "none")
     property int pending: -1   // 点了、还在拉取的候选
+    property bool onlyTranslated: false // 只看带翻译的候选
+    function tagOf(i) { return i < player.lyricCandidateTags.length ? player.lyricCandidateTags[i] : -1 }
+    readonly property bool anyTranslated: { for (let i = 0; i < player.lyricCandidateTags.length; ++i) if (player.lyricCandidateTags[i] === 1) return true; return false }
+    onAnyTranslatedChanged: if (!anyTranslated) onlyTranslated = false
 
     function open() {
         shown = true
@@ -181,13 +186,36 @@ Item {
                         font.pixelSize: 14
                         font.weight: Font.DemiBold
                     }
-                    Text {
+                    // 说明 + (换成了在线版时) 行内的「换回本地歌词」,和说明同一行同一字号,不另占按钮位
+                    Row {
                         width: parent.width
-                        elide: Text.ElideMiddle
-                        text: panelRoot.hasSource ? panelRoot.src.detail : qsTr("从下面的结果里挑一份")
-                        color: Theme.textTertiary
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 12
+                        spacing: 8
+                        Text {
+                            width: Math.min(implicitWidth, parent.width - (revert.visible ? revert.width + parent.spacing : 0))
+                            elide: Text.ElideMiddle
+                            text: panelRoot.hasSource ? panelRoot.src.detail : qsTr("从下面的结果里挑一份")
+                            color: Theme.textTertiary
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 12
+                        }
+                        Text {
+                            id: revert
+                            visible: !!(panelRoot.src && panelRoot.src.local)
+                            text: qsTr("换回本地歌词")
+                            color: revertMouse.containsMouse ? Theme.accent : Theme.textSecondary
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 12
+                            font.underline: revertMouse.containsMouse
+                            Behavior on color { ColorAnimation { duration: Theme.fast } }
+                            MouseArea {
+                                id: revertMouse
+                                anchors.fill: parent
+                                anchors.margins: -4
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: player.useLocalLyrics()
+                            }
+                        }
                     }
                 }
                 Row {
@@ -299,6 +327,40 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     running: player.lyricSearching && panelRoot.shown
                 }
+                // 筛选:只看带中文翻译的 (有候选确认带翻译时才出现)。与候选行右侧的小标签同一形态,右缘与标签列对齐
+                // (标签列右缘 = 列表右内缩 8 + 行右边距 16 + 勾号位 20 + 间距 6,比本行右缘多出 30)
+                Rectangle {
+                    id: trFilter
+                    anchors.right: parent.right
+                    anchors.rightMargin: 30
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: trText.implicitWidth + 14
+                    height: 20
+                    radius: 10
+                    opacity: panelRoot.anyTranslated && !player.lyricSearching ? 1 : 0
+                    visible: opacity > 0
+                    Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+                    color: panelRoot.onlyTranslated ? Theme.accentAlpha(0.12) : "transparent"
+                    border.width: panelRoot.onlyTranslated ? 0 : 1
+                    border.color: Qt.rgba(1, 0.96, 0.9, trMouse.containsMouse ? 0.24 : 0.12)
+                    Behavior on color { ColorAnimation { duration: Theme.fast } }
+                    Text {
+                        id: trText
+                        anchors.centerIn: parent
+                        text: qsTr("只看带翻译")
+                        color: panelRoot.onlyTranslated ? Theme.accent : Theme.textTertiary
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 11
+                        font.weight: Font.DemiBold
+                    }
+                    MouseArea {
+                        id: trMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: panelRoot.onlyTranslated = !panelRoot.onlyTranslated
+                    }
+                }
             }
 
             // ---- 候选列表 ----
@@ -320,7 +382,12 @@ Item {
                 delegate: Item {
                     id: row
                     width: list.width
-                    height: 60
+                    readonly property int tr: panelRoot.tagOf(index)
+                    readonly property bool hiddenByFilter: panelRoot.onlyTranslated && tr !== 1 && !inUse
+                    height: hiddenByFilter ? 0 : 60
+                    visible: height > 0
+                    clip: true
+                    Behavior on height { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
                     readonly property bool inUse: player.lyricPicked === index
                     readonly property bool loading: panelRoot.pending === index
                     opacity: 0
@@ -403,9 +470,11 @@ Item {
                                 font.weight: Font.DemiBold
                             }
                         }
-                        Tag { label: qsTr("逐字"); visible: modelData.wordTimed && modelData.synced }
+                        // 特性合成一枚强调色标签 (逐字 · 翻译),来源用描边标签,每行最多两枚
+                        readonly property var features: [modelData.wordTimed && modelData.synced ? qsTr("逐字") : "", row.tr === 1 ? qsTr("翻译") : ""].filter(s => s.length)
+                        Tag { label: tags.features.join(" · "); visible: tags.features.length > 0 }
                         Tag { label: qsTr("无时间轴"); dim: true; visible: !modelData.synced }
-                        Tag { label: modelData.source }
+                        Tag { label: modelData.source; dim: true }
                         Item {
                             width: 20; height: 20
                             Icon {
