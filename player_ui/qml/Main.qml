@@ -953,48 +953,102 @@ Window {
     function automationTrackInfo(show) { trackMenu.close(); if (show) trackInfo.open(player.trackId); else trackInfo.close() }
     function automationTrackMenu(x, y) { trackMenu.open(player.trackId, Number(x), Number(y), {}) }
 
-    // ======================= 帧率计 (Ctrl+Shift+P 开关) =======================
-    // 只统计真正出帧的时刻:静止时不出帧是正常的,滚动 / 播放时看 fps 与最慢一帧
-    Shortcut { sequence: "Ctrl+Shift+P"; onActivated: fpsMeter.visible = !fpsMeter.visible }
+    // ======================= 帧诊断 (Ctrl+Shift+P 开关) =======================
+    // 出帧节拍、掉帧、界面线程阻塞、显卡后端;开着时每秒一行写进日志,附上当时的状态 (见 frame_diag.h)
+    Shortcut { sequence: "Ctrl+Shift+P"; onActivated: frameDiag.enabled = !frameDiag.enabled }
+    Binding {
+        target: frameDiag
+        property: "state"
+        when: frameDiag.enabled
+        value: ({
+            scrolling: Theme.scrolling,
+            playing: player.playing,
+            reduced: Theme.reduced,
+            desktopLyrics: settings.desktopLyrics,
+            nowPlaying: nowPlaying.shown,
+            page: root.detailKind.length ? root.detailKind : root.section,
+            bg: ["flow", "still", "solid"][settings.background] || ""
+        })
+    }
     Rectangle {
-        id: fpsMeter
-        visible: false
+        id: diag
+        visible: frameDiag.enabled
         z: 10000
         anchors.right: parent.right
         anchors.top: parent.top
-        anchors.margins: 52
-        width: fpsText.implicitWidth + 20
-        height: 28
-        radius: 8
-        color: Qt.rgba(0, 0, 0, 0.7)
-        property int frames: 0
-        property real last: 0
-        property real worst: 0
-        property int fps: 0
-        property real worstShown: 0
-        Connections {
-            target: fpsMeter.visible ? root : null
-            function onFrameSwapped() {
-                const now = Date.now()
-                if (fpsMeter.last > 0) fpsMeter.worst = Math.max(fpsMeter.worst, now - fpsMeter.last)
-                fpsMeter.last = now
-                fpsMeter.frames++
+        anchors.topMargin: 48
+        anchors.rightMargin: 16
+        width: 340
+        height: diagCol.implicitHeight + 24
+        radius: 12
+        color: Qt.rgba(0, 0, 0, 0.78)
+        readonly property var st: frameDiag.stats
+        readonly property real frame: st.frame || 16.7
+        Column {
+            id: diagCol
+            x: 14
+            y: 12
+            width: parent.width - 28
+            spacing: 6
+            Text {
+                text: (diag.st.fps || 0) + " fps   中位 " + (diag.st.p50 || 0).toFixed(1) + "   最慢 " + Math.round(diag.st.max || 0)
+                      + " ms   掉帧 " + (diag.st.janks || 0)
+                color: "white"
+                font.family: Theme.fontFamily
+                font.pixelSize: 13
+                font.weight: Font.DemiBold
             }
-        }
-        Timer {
-            interval: 1000; repeat: true; running: fpsMeter.visible
-            onTriggered: {
-                fpsMeter.fps = fpsMeter.frames; fpsMeter.worstShown = fpsMeter.worst
-                fpsMeter.frames = 0; fpsMeter.worst = 0
+            // 最近 120 帧的间隔:细线标出一帧的时长,超过 1.5 帧的柱子标强调色
+            Item {
+                width: parent.width
+                height: 44
+                Canvas {
+                    id: bars
+                    anchors.fill: parent
+                    Connections { target: frameDiag; function onStatsChanged() { if (diag.visible) bars.requestPaint() } }
+                    onPaint: {
+                        const ctx = getContext("2d")
+                        ctx.reset()
+                        const v = frameDiag.recent, w = width / 120
+                        for (let i = 0; i < v.length; ++i) {
+                            const h = Math.min(height, v[i] / (diag.frame * 3) * height)
+                            ctx.fillStyle = v[i] > diag.frame * 1.5 ? Theme.accent : Qt.rgba(1, 1, 1, 0.35)
+                            ctx.fillRect(i * w, height - h, Math.max(1, w - 1), h)
+                        }
+                    }
+                }
+                Rectangle { y: 44 - 44 / 3; width: parent.width; height: 1; color: Qt.rgba(1, 1, 1, 0.25) }
             }
-        }
-        Text {
-            id: fpsText
-            anchors.centerIn: parent
-            text: fpsMeter.fps + " fps · 最慢 " + Math.round(fpsMeter.worstShown) + " ms" + (Screen.refreshRate > 0 ? " · " + Math.round(Screen.refreshRate) + " Hz" : "")
-            color: "white"
-            font.family: Theme.fontFamily
-            font.pixelSize: 12
+            Text {
+                width: parent.width
+                text: "屏幕 " + Math.round(diag.st.hz || 0) + " Hz"
+                      + (Math.abs((diag.st.primaryHz || 0) - (diag.st.hz || 0)) > 1 ? " (主屏 " + Math.round(diag.st.primaryHz) + " Hz)" : "")
+                      + "  ·  实测 " + (diag.st.p50 > 0 ? Math.round(1000 / diag.st.p50) : 0)
+                      + " Hz  ·  录制 " + (diag.st.render || 0).toFixed(1) + " ms  ·  界面线程阻塞 " + Math.round(diag.st.stall || 0) + " ms"
+                      + "\n动画驱动 " + (diag.st.timerMode ? "计时器模式 (会抖)" : "垂直同步模式") + "  ·  切换 " + (diag.st.switches || 0) + " 次"
+                color: Qt.rgba(1, 1, 1, 0.7)
+                font.family: Theme.fontFamily
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+            }
+            Text {
+                width: parent.width
+                text: frameDiag.graphics
+                color: Qt.rgba(1, 1, 1, 0.5)
+                font.family: Theme.fontFamily
+                font.pixelSize: 11
+                wrapMode: Text.WrapAnywhere
+                maximumLineCount: 2
+                elide: Text.ElideRight
+            }
+            Text {
+                width: parent.width
+                text: "日志 " + frameDiag.logPath
+                color: Qt.rgba(1, 1, 1, 0.4)
+                font.family: Theme.fontFamily
+                font.pixelSize: 10
+                wrapMode: Text.WrapAnywhere
+            }
         }
     }
 

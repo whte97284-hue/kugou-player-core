@@ -25,8 +25,15 @@ Item {
         layer.textureSize: Qt.size(Math.max(1, Math.round(width / 4)), Math.max(1, Math.round(height / 4)))
         property size size: Qt.size(width, height)
         property real time: 0
-        // breath 已在内核侧平滑过;这里再加 Behavior 会每帧重启一个动画
-        property real energy: root.visible ? player.breath : 0
+        // breath 已在内核侧平滑过;这里再加 Behavior 会每帧重启一个动画。
+        // 背景不流动 (静止背景、减弱动效、滚动中、不在前台) 时低音膨胀也停在当前值:
+        // 否则播放时 breath 每帧都变,背景层每帧都要重画一遍
+        property real energy: 0
+        Binding on energy {
+            when: flow.running && !flow.paused
+            value: root.visible ? player.breath : 0
+            restoreMode: Binding.RestoreNone
+        }
         property color c0: root.c0
         property color c1: root.c1
         property color c2: root.c2
@@ -35,6 +42,7 @@ Item {
         fragmentShader: "qrc:/shaders/aurora.frag.qsb"
 
         UniformAnimator {
+            id: flow
             target: fx
             uniform: "time"
             from: 0

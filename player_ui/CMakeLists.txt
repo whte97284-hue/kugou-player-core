@@ -15,6 +15,7 @@ qt_add_executable(KugouPlayer
     src/settings_service.h src/settings_service.cpp
     src/library_tools.h src/library_tools.cpp
     src/taskbar_helper.h src/taskbar_helper.cpp
+    src/frame_diag.h src/frame_diag.cpp
 )
 
 set_source_files_properties(qml/Theme.qml qml/Nav.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)

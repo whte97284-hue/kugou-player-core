@@ -68,7 +68,12 @@ QtObject {
 
     // 正在滚动的列表数 (SmoothScroll 维护):滚动期间暂停背景流动、呼吸点、悬停效果,把每一帧都留给滚动
     property int scrollers: 0
-    readonly property bool scrolling: scrollers > 0
+    // 停下后再保持 220ms:慢慢一格一格拨滚轮时,每格之间都会短暂停住,不保持的话「滚动中」会逐格开关,
+    // 每次开关都让所有可见行的 hoverEnabled 重算、鼠标下那一行高亮淡入又淡出、背景恢复又暂停
+    property bool scrollHold: false
+    readonly property bool scrolling: scrollers > 0 || scrollHold
+    onScrollersChanged: if (scrollers === 0) { scrollHold = true; holdTimer.restart() } else holdTimer.stop()
+    property Timer holdTimer: Timer { interval: 220; onTriggered: theme.scrollHold = false }
 
     readonly property int navWidth: 72
     readonly property int islandHeight: 76

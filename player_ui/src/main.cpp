@@ -2,6 +2,12 @@
 #include <QAbstractItemModel>
 #include <QDir>
 #include <cmath>
+#include <mutex>
+#include <map>
+#include <atomic>
+#include <algorithm>
+#include <QElapsedTimer>
+#include <QMouseEvent>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -26,6 +32,7 @@
 #include "window_helper.h"
 #include "library_tools.h"
 #include "taskbar_helper.h"
+#include "frame_diag.h"
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -36,6 +43,41 @@
 #endif
 #include <QIcon>
 #include <QThreadPool>
+#include <QThread>
+
+// 滚动基准用:记录界面线程上每个事件的处理耗时 (只在 KP_TEST_SCROLLBENCH 录制期间开启)
+namespace bench {
+std::atomic<bool> on{false};
+std::map<QString, std::pair<double, int>> cost; // 事件类型 + 接收者 → (总毫秒, 次数)
+std::vector<std::pair<double, QString>> slow;   // 单次 ≥ 4ms 的事件
+}
+class TimedApp : public QGuiApplication {
+public:
+    using QGuiApplication::QGuiApplication;
+    bool notify(QObject* r, QEvent* e) override {
+        if (!bench::on.load() || depth_ > 0 || QThread::currentThread() != thread()) return QGuiApplication::notify(r, e);
+        ++depth_;
+        QElapsedTimer t;
+        t.start();
+        // 接收者在处理后可能已被删除 (DeferredDelete 等):名字先取好
+        const int type = e->type();
+        QString who = QString::fromLatin1(r->metaObject()->className());
+        if (r->parent() && (type == QEvent::Timer || type == QEvent::MetaCall))
+            who += QStringLiteral("<") + QString::fromLatin1(r->parent()->metaObject()->className());
+        if (!r->objectName().isEmpty()) who += QStringLiteral("#") + r->objectName();
+        const bool res = QGuiApplication::notify(r, e);
+        const double ms = t.nsecsElapsed() / 1e6;
+        --depth_;
+        const QString key = QString::number(type) + QStringLiteral(" ") + who;
+        auto& c = bench::cost[key];
+        c.first += ms;
+        c.second += 1;
+        if (ms >= 4.0) bench::slow.push_back({ms, key});
+        return res;
+    }
+private:
+    int depth_ = 0;
+};
 
 // 离屏截图驱动 (开发验证用):--screenshot <输出目录>
 // 依次调用 QML 根对象上的自动化函数并截图,用于在无显示器环境下检查排版与配色
@@ -165,6 +207,114 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         steps->push_back({"s04_songs", [call] { call("automationGo", QStringLiteral("songs")); }, 1600});
         steps->push_back({"s05_songs_sorted", [call] { call("automationSongsSort", 1); }, 1000});
         steps->push_back({"s06_wall_short", [window, call] { call("automationSongsSort", 0); window->resize(1500, 760); call("automationGo", QStringLiteral("albums")); }, 1800});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_SCROLLBENCH")) {
+        // 滚动基准:在歌曲页 / 专辑墙用合成的滚轮事件连续滚动,逐帧记录帧间隔,对比
+        // 暂停 / 播放、减弱动效开 / 关、鼠标停在列表上 / 侧栏上
+        auto* st = qobject_cast<SettingsService*>(engine.rootContext()->contextProperty("settings").value<QObject*>());
+        auto swaps = std::make_shared<std::vector<qint64>>();
+        auto mtx = std::make_shared<std::mutex>();
+        auto clock = std::make_shared<QElapsedTimer>();
+        clock->start();
+        auto recording = std::make_shared<std::atomic<bool>>(false);
+        QObject::connect(window, &QQuickWindow::frameSwapped, window, [=]() {
+            if (!recording->load()) return;
+            std::lock_guard<std::mutex> l(*mtx);
+            swaps->push_back(clock->nsecsElapsed());
+        }, Qt::DirectConnection);
+        auto bench = [=](const QString& label, QPointF hoverAt) {
+            QMouseEvent mv(QEvent::MouseMove, hoverAt, window->mapToGlobal(hoverAt), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(window, &mv);
+            { std::lock_guard<std::mutex> l(*mtx); swaps->clear(); }
+            bench::cost.clear();
+            bench::slow.clear();
+            bench::on.store(true);
+            recording->store(true);
+            std::fprintf(stderr, "KP_BENCH begin %s\n", qPrintable(label));
+            auto ticks = std::make_shared<int>(0);
+            auto* t = new QTimer(window);
+            t->setInterval(45);
+            QObject::connect(t, &QTimer::timeout, window, [=]() {
+                const int k = (*ticks)++;
+                if (k >= 66) {
+                    t->stop();
+                    t->deleteLater();
+                    QTimer::singleShot(500, window, [=]() {
+                        recording->store(false);
+                        bench::on.store(false);
+                        std::vector<std::pair<double, QString>> top;
+                        double total = 0;
+                        for (auto& [k, c] : bench::cost) { top.push_back({c.first, k + QString(" x%1").arg(c.second)}); total += c.first; }
+                        std::sort(top.rbegin(), top.rend());
+                        std::fprintf(stderr, "KP_COST %s total=%.0fms\n", qPrintable(label), total);
+                        for (size_t i = 0; i < std::min<size_t>(8, top.size()); ++i)
+                            std::fprintf(stderr, "KP_COST   %7.1fms  %s\n", top[i].first, qPrintable(top[i].second));
+                        std::sort(bench::slow.rbegin(), bench::slow.rend());
+                        for (size_t i = 0; i < std::min<size_t>(5, bench::slow.size()); ++i)
+                            std::fprintf(stderr, "KP_SLOW   %7.1fms  %s\n", bench::slow[i].first, qPrintable(bench::slow[i].second));
+                        std::vector<qint64> v;
+                        { std::lock_guard<std::mutex> l(*mtx); v = *swaps; }
+                        std::vector<double> d;
+                        for (size_t i = 1; i < v.size(); ++i) d.push_back((v[i] - v[i - 1]) / 1e6);
+                        std::sort(d.begin(), d.end());
+                        auto pct = [&](double p) { return d.empty() ? 0.0 : d[std::min(d.size() - 1, size_t(p * d.size()))]; };
+                        int janky = 0;
+                        for (double x : d) janky += x > 25.0;
+                        std::fprintf(stderr, "KP_BENCH %-28s frames=%zu p50=%.1f p90=%.1f p99=%.1f max=%.1f >25ms=%d\n",
+                                     qPrintable(label), v.size(), pct(0.5), pct(0.9), pct(0.99), d.empty() ? 0.0 : d.back(), janky);
+                    });
+                    return;
+                }
+                // 每 22 格换一次方向,不撞到底
+                const int dir = (k / 22) % 2 ? 1 : -1;
+                const QPointF at(900, 500);
+                QWheelEvent we(at, window->mapToGlobal(at), QPoint(), QPoint(0, 120 * dir), Qt::NoButton, Qt::NoModifier,
+                               Qt::NoScrollPhase, false);
+                QCoreApplication::sendEvent(window, &we);
+            });
+            t->start();
+        };
+        const QPointF overList(900, 500), overNav(36, 640);
+        auto setup = [=, &player](bool play, bool reduced) {
+            if (st) st->setReducedMotion(reduced);
+            if (play && !player.playing()) player.toggle();
+            if (!play && player.playing()) player.toggle();
+        };
+        steps->push_back({"b00_songs", [call, &player, window, &engine] {
+            window->resize(1400, 900);
+            if (auto* fd = engine.rootContext()->contextProperty("frameDiag").value<QObject*>()) fd->setProperty("enabled", true);
+            player.playAlbum(0, 0);
+            player.toggle();
+            call("automationGo", QStringLiteral("songs"));
+        }, 2500});
+        struct Case { const char* name; bool play; bool reduced; bool hoverList; };
+        const Case cases[] = {
+            {"songs paused hover", false, false, true},
+            {"songs paused nav", false, false, false},
+            {"songs playing hover", true, false, true},
+            {"songs playing nav", true, false, false},
+            {"songs playing reduced", true, true, true},
+            {"songs paused reduced", false, true, true},
+        };
+        for (const Case& c : cases) {
+            steps->push_back({QStringLiteral("b_%1").arg(QString(c.name).replace(' ', '_')), [=] {
+                setup(c.play, c.reduced);
+                QTimer::singleShot(400, window, [=] { bench(c.name, c.hoverList ? overList : overNav); });
+            }, 4600});
+        }
+        steps->push_back({"b10_wall", [call, st] { if (st) st->setReducedMotion(false); call("automationGo", QStringLiteral("albums")); }, 2000});
+        const Case wall[] = {
+            {"wall paused hover", false, false, true},
+            {"wall playing hover", true, false, true},
+            {"wall playing nav", true, false, false},
+            {"wall playing reduced", true, true, true},
+        };
+        for (const Case& c : wall) {
+            steps->push_back({QStringLiteral("b_%1").arg(QString(c.name).replace(' ', '_')), [=] {
+                setup(c.play, c.reduced);
+                QTimer::singleShot(400, window, [=] { bench(c.name, c.hoverList ? overList : overNav); });
+            }, 4600});
+        }
+        steps->push_back({"b99_end", [st] { if (st) st->setReducedMotion(false); }, 200});
     } else if (qEnvironmentVariableIsSet("KP_TEST_EQ")) {
         // 均衡器:播放页右下角打开面板 → 关闭状态 → 选预设 (曲线过渡) → 拖一段成自定义 → 关掉 → 小窗口
         steps->push_back({"e01_playing", [call, &player] {
@@ -637,7 +787,8 @@ int main(int argc, char* argv[]) {
     const double scale = SettingsService::StartupScale();
     if (scale > 0.5 && scale < 3.0 && std::abs(scale - 1.0) > 0.01 && qEnvironmentVariableIsEmpty("QT_SCALE_FACTOR"))
         qputenv("QT_SCALE_FACTOR", QByteArray::number(scale, 'f', 2));
-    QGuiApplication app(argc, argv);
+    TimedApp app(argc, argv);
+    FrameDiag::CaptureGraphicsInfo();
     // 全局线程池只跑提取封面主色、加载歌词、统计缓存这类零星后台任务,默认按逻辑核数 (可达 20) 铺线程没有必要
     QThreadPool::globalInstance()->setMaxThreadCount(4);
     app.setWindowIcon(QIcon(QStringLiteral(":/images/app_icon_256.png")));
@@ -680,6 +831,7 @@ int main(int argc, char* argv[]) {
     QObject::connect(&player, &PlayerController::trackChanged, &playlists, recordPlay);
     QObject::connect(&player, &PlayerController::playingChanged, &playlists, recordPlay);
     WindowHelper windowHelper;
+    FrameDiag frameDiag; // 先于引擎创建、晚于引擎销毁:QML 绑定在退出时还会读它
     LibraryTools libtools(&library, &playlists, &player);
     PlaylistImporter importer(&library, &playlists);
 
@@ -700,6 +852,7 @@ int main(int argc, char* argv[]) {
     ctx->setContextProperty("playlistTracks", &playlistTracks);
     ctx->setContextProperty("historyTracks", &historyTracks);
     ctx->setContextProperty("windowHelper", &windowHelper);
+    ctx->setContextProperty("frameDiag", &frameDiag);
     ctx->setContextProperty("libtools", &libtools);
     ctx->setContextProperty("importer", &importer);
 
@@ -711,6 +864,7 @@ int main(int argc, char* argv[]) {
     if (engine.rootObjects().isEmpty()) return 1;
     player.attachWindow(qobject_cast<QQuickWindow*>(engine.rootObjects().value(0)));
     // 全局多媒体键
+    frameDiag.attach(qobject_cast<QQuickWindow*>(engine.rootObjects().value(0)));
     app.installNativeEventFilter(&windowHelper);
     windowHelper.registerMediaKeys(qobject_cast<QWindow*>(engine.rootObjects().value(0)));
     QObject::connect(&windowHelper, &WindowHelper::mediaPlayPause, &player, &PlayerController::toggle);
