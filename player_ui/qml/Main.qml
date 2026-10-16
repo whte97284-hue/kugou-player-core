@@ -421,6 +421,58 @@ Window {
             }
         }
         Timer { id: reveal; interval: Theme.normal + 40; onTriggered: flying.visible = false }
+        // 飞行途中落点被挪走了 (返回后立刻滚动、窗口改变大小导致重新排版):副本飞向的已是旧位置,
+        // 看起来像封面被带着滚走或飞走。这时放弃这段飞行,副本就地淡出,落点在它真正的位置直接显示
+        Timer {
+            id: flightGuard
+            interval: 16
+            repeat: true
+            running: flight.running || handoff.running
+            property Item item: null
+            property Item page: null
+            property rect at
+            onTriggered: {
+                if (!item) return
+                const r = root.settledRect(item, page)
+                if (Math.abs(r.x - at.x) > 3 || Math.abs(r.y - at.y) > 3 || Math.abs(r.width - at.width) > 3)
+                    root.abortFlight()
+            }
+        }
+        OpacityAnimator {
+            id: flyFade
+            target: flying
+            from: 1
+            to: 0
+            duration: 140
+            easing.type: Easing.OutCubic
+            onFinished: { flying.visible = false; flying.opacity = 1 }
+        }
+    }
+    function abortFlight() {
+        flightGuard.item = null
+        flight.stop()
+        handoff.stop()
+        reveal.stop()
+        if (flight.landingShadow) flight.landingShadow.snap = true
+        flight.landingShadow = null
+        if (flight.landing) flight.landing.opacity = 1
+        if (flight.origin) flight.origin.opacity = 1
+        if (detail.heroCover) detail.heroCover.opacity = 1
+        detail.heroAway = false
+        flight.landing = null
+        flight.origin = null
+        flight.waitFor = null
+        if (flying.visible) flyFade.restart()
+    }
+    // 图块露在页面区域里的比例:起点或落点大半在视野外 (详情页滚下去了、窗口小了) 时不飞,
+    // 否则副本会从屏幕外飞进来或飞到屏幕外去
+    function shownOnPage(item) {
+        if (!item || item.width <= 0 || item.height <= 0) return 0
+        const r = settledRect(item, null)
+        const a = pages.mapToItem(root.contentItem, 0, 0)
+        const w = Math.max(0, Math.min(r.x + r.width, a.x + pages.width) - Math.max(r.x, a.x))
+        const h = Math.max(0, Math.min(r.y + r.height, a.y + pages.height) - Math.max(r.y, a.y))
+        return w * h / (r.width * r.height)
     }
 
     // 图块里真正显示封面的 RoundedImage (来源可能是卡片容器或交叉淡化封面)
@@ -445,13 +497,17 @@ Window {
         return Qt.rect(c.x + (p.x - c.x) / s, c.y + (p.y - c.y) / s, (q.x - p.x) / s, (q.y - p.y) / s)
     }
     // opts (可选):fromRect / toRect 覆盖屏幕矩形,fromRadius / toRadius 覆盖屏幕圆角,
-    // hideFrom / hideTo = false 时飞行期间不隐藏起点 / 落点,duration 飞行时长
+    // hideFrom / hideTo = false 时飞行期间不隐藏起点 / 落点,duration 飞行时长,
+    // guard = true 时落点途中被挪走 (滚动、重新排版) 就放弃飞行
     function fly(fromItem, fromPage, toItem, toPage, opts) {
         opts = opts || {}
         // 上一段飞行还没收尾:先把它藏起的图块还原
         flight.stop()
         handoff.stop()
         reveal.stop()
+        flyFade.stop()
+        flying.opacity = 1
+        flightGuard.item = null
         if (flight.landing) flight.landing.opacity = 1
         if (flight.origin) flight.origin.opacity = 1
         flight.landing = null
@@ -504,6 +560,8 @@ Window {
         flight.toY = b.y
         flight.toScale = 1
         flight.toRadius = toRadius
+        // 返回时飞回列表里的图块:盯住它 (opts.guard)
+        if (opts.guard && !opts.toRect) { flightGuard.item = toItem; flightGuard.page = toPage || null; flightGuard.at = b }
         flight.restart()
         return true
     }
@@ -560,15 +618,15 @@ Window {
         if (detailKind !== "album" || section !== "albums") return
         const hero = detail.heroCover
         const card = wall.coverOf(albumTracks.albumIndex, albumFrom)
-        if (!hero || !card) return
-        if (fly(hero, null, card, wall)) detail.heroAway = true
+        if (!hero || !card || shownOnPage(hero) < 0.3) return
+        if (fly(hero, null, card, wall, { guard: true })) detail.heroAway = true
     }
     function closeArtistFlight() {
         const page = artistLoader.item, grid = artistsLoader.item
         if (!page || !grid) return
         const hero = page.heroAvatar
         const cell = grid.avatarOf(root.lastArtist)
-        if (hero && cell) fly(hero, null, cell, artistsLoader)
+        if (hero && cell && shownOnPage(hero) >= 0.3 && shownOnPage(cell) >= 0.3) fly(hero, null, cell, artistsLoader, { guard: true })
     }
     function closeAlbum() { if (detailKind === "album") back() }
 

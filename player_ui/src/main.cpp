@@ -383,6 +383,17 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         steps->push_back({"f07_close_mid", [] {}, 120});
         steps->push_back({"f08_close_late", [] {}, 160});
         steps->push_back({"f09_close_done", [] {}, 900});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_BACKFLY")) {
+        // 小窗下返回专辑墙:飞行途中滚动 → 副本就地淡出,不跟着飞到旧位置;详情页滚下去后返回 → 不飞
+        steps->push_back({"b00_wall", [window, call] { window->resize(980, 640); call("automationGo", QStringLiteral("albums")); }, 1500});
+        steps->push_back({"b01_detail", [call] { call("automationOpenAlbum", 2); }, 1400});
+        steps->push_back({"b02_back_scroll", [call] { call("automationBack"); call("automationWallScroll", 260); }, 90});
+        steps->push_back({"b03_mid", [] {}, 300});
+        steps->push_back({"b04_done", [] {}, 900});
+        steps->push_back({"b05_detail_scrolled", [call] { call("automationWallScroll", 0); call("automationOpenAlbum", 2); }, 1400});
+        steps->push_back({"b06_scrolled", [call] { call("automationDetailScroll", 500); }, 900});
+        steps->push_back({"b07_back_mid", [call] { call("automationBack"); }, 150});
+        steps->push_back({"b08_back_done", [] {}, 900});
     } else if (qEnvironmentVariableIsSet("KP_TEST_ALBUM")) {
         // 专辑页:详情 / 播放中 / 滚动后的精简栏 / 页尾 / 专辑菜单 / 封面大图 / 多碟 / 宽窗与小窗
         const QString hires = qEnvironmentVariable("KP_ALBUM_A", QStringLiteral("async"));
