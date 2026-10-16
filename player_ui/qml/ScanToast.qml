@@ -2,9 +2,10 @@ import QtQuick
 import PlayerUi
 
 // 扫描进度胶囊:扫描时出现,完成后显示结果并在 3 秒后淡出
+// 文件夹监控触发的后台重扫不出现;后台重扫发现了变化才显示结果
 Rectangle {
     id: toast
-    property bool shown: enabled && (library.scanning || hold.running)
+    property bool shown: enabled && (library.scanShown || hold.running)
     width: label.implicitWidth + 36
     height: 38
     radius: 19
@@ -18,7 +19,7 @@ Rectangle {
     Timer { id: hold; interval: 3200 }
     Connections {
         target: library
-        function onScanningChanged() { if (!library.scanning) hold.restart() }
+        function onScanningChanged() { if (!library.scanning && library.lastScan.shown !== false) hold.restart() }
     }
 
     Text {

@@ -77,14 +77,21 @@ Item {
             Repeater {
                 model: library.folders
                 delegate: Item {
+                    id: folderRow
                     width: body.width
-                    height: 44
+                    // 有备注时两行:备注在上,路径在下 (更淡更小)
+                    readonly property string note: library.folderNotes[modelData] || ""
+                    property bool editing: false
+                    height: note.length || editing ? 52 : 44
+                    Behavior on height { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
+                    function beginEdit() { noteInput.text = note; editing = true; noteInput.forceActiveFocus(); noteInput.selectAll() }
+                    function commit() { if (!editing) return; editing = false; library.setFolderNote(modelData, noteInput.text) }
                     Rectangle {
                         anchors.fill: parent
                         anchors.leftMargin: -8
                         anchors.rightMargin: -8
                         radius: Theme.radiusS
-                        color: rowMouse.containsMouse ? Theme.hover : "transparent"
+                        color: rowMouse.containsMouse || folderRow.editing ? Theme.hover : "transparent"
                     }
                     MouseArea { id: rowMouse; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                     Icon {
@@ -92,22 +99,87 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         name: "folder"
                         size: 17
-                        opacity: 0.5
+                        tint: folderRow.note.length ? Theme.accent : "transparent"
+                        opacity: folderRow.note.length ? 0.9 : 0.5
                     }
                     readonly property bool hiddenFolder: library.hiddenFolders.indexOf(modelData) >= 0
-                    Text {
+                    Column {
                         anchors.left: fIcon.right
                         anchors.leftMargin: 12
-                        anchors.right: hideBtn.left
-                        anchors.rightMargin: 8
+                        anchors.right: editBtn.left
+                        anchors.rightMargin: 6
                         anchors.verticalCenter: parent.verticalCenter
-                        text: modelData
-                        elide: Text.ElideMiddle
-                        color: Theme.textSecondary
-                        opacity: parent.hiddenFolder ? 0.45 : 1
+                        spacing: 3
+                        opacity: folderRow.hiddenFolder ? 0.45 : 1
                         Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 13
+                        // 备注:点铅笔或双击这一行就地编辑,回车保存,Esc 取消,清空即删除备注
+                        Item {
+                            width: parent.width
+                            height: noteText.implicitHeight
+                            visible: folderRow.note.length > 0 || folderRow.editing
+                            Text {
+                                id: noteText
+                                width: parent.width
+                                visible: !folderRow.editing
+                                text: folderRow.note
+                                elide: Text.ElideRight
+                                color: Theme.text
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                            }
+                            TextInput {
+                                id: noteInput
+                                anchors.fill: parent
+                                visible: folderRow.editing
+                                color: Theme.text
+                                selectionColor: Theme.accentAlpha(0.4)
+                                selectedTextColor: Theme.text
+                                selectByMouse: true
+                                clip: true
+                                maximumLength: 40
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                                Keys.onReturnPressed: folderRow.commit()
+                                Keys.onEnterPressed: folderRow.commit()
+                                Keys.onEscapePressed: { folderRow.editing = false; focus = false }
+                                onActiveFocusChanged: if (!activeFocus) folderRow.commit()
+                                Text {
+                                    visible: !noteInput.text.length
+                                    text: qsTr("备注,如「无损收藏」「酷狗下载」")
+                                    color: Theme.textTertiary
+                                    font: noteInput.font
+                                }
+                            }
+                        }
+                        Text {
+                            width: parent.width
+                            text: modelData
+                            elide: Text.ElideMiddle
+                            color: folderRow.note.length || folderRow.editing ? Theme.textTertiary : Theme.textSecondary
+                            font.family: Theme.fontFamily
+                            font.pixelSize: folderRow.note.length || folderRow.editing ? 11 : 13
+                        }
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        anchors.rightMargin: rm.width + hideBtn.width + editBtn.width + 12
+                        acceptedButtons: Qt.LeftButton
+                        enabled: !folderRow.editing
+                        onDoubleClicked: folderRow.beginEdit()
+                    }
+                    IconButton {
+                        id: editBtn
+                        anchors.right: hideBtn.left
+                        anchors.rightMargin: 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 30; height: 30
+                        icon: "edit"
+                        iconSize: 13
+                        opacity: rowMouse.containsMouse || folderRow.editing ? 1 : 0
+                        Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+                        onClicked: folderRow.editing ? folderRow.commit() : folderRow.beginEdit()
                     }
                     // 隐藏 / 显示:隐藏后此文件夹的歌不出现在专辑、歌手、歌曲和搜索里,
                     // 收藏与歌单里已有的照常可见。只有一个文件夹时没有意义,不显示

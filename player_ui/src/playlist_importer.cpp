@@ -70,9 +70,10 @@ std::string FakeKugouPage(const LibrarySnapshot& snap) {
         {"稻香", "周杰伦", 223000}, {"后来", "刘若英", 341000}, {"小幸运", "田馥甄", 265000},
         {"Creep", "Radiohead", 238000}, {"光年之外", "G.E.M.邓紫棋", 235000}, {"七里香", "周杰伦", 299000}};
     const size_t n = snap.songs.size();
-    const size_t step = std::max<size_t>(1, n / 14);
+    const size_t want = qEnvironmentVariableIntValue("KP_TEST_PLAYLIST_BIG") ? 160 : 14;
+    const size_t step = std::max<size_t>(1, n / want);
     int k = 0, miss = 0;
-    for (size_t i = 0; i < n && k < 14; i += step, ++k) {
+    for (size_t i = 0; i < n && k < static_cast<int>(want); i += step, ++k) {
         const TrackItem* t = snap.songs[i];
         QString title = Q(t->title);
         qint64 ms = t->duration_ms;

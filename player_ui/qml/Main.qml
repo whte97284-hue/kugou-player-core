@@ -676,7 +676,7 @@ Window {
     DecryptToast {
         z: 25
         x: nowPlaying.shown ? Math.round(nowPlaying.sideX + (nowPlaying.sideW - width) / 2) : Math.round((root.width - width) / 2)
-        y: nowPlaying.shown ? root.height - height - 80 - (library.scanning ? 46 : 0) : 18 + (library.scanning ? 46 : 0)
+        y: nowPlaying.shown ? root.height - height - 80 - (library.scanShown ? 46 : 0) : 18 + (library.scanShown ? 46 : 0)
         Behavior on y { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
     }
 
@@ -928,6 +928,7 @@ Window {
     function automationImportGo(t) { playlistImport.automationLink(String(t), true) }
     function automationImportFilter(f) { playlistImport.filter = Number(f) }
     function automationImportSave() { playlistImport.save() }
+    function automationImportScroll(y) { playlistImport.automationScroll(y) }
     function automationLyricPanel(on) { nowPlaying.automationLyricPanel(!!on) }
     function automationLyricPick(i) { nowPlaying.automationLyricPick(Number(i)) }
     function automationLyricHover(i) { nowPlaying.automationLyricHover(Number(i)) }

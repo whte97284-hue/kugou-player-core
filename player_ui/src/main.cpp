@@ -96,6 +96,51 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         steps->push_back({"p08_pure_json", [&player, lyr] { lyr("vip"); player.next(); player.next(); }, 1500});
         steps->push_back({"p09_zh", [&player, lyr, call] { lyr("purejson"); call("automationPlayTitle", QStringLiteral("THE BOOK")); }, 1500});
         steps->push_back({"p10_done", [&player, lyr] { lyr("zh"); }, 300});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_NOTES")) {
+        // 文件夹备注 + 导入列表滚动 (配合 KP_TEST_PLAYLIST_FAKE=1)
+        steps->push_back({"n01_panel", [call, &lib] {
+            if (lib.folders().size() > 0) lib.setFolderNote(lib.folders()[0], QStringLiteral("无损收藏"));
+            call("automationLibraryPanel", true);
+        }, 1000});
+        steps->push_back({"n02_import", [call, &lib] {
+            call("automationLibraryPanel", false);
+            if (lib.folders().size() > 0) lib.setFolderNote(lib.folders()[0], QString());
+            call("automationImport", true);
+            call("automationImportGo", QStringLiteral("kugou:1067062"));
+        }, 2600});
+        steps->push_back({"n03_scrolled", [call] { call("automationImportScroll", 100000); }, 120});
+        steps->push_back({"n04_scrolled_late", [] {}, 600});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_RESCAN")) {
+        // 重扫没有变化时不刷新:播放中打开沉浸页 → 手动重扫 → 文件夹里写一个歌词文件 (触发监控) → 看曲库代数是否不变
+        auto gen0 = std::make_shared<int>(0);
+        steps->push_back({"r01_play", [call, &player] { player.playAlbum(0, 0); call("automationNowPlaying", true); }, 2500});
+        steps->push_back({"r02_rescan", [&lib, gen0] { *gen0 = lib.generation(); lib.rescan(); }, 4000});
+        steps->push_back({"r03_touch", [&lib, gen0] {
+            std::fprintf(stderr, "KP_RESCAN manual: gen %d -> %d unchanged=%d\n", *gen0, lib.generation(),
+                         lib.lastScan().value("unchanged").toBool());
+            *gen0 = lib.generation();
+            const QString f = lib.folders().value(0) + "/kp_watch_probe.lrc";
+            QFile probe(f);
+            if (probe.open(QIODevice::WriteOnly)) probe.write("[00:00.00]probe\n");
+        }, 6000});
+        steps->push_back({"r04_after", [&lib, gen0] {
+            std::fprintf(stderr, "KP_RESCAN watch: gen %d -> %d unchanged=%d shown=%d\n", *gen0, lib.generation(),
+                         lib.lastScan().value("unchanged").toBool(), lib.lastScan().value("shown").toBool());
+            QFile::remove(lib.folders().value(0) + "/kp_watch_probe.lrc");
+            *gen0 = lib.generation();
+            // 真有新歌:复制一首进来,应当刷新
+            auto snap = lib.snapshot();
+            if (!snap->songs.empty())
+                QFile::copy(QString::fromStdWString(snap->songs[0]->file_path), lib.folders().value(0) + "/kp_watch_probe.flac");
+        }, 7000});
+        steps->push_back({"r05_added", [&lib, gen0] {
+            std::fprintf(stderr, "KP_RESCAN added: gen %d -> %d unchanged=%d\n", *gen0, lib.generation(),
+                         lib.lastScan().value("unchanged").toBool());
+            QFile::remove(lib.folders().value(0) + "/kp_watch_probe.flac");
+        }, 6000});
+        steps->push_back({"r06_removed", [&lib, gen0] {
+            std::fprintf(stderr, "KP_RESCAN removed: gen %d\n", lib.generation());
+        }, 300});
     } else if (qEnvironmentVariableIsSet("KP_TEST_IMPORT")) {
         // 导入歌单:歌单墙的「导入」格 → 卡片 (空 / 识别出链接 / 纯数字选平台 / 读取中 / 结果 / 筛选) → 存为歌单
         // 配合 KP_TEST_PLAYLIST_FAKE=1 使用 (用当前曲库拼的假歌单)

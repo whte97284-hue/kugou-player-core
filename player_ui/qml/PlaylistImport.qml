@@ -41,6 +41,7 @@ Item {
         return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0")
     }
     // 截图 / 自测
+    function automationScroll(y) { list.contentY = Math.min(Number(y), Math.max(0, list.contentHeight - list.height)) }
     function automationLink(t, go) { link.text = t; if (go) submit() }
     function visibleRow(level) { return filter === 0 || (filter === 1 ? level > 0 : level === 0) }
 
@@ -429,27 +430,31 @@ Item {
                         width: panel.width - 16
                         height: parent.height - y
                         clip: true
-                        model: importer.rows
+                        // 按页签筛好再交给列表:不再给隐藏的行建零高度的委托 (几百首时全部实例化,滚动卡顿)
+                        model: importer.rows.filter(r => sheet.visibleRow(r.level))
                         boundsBehavior: Flickable.StopAtBounds
+                        cacheBuffer: 560
+                        reuseItems: true
                         SmoothScroll { flickable: list }
+                        // 出结果 / 换页签时首屏几行错峰浮现;之后滚动新出现的行直接显示 (以前按下标排队等动画,
+                        // 滚到后面要等半秒才出来,看起来像没刷新)
+                        property bool intro: false
+                        onModelChanged: { intro = true; introEnd.restart(); positionViewAtBeginning() }
+                        Timer { id: introEnd; interval: 700; onTriggered: list.intro = false }
 
                         delegate: Item {
                             id: row
                             readonly property int level: modelData.level
-                            readonly property bool shownByFilter: sheet.visibleRow(level)
                             width: list.width
-                            height: shownByFilter ? 56 : 0
-                            visible: height > 0
-                            clip: true
-                            Behavior on height { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
-                            opacity: 0
-                            property real lift: 8
+                            height: 56
+                            property real lift: 0
                             transform: Translate { y: row.lift }
-                            Component.onCompleted: appear.start()
+                            Component.onCompleted: if (list.intro && index < 12) { opacity = 0; lift = 8; appear.start() }
+                            ListView.onReused: { appear.stop(); opacity = 1; lift = 0 }
                             ParallelAnimation {
                                 id: appear
                                 SequentialAnimation {
-                                    PauseAnimation { duration: 120 + Math.min(index, 10) * 28 }
+                                    PauseAnimation { duration: 60 + index * 26 }
                                     ParallelAnimation {
                                         OpacityAnimator { target: row; from: 0; to: 1; duration: 260; easing.type: Easing.OutCubic }
                                         NumberAnimation { target: row; property: "lift"; from: 8; to: 0; duration: 420; easing.type: Easing.OutQuint }

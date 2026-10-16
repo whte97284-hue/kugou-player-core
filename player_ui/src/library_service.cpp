@@ -26,6 +26,7 @@
 #include "audio_tag_parser.hpp"
 #include "library_dedupe.hpp"
 #include "folder_watcher.h"
+#include "xxhash64.hpp"
 #include "kugou_track_bridge.hpp"
 #ifdef Q_OS_WIN
 #include <malloc.h>
@@ -171,6 +172,7 @@ LibraryService::LibraryService(QObject* parent) : QObject(parent) {
     hiddenFolders_ = s.value("library/hiddenFolders").toStringList();
     extraFiles_ = s.value("library/files").toStringList();
     excludedFiles_ = s.value("library/excludedFiles").toStringList();
+    folderNotes_ = s.value("library/folderNotes").toMap();
     kugouFolders_ = s.value("library/kugouFolders").toStringList();
     watch_ = s.value("library/watch", true).toBool();
     displayDedupe_ = s.value("library/displayDedupe", false).toBool();
@@ -178,7 +180,7 @@ LibraryService::LibraryService(QObject* parent) : QObject(parent) {
     watchDebounce_ = new QTimer(this);
     watchDebounce_->setSingleShot(true);
     watchDebounce_->setInterval(3000);
-    connect(watchDebounce_, &QTimer::timeout, this, &LibraryService::rescan);
+    connect(watchDebounce_, &QTimer::timeout, this, &LibraryService::backgroundRescan);
     watcher_ = new FolderWatcher(this);
     connect(watcher_, &FolderWatcher::changed, watchDebounce_, qOverload<>(&QTimer::start));
     updateWatcher();
@@ -316,6 +318,16 @@ void LibraryService::setDisplayDedupe(bool on) {
     rescan();
 }
 
+void LibraryService::setFolderNote(const QString& path, const QString& note) {
+    if (!folders_.contains(path)) return;
+    const QString n = note.simplified();
+    if (folderNotes_.value(path).toString() == n) return;
+    if (n.isEmpty()) folderNotes_.remove(path);
+    else folderNotes_.insert(path, n);
+    QSettings().setValue("library/folderNotes", folderNotes_);
+    emit foldersChanged();
+}
+
 void LibraryService::setFolderHidden(const QString& path, bool hidden) {
     if (!folders_.contains(path) || hiddenFolders_.contains(path) == hidden) return;
     if (hidden) hiddenFolders_.append(path);
@@ -370,6 +382,7 @@ int LibraryService::addFolderUrls(const QVariantList& urls) {
 void LibraryService::removeFolder(const QString& path) {
     if (!folders_.removeOne(path)) return;
     hiddenFolders_.removeOne(path);
+    if (folderNotes_.remove(path)) QSettings().setValue("library/folderNotes", folderNotes_);
     saveFolders();
     if (scanning_) {
         rescanPending_ = true;
@@ -421,8 +434,23 @@ void LibraryService::rescan() {
     if (folders_.isEmpty() && extraFiles_.isEmpty()) return;
     if (scanning_) {
         rescanPending_ = true;
+        quietPending_ = false;
+        // 后台重扫进行中又有人要扫:改为正常提示
+        if (quiet_) { quiet_ = false; emit scanningChanged(); }
         return;
     }
+    quiet_ = false;
+    startScan();
+}
+
+// 文件夹监控触发:悄悄重扫,没有变化时界面完全不动
+void LibraryService::backgroundRescan() {
+    if (folders_.isEmpty() && extraFiles_.isEmpty()) return;
+    if (scanning_) {
+        rescanPending_ = true;
+        return;
+    }
+    quiet_ = true;
     startScan();
 }
 
@@ -498,8 +526,17 @@ void LibraryService::startScan() {
 }
 
 void LibraryService::finishScan(std::shared_ptr<LibrarySnapshot> snap, const IngestionSummary& sum) {
-    // 被取消的扫描结果不完整:曲库已有内容时保留旧快照,首次导入时保留已识别的部分
-    const bool keepOld = sum.cancelled && albumCount() > 0;
+    // 被取消的扫描结果不完整:曲库已有内容时保留旧快照,首次导入时保留已识别的部分。
+    // 内容与当前完全一致 (监控误报、手动重扫但没变化):同样沿用旧快照,曲目 ID 不变,
+    // 列表、详情页、播放队列、歌词都不会被刷新打断
+    bool unchanged = false;
+    {
+        std::lock_guard<std::mutex> lock(snap_mutex_);
+        unchanged = !sum.cancelled && snap_ && snap->signature != 0 && snap->signature == snap_->signature;
+    }
+    const bool keepOld = (sum.cancelled && albumCount() > 0) || unchanged;
+    const bool wasQuiet = quiet_;
+    quiet_ = false;
     if (!keepOld) {
         {
             std::lock_guard<std::mutex> lock(snap_mutex_);
@@ -525,6 +562,9 @@ void LibraryService::finishScan(std::shared_ptr<LibrarySnapshot> snap, const Ing
         {"seconds", sum.elapsed_seconds},
         {"incremental", sum.cache_hits > 0},
         {"cancelled", sum.cancelled},
+        {"unchanged", unchanged},
+        // 后台重扫没发现变化:不弹扫描结果
+        {"shown", !(wasQuiet && unchanged)},
     };
     if (sum.cancelled) status_ = tr("已取消扫描");
     else if (folders_.isEmpty() && extraFiles_.isEmpty()) status_ = tr("曲库已清空");
@@ -545,6 +585,8 @@ void LibraryService::finishScan(std::shared_ptr<LibrarySnapshot> snap, const Ing
         ReleaseFreeHeap();
         if (rescanPending_) {
             rescanPending_ = false;
+            quiet_ = quietPending_;
+            quietPending_ = true;
             if (folders_.isEmpty() && extraFiles_.isEmpty()) finishScan(std::make_shared<LibrarySnapshot>(), IngestionSummary{});
             else startScan();
         }
@@ -772,6 +814,41 @@ std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<Mus
     for (const auto& k : keyed) {
         snap->songs.push_back(k.second);
         snap->songLetters.push_back(LetterOf(k.first));
+    }
+    // 内容指纹:每首歌的路径 / CUE 起点 / 大小 / 修改时间 / 标签 / 音质各自哈希后求和 (与扫描线程的完成顺序无关),
+    // 再并上影响显示的设置 (隐藏 / 移除的文件、显示去重、文件夹顺序)
+    {
+        uint64_t sum = 0, mix = 0;
+        auto addStr = [](kp::Xxh64& h, const std::wstring& w) {
+            h.Add(reinterpret_cast<const uint8_t*>(w.data()), w.size() * sizeof(wchar_t));
+            const uint8_t sep = 0x1f;
+            h.Add(&sep, 1);
+        };
+        auto addNum = [](kp::Xxh64& h, uint64_t v) { h.Add(reinterpret_cast<const uint8_t*>(&v), sizeof v); };
+        for (const TrackItem& t : tracks) {
+            kp::Xxh64 h(0x6b70);
+            for (const std::wstring* w : {&t.file_path, &t.source_path, &t.title, &t.artist, &t.album, &t.album_artist,
+                                          &t.genre, &t.year, &t.format, &t.codec, &t.external_cover_path})
+                addStr(h, *w);
+            for (uint64_t v : {uint64_t(t.cue_start_ms), uint64_t(t.cue_end_ms), t.file_size, t.added_time,
+                               uint64_t(t.duration_ms), uint64_t(t.bitrate_kbps), uint64_t(t.sample_rate),
+                               uint64_t(t.bits_per_sample), uint64_t(t.track_no), uint64_t(t.disc_no),
+                               uint64_t(t.has_cover), uint64_t(t.is_cue_track)})
+                addNum(h, v);
+            const uint64_t d = h.Digest();
+            sum += d;
+            mix ^= d * 0x9E3779B97F4A7C15ull;
+        }
+        kp::Xxh64 h(0x736e);
+        addNum(h, sum);
+        addNum(h, mix);
+        addNum(h, tracks.size());
+        addNum(h, collapseCopies ? 1 : 0);
+        for (const QStringList* l : {&hidden, &excluded, &folderOrder}) {
+            for (const QString& x : *l) addStr(h, x.toStdWString());
+            addStr(h, L"|");
+        }
+        snap->signature = h.Digest() | 1; // 0 留给「没有指纹」
     }
     return snap;
 }

@@ -56,6 +56,8 @@ struct LibrarySnapshot {
     // 显示去重 (只影响显示,不动文件):被收起的同一首歌的其他副本 → 显示的那份 (音质最好的)。
     // 被收起的仍在 catalog 里,收藏 / 歌单里已有的照常能找到
     std::unordered_map<uint64_t, uint64_t> shownCopy;
+    // 内容指纹 (与曲目顺序无关):重扫结果与当前一致时沿用旧快照,不通知界面刷新
+    uint64_t signature = 0;
 };
 
 // 排序键 (拼音 + 小写原文) 与索引字母
@@ -71,6 +73,8 @@ QString RemapTrackKey(const QString& key, const QHash<QString, QString>& pathMap
 class LibraryService : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool scanning READ scanning NOTIFY scanningChanged)
+    // 需要在界面上提示的扫描:文件夹监控触发的后台重扫不提示 (没有变化时界面完全不动)
+    Q_PROPERTY(bool scanShown READ scanShown NOTIFY scanningChanged)
     Q_PROPERTY(double progress READ progress NOTIFY progressChanged)
     Q_PROPERTY(QString statusText READ statusText NOTIFY progressChanged)
     Q_PROPERTY(int trackCount READ trackCount NOTIFY libraryChanged)
@@ -79,6 +83,8 @@ class LibraryService : public QObject {
     Q_PROPERTY(QStringList folders READ folders NOTIFY foldersChanged)
     // 隐藏的文件夹:其中的歌曲不出现在专辑 / 歌手 / 歌曲 / 搜索里,但收藏与歌单里已有的照常可见可播
     Q_PROPERTY(QStringList hiddenFolders READ hiddenFolders NOTIFY foldersChanged)
+    // 文件夹备注 (路径 → 备注),只用于在音乐文件夹列表里区分各个文件夹
+    Q_PROPERTY(QVariantMap folderNotes READ folderNotes NOTIFY foldersChanged)
     // 导入进度 (扫描期间实时刷新):已处理 / 总数 / 当前文件
     Q_PROPERTY(int scanDone READ scanDone NOTIFY progressChanged)
     Q_PROPERTY(int scanTotal READ scanTotal NOTIFY progressChanged)
@@ -101,6 +107,7 @@ public:
     static LibraryService* instance();
 
     bool scanning() const { return scanning_; }
+    bool scanShown() const { return scanning_ && !quiet_; }
     double progress() const { return progress_; }
     QString statusText() const { return status_; }
     int trackCount() const;
@@ -146,6 +153,9 @@ public:
     Q_INVOKABLE void dismissKugouCandidates(const QStringList& paths);
     Q_INVOKABLE bool isKugouFolder(const QString& path) const;
     Q_INVOKABLE void setFolderHidden(const QString& path, bool hidden);
+    // 备注为空 = 删除备注
+    Q_INVOKABLE void setFolderNote(const QString& path, const QString& note);
+    QVariantMap folderNotes() const { return folderNotes_; }
     Q_INVOKABLE void rescan();
     // 整理 / 撤销移动了文件:把扫描缓存里的解析结果挪到新路径,随后的重扫不必再逐个解析这些文件。
     // 正在扫描时不做 (扫描结束会覆盖缓存文件)
@@ -194,6 +204,7 @@ signals:
 private:
     void startScan();
     void finishScan(std::shared_ptr<LibrarySnapshot> snap, const IngestionSummary& sum);
+    void backgroundRescan();
     void saveFolders();
     static std::shared_ptr<LibrarySnapshot> BuildAlbums(std::unique_ptr<MusicCatalog> catalog, const QStringList& hidden = {},
                                                         const QStringList& excluded = {}, bool collapseCopies = false,
@@ -204,6 +215,8 @@ private:
     QStringList folders_;
     QStringList hiddenFolders_;
     bool scanning_ = false;
+    bool quiet_ = false;        // 当前扫描是文件夹监控触发的后台重扫
+    bool quietPending_ = true;  // 排队中的重扫是否全部来自文件夹监控
     double progress_ = 0.0;
     QString status_;
     int generation_ = 0;
@@ -214,6 +227,7 @@ private:
     bool rescanPending_ = false;
     QStringList extraFiles_;
     QStringList excludedFiles_;
+    QVariantMap folderNotes_;
     QStringList kugouFolders_;
     bool watch_ = true;
     bool displayDedupe_ = false;

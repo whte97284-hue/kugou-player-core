@@ -4,6 +4,7 @@
 #include <QDirIterator>
 #include <QFileInfo>
 #include <QPointer>
+#include <algorithm>
 #include <atomic>
 #include <thread>
 #include <vector>
@@ -25,6 +26,44 @@ bool Ignored(const QString& name) {
            l.endsWith(QLatin1String(".crdownload")) || l.endsWith(QLatin1String("desktop.ini")) ||
            l.endsWith(QLatin1String("thumbs.db"));
 }
+#ifdef Q_OS_WIN
+QString ExtOf(const QString& name) {
+    const int slash = std::max(name.lastIndexOf('\\'), name.lastIndexOf('/'));
+    const int dot = name.lastIndexOf('.');
+    return dot > slash ? name.mid(dot + 1).toLower() : QString();
+}
+
+bool AudioOrCue(const QString& ext) {
+    static const QStringList kExts = {"flac", "mp3", "mp2", "ogg", "oga", "opus", "wav", "wave", "aif", "aiff", "aifc",
+                                      "m4a", "m4b", "mp4", "alac", "dsf", "dff", "ape", "ncm", "kgm", "kgma", "kgg", "vpr",
+                                      "cue"};
+    return kExts.contains(ext);
+}
+
+// 歌词、封面、文本、数据库这类伴生 / 杂项文件:听歌时酷狗客户端、播放器、杀毒、索引常常改它们,与曲库无关
+bool SideFile(const QString& ext) {
+    static const QStringList kExts = {"lrc", "krc", "qrc", "trc", "txt", "jpg", "jpeg", "png", "webp", "bmp", "gif",
+                                      "ini", "db", "log", "json", "xml", "dat", "cache", "bak", "tmp", "part", "kgtemp",
+                                      "lnk", "url", "nfo", "m3u", "m3u8", "pls", "sfv", "md5", "accurip", "pdf"};
+    return kExts.contains(ext);
+}
+
+// 只有影响曲库的变化才算:音频 / CUE 的增删改名改写,以及文件夹的增删改名。
+// 文件夹自身的「修改」通知 (里面任何文件变了都会报) 和伴生文件一律不算
+bool Relevant(const QString& root, const QString& name, DWORD action) {
+    if (Ignored(name)) return false;
+    const QString ext = ExtOf(name);
+    if (AudioOrCue(ext)) return true;
+    if (action == FILE_ACTION_MODIFIED) return false;
+    if (SideFile(ext)) return false;
+    if (action == FILE_ACTION_ADDED || action == FILE_ACTION_RENAMED_NEW_NAME) {
+        const DWORD attr = GetFileAttributesW(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(root + "/" + name).utf16()));
+        return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY);
+    }
+    // 删除 / 改名前的旧名:已经查不到是不是文件夹,扩展名认不出的按文件夹处理
+    return true;
+}
+#endif
 } // namespace
 
 #ifdef Q_OS_WIN
@@ -89,7 +128,7 @@ void FolderWatcher::setRoots(const QStringList& roots) {
                 for (DWORD off = 0; bytes && !relevant;) {
                     auto* info = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(buf + off);
                     QString name = QString::fromWCharArray(info->FileName, int(info->FileNameLength / sizeof(WCHAR)));
-                    if (!Ignored(name)) relevant = true;
+                    if (Relevant(path, name, info->Action)) relevant = true;
                     if (!info->NextEntryOffset) break;
                     off += info->NextEntryOffset;
                 }
