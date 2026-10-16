@@ -5,6 +5,7 @@
 #include <QAbstractListModel>
 #include <QColor>
 #include <QObject>
+#include <array>
 #include <QElapsedTimer>
 #include <QHash>
 #include <QPointer>
@@ -85,6 +86,12 @@ class PlayerController : public QObject {
     Q_PROPERTY(bool gapless READ gapless WRITE setGapless NOTIFY modeChanged)
     // 音量标准化:0 关闭 / 1 按曲目 / 2 按专辑 (ReplayGain,带峰值保护)
     Q_PROPERTY(int replayGain READ replayGain WRITE setReplayGain NOTIFY modeChanged)
+    // 10 段均衡器:开关、各段增益 (dB,±12)、当前预设 (与某个预设完全一致时为它的 key,否则为空 = 自定义)
+    Q_PROPERTY(bool eqEnabled READ eqEnabled WRITE setEqEnabled NOTIFY eqChanged)
+    Q_PROPERTY(QVariantList eqGains READ eqGains NOTIFY eqChanged)
+    Q_PROPERTY(QString eqPreset READ eqPreset NOTIFY eqChanged)
+    Q_PROPERTY(QVariantList eqPresets READ eqPresets CONSTANT)     // [{ key, name, gains }]
+    Q_PROPERTY(QVariantList eqFrequencies READ eqFrequencies CONSTANT) // Hz
     // 0 顺序播放 / 1 列表循环 / 2 单曲循环
     Q_PROPERTY(int repeatMode READ repeatMode WRITE setRepeatMode NOTIFY modeChanged)
     // 三段律动值 (低 / 中 / 高频),供「正在播放」小图标使用,避免每帧把 32 段频谱转换成 JS 数组
@@ -159,6 +166,14 @@ public:
     void setOutputDevice(const QString& name);
     bool gapless() const { return gapless_; }
     void setGapless(bool on);
+    bool eqEnabled() const { return eqEnabled_; }
+    void setEqEnabled(bool on);
+    QVariantList eqGains() const;
+    QString eqPreset() const;
+    QVariantList eqPresets() const;
+    QVariantList eqFrequencies() const;
+    Q_INVOKABLE void setEqGain(int band, double db);
+    Q_INVOKABLE void applyEqPreset(const QString& key);
     int replayGain() const { return rgMode_; }
     void setReplayGain(int mode);
     Q_INVOKABLE void refreshDevices();
@@ -233,6 +248,7 @@ signals:
     void queueStatsChanged();
     void queueIndexChanged();
     void modeChanged();
+    void eqChanged();
     void errorChanged();
     void lyricsChanged();
     void lyricSourceChanged();
@@ -304,6 +320,10 @@ private:
     bool exclusive_ = false;
     int repeat_ = 0;
     bool gapless_ = true;
+    bool eqEnabled_ = false;
+    std::array<float, Equalizer::kBands> eq_{};
+    void applyEq();   // 把开关与增益交给引擎
+    void saveEq();
     int rgMode_ = 0;
     QString device_;
     QStringList devices_;

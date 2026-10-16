@@ -18,6 +18,8 @@ Item {
     readonly property Item coverShadow: coverShadow
     function automationTab(t) { side.tab = String(t) }
     function automationLyricPanel(on) { if (on) { side.tab = "lyrics"; lyricPanel.open() } else lyricPanel.close() }
+    function automationEqPanel(on) { if (on) eqPanel.open(); else eqPanel.close() }
+    function automationEqHover(i) { eqPanel.hoverBand = i }
     function automationLyricPick(i) { lyricPanel.pick(i) }
     function automationLyricHover(i) { lyricPanel.hoverRow = i }
     function automationLyricSave() { lyricPanel.save() }
@@ -71,7 +73,7 @@ Item {
     // 收起按钮、右下角按钮组 (以及窗口按钮) 平时淡出,不和封面、歌词抢眼;鼠标一动就淡入,
     // 停下约 2.5 秒后再淡出。指着控件、面板或信号链开着时保持显示
     property bool chromeAwake: true
-    readonly property bool chromeShown: chromeAwake || lyricPanel.shown || chainOpen || tabsHover.hovered || backHover.hovered
+    readonly property bool chromeShown: chromeAwake || lyricPanel.shown || eqPanel.shown || chainOpen || tabsHover.hovered || backHover.hovered
     property real chrome: chromeShown ? 1 : 0
     Behavior on chrome { NumberAnimation { duration: np.chromeShown ? 220 : 700; easing.type: Easing.OutCubic } }
     function wake() { chromeAwake = true; chromeIdle.interval = 2500; chromeIdle.restart() }
@@ -126,6 +128,7 @@ Item {
             model: [
                 { key: "source", tip: qsTr("歌词来源") },
                 { key: "quality", tip: qsTr("音质") },
+                { key: "eq", icon: "eq", tip: qsTr("均衡器") },
                 { key: "lyrics", icon: "lyrics", tip: qsTr("歌词") },
                 { key: "queue", icon: "queue", tip: qsTr("播放队列") }
             ]
@@ -134,13 +137,16 @@ Item {
                 readonly property string key: modelData.key
                 width: 40
                 height: 40
-                visible: player.hasTrack || key === "lyrics" || key === "queue"
-                readonly property bool active: key === "source" ? lyricPanel.shown : key === "quality" ? np.chainOpen : side.tab === key
+                visible: player.hasTrack || key === "lyrics" || key === "queue" || key === "eq"
+                readonly property bool active: key === "source" ? lyricPanel.shown : key === "quality" ? np.chainOpen
+                                             : key === "eq" ? eqPanel.shown : side.tab === key
                 readonly property bool lit: active || (key === "quality" && player.bitPerfect)
+                                            || (key === "eq" && player.eqEnabled && player.eqPreset !== "flat")
                 readonly property string icon: key === "source" ? Nav.lyricIcon(player.lyricSource.kind) : key === "quality" ? "hires" : modelData.icon
                 readonly property string tip: key === "source"
                     ? (player.lyricSource.label ? qsTr("歌词来源 · %1").arg(player.lyricSource.label) : qsTr("搜索歌词"))
                     : key === "quality" ? (player.chainSummary || player.quality || qsTr("音质"))
+                    : key === "eq" ? (player.eqEnabled ? qsTr("均衡器 · 已开启") : qsTr("均衡器"))
                     : modelData.tip
                 onTipChanged: if (tm.containsMouse) Nav.hint(tabBtn, tip)
                 Icon {
@@ -173,8 +179,13 @@ Item {
                     cursorShape: Qt.PointingHandCursor
                     onContainsMouseChanged: containsMouse ? Nav.hint(parent, tabBtn.tip) : Nav.unhint(parent)
                     onClicked: {
-                        if (tabBtn.key === "source") {
+                        if (tabBtn.key === "eq") {
+                            if (eqPanel.shown) { eqPanel.close(); return }
+                            lyricPanel.close()
+                            eqPanel.open()
+                        } else if (tabBtn.key === "source") {
                             if (lyricPanel.shown) { lyricPanel.close(); return }
+                            eqPanel.close()
                             side.tab = "lyrics"
                             lyricPanel.open()
                         } else if (tabBtn.key === "quality") {
@@ -195,6 +206,15 @@ Item {
         anchorRight: tabs.x - 10
         anchorBottom: tabs.y + tabs.height
         Connections { target: np; function onShownChanged() { if (!np.shown) lyricPanel.close() } }
+    }
+
+    // 均衡器面板:同样从按钮组左侧展开
+    EqualizerPanel {
+        id: eqPanel
+        objectName: "eqPanel"
+        anchorRight: tabs.x - 10
+        anchorBottom: tabs.y + tabs.height
+        Connections { target: np; function onShownChanged() { if (!np.shown) eqPanel.close() } }
     }
 
     component MetaLink: Text {

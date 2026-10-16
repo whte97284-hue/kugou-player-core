@@ -56,6 +56,7 @@ Matched MatchSnapshot(const LibrarySnapshot& snap, const std::vector<PlaylistTra
 QString PlatformLabel(const std::string& source) {
     if (source == "kugou") return QObject::tr("酷狗");
     if (source == "netease") return QObject::tr("网易云");
+    if (source == "qqmusic") return QObject::tr("QQ音乐");
     return {};
 }
 
@@ -108,6 +109,7 @@ QString PlaylistImporter::detect(const QString& text) const {
     if (!PlaylistProvider::ParseInput(text.trimmed().toStdString(), p, id)) return {};
     if (p == Platform::Kugou) return QStringLiteral("kugou");
     if (p == Platform::NetEase) return QStringLiteral("netease");
+    if (p == Platform::QQMusic) return QStringLiteral("qqmusic");
     return QStringLiteral("id");
 }
 
@@ -137,7 +139,10 @@ void PlaylistImporter::parse(const QString& text) {
 
 void PlaylistImporter::parseAs(const QString& platform) {
     if (pendingId_.isEmpty()) return;
-    start(platform == QLatin1String("netease") ? Platform::NetEase : Platform::Kugou, pendingId_);
+    const Platform p = platform == QLatin1String("netease") ? Platform::NetEase
+                     : platform == QLatin1String("qqmusic") ? Platform::QQMusic
+                                                            : Platform::Kugou;
+    start(p, pendingId_);
 }
 
 HttpGetFn PlaylistImporter::httpFn() const {

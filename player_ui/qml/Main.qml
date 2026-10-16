@@ -930,6 +930,8 @@ Window {
     function automationImportSave() { playlistImport.save() }
     function automationImportScroll(y) { playlistImport.automationScroll(y) }
     function automationLyricPanel(on) { nowPlaying.automationLyricPanel(!!on) }
+    function automationEqPanel(on) { nowPlaying.automationEqPanel(!!on) }
+    function automationEqHover(i) { nowPlaying.automationEqHover(Number(i)) }
     function automationLyricPick(i) { nowPlaying.automationLyricPick(Number(i)) }
     function automationLyricHover(i) { nowPlaying.automationLyricHover(Number(i)) }
     function automationLyricSave() { nowPlaying.automationLyricSave() }

@@ -165,6 +165,31 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         steps->push_back({"s04_songs", [call] { call("automationGo", QStringLiteral("songs")); }, 1600});
         steps->push_back({"s05_songs_sorted", [call] { call("automationSongsSort", 1); }, 1000});
         steps->push_back({"s06_wall_short", [window, call] { call("automationSongsSort", 0); window->resize(1500, 760); call("automationGo", QStringLiteral("albums")); }, 1800});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_EQ")) {
+        // 均衡器:播放页右下角打开面板 → 关闭状态 → 选预设 (曲线过渡) → 拖一段成自定义 → 关掉 → 小窗口
+        steps->push_back({"e01_playing", [call, &player] {
+            player.applyEqPreset(QStringLiteral("flat"));
+            player.setEqEnabled(false);
+            player.playAlbum(0, 0);
+            call("automationNowPlaying", true);
+        }, 2600});
+        steps->push_back({"e02_open_anim", [call] { call("automationEqPanel", true); }, 140});
+        steps->push_back({"e03_open_off", [] {}, 900});
+        steps->push_back({"e04_rock_anim", [&player] { player.applyEqPreset(QStringLiteral("rock")); }, 160});
+        steps->push_back({"e05_rock", [&player] {
+            std::fprintf(stderr, "KP_EQ chain: %s\n", qPrintable(player.chainSummary()));
+        }, 900});
+        steps->push_back({"e06_custom_hover", [call, &player] {
+            player.setEqGain(5, 6.0);
+            call("automationEqHover", 5);
+        }, 900});
+        steps->push_back({"e07_off", [call, &player] { call("automationEqHover", -1); player.setEqEnabled(false); }, 900});
+        steps->push_back({"e08_small", [window, call, &player] {
+            player.applyEqPreset(QStringLiteral("vocal"));
+            call("automationEqPanel", false);
+            window->resize(980, 640);
+        }, 1200});
+        steps->push_back({"e09_small_panel", [call] { call("automationEqPanel", true); }, 1400});
     } else if (qEnvironmentVariableIsSet("KP_TEST_LYRSRC")) {
         // 歌词来源:自动找到的在线歌词 → 打开来源面板 (自动搜索) → 换一份 → 保存到本地;以及没有歌词时的样子
         // 配合 KP_TEST_LYRIC_FAKE=1 使用 (假的歌词接口)

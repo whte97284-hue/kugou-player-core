@@ -20,6 +20,7 @@ add_library(player_core STATIC
     src/audio_ingestion_pipeline.cpp
     src/fft_visualizer.cpp
     src/audio_playback_engine.cpp
+    src/equalizer.cpp
     src/lyric_manager.cpp
     src/lyric_provider.cpp
     src/playlist_provider.cpp

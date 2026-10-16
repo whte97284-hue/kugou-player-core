@@ -7,6 +7,7 @@
 #include <mutex>
 #include <cstdint>
 #include "fft_visualizer.hpp"
+#include "equalizer.hpp"
 
 enum class PlaybackState {
     Stopped,
@@ -92,6 +93,8 @@ public:
 
     // 获取实时 FFT 频谱分析器引用 (供 UI 读取 32 频段动效)
     FftVisualizer& GetVisualizer() { return visualizer_; }
+    // 10 段均衡器 (开关与增益可在任意线程设置)
+    Equalizer& GetEqualizer() { return equalizer_; }
 
     // 回调钩子 (on_playback_ended 在独立通知线程中调用)
     std::function<void(PlaybackState)> on_state_changed;
@@ -119,4 +122,5 @@ private:
     std::atomic<bool> exclusive_active_{false};
 
     FftVisualizer visualizer_;
+    Equalizer equalizer_;
 };

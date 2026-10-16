@@ -61,6 +61,10 @@ PlayerController::PlayerController(LibraryService* lib, QObject* parent) : QObje
     gapless_ = s.value("player/gapless", true).toBool();
     rgMode_ = std::clamp(s.value("player/replayGain", 0).toInt(), 0, 2);
     device_ = s.value("audio/device").toString();
+    eqEnabled_ = s.value("audio/eqEnabled", false).toBool();
+    const QVariantList eqSaved = s.value("audio/eqGains").toList();
+    for (int i = 0; i < Equalizer::kBands && i < eqSaved.size(); ++i)
+        eq_[i] = std::clamp(eqSaved[i].toFloat(), -Equalizer::kMaxGainDb, Equalizer::kMaxGainDb);
     // 播放期间的节拍器:窗口可见时只负责请求下一帧,真正的更新在窗口每帧的 afterAnimating 里做;
     // 窗口最小化 / 不可见时退回到由它直接驱动
     timer_.setInterval(16);
@@ -608,6 +612,100 @@ void PlayerController::setGapless(bool on) {
     scheduleGapless();
 }
 
+// ---- 均衡器 ----
+namespace {
+struct EqPreset { const char* key; const char* name; std::array<float, Equalizer::kBands> g; };
+// 31 62 125 250 500 1k 2k 4k 8k 16k
+const EqPreset kEqPresets[] = {
+    {"flat",       QT_TR_NOOP("原声"), {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
+    {"bass",       QT_TR_NOOP("低音"), {6, 5, 4, 2, 0.5, 0, 0, 0, 0, 0}},
+    {"vocal",      QT_TR_NOOP("人声"), {-2, -2, -1, 0, 1.5, 3, 3, 2, 0.5, -1}},
+    {"treble",     QT_TR_NOOP("高音"), {0, 0, 0, 0, 0, 0, 1.5, 3, 4.5, 5.5}},
+    {"rock",       QT_TR_NOOP("摇滚"), {4, 3, 1, -1, -2, -1, 1, 3, 4, 4}},
+    {"electronic", QT_TR_NOOP("电子"), {5, 4, 1.5, 0, -1.5, 0, 1, 2, 4, 5}},
+    {"classical",  QT_TR_NOOP("古典"), {3, 2, 1, 0, 0, 0, 0, 1, 2, 3}},
+    {"soft",       QT_TR_NOOP("柔和"), {2, 2.5, 2, 1, 0, -0.5, -1, -2, -2.5, -3}},
+};
+}
+
+void PlayerController::applyEq() {
+    if (!engine_) return;
+    Equalizer& eq = engine_->GetEqualizer();
+    for (int i = 0; i < Equalizer::kBands; ++i) eq.SetGain(i, eq_[i]);
+    eq.SetEnabled(eqEnabled_);
+}
+
+void PlayerController::saveEq() {
+    QSettings s;
+    s.setValue("audio/eqEnabled", eqEnabled_);
+    QVariantList g;
+    for (float v : eq_) g << static_cast<double>(v);
+    s.setValue("audio/eqGains", g);
+}
+
+void PlayerController::setEqEnabled(bool on) {
+    if (on == eqEnabled_) return;
+    eqEnabled_ = on;
+    applyEq();
+    saveEq();
+    emit eqChanged();
+    rebuildSignalChain();
+}
+
+void PlayerController::setEqGain(int band, double db) {
+    if (band < 0 || band >= Equalizer::kBands || !std::isfinite(db)) return;
+    // 0.5 dB 一档:拖动时数值干净,预设也能被认出来
+    const float v = std::clamp(static_cast<float>(std::round(db * 2) / 2), -Equalizer::kMaxGainDb, Equalizer::kMaxGainDb);
+    if (v == eq_[band] && eqEnabled_) return;
+    eq_[band] = v;
+    eqEnabled_ = true; // 动了曲线就是要用
+    applyEq();
+    saveEq();
+    emit eqChanged();
+    rebuildSignalChain();
+}
+
+void PlayerController::applyEqPreset(const QString& key) {
+    for (const EqPreset& p : kEqPresets) {
+        if (key != QLatin1String(p.key)) continue;
+        eq_ = p.g;
+        eqEnabled_ = true;
+        applyEq();
+        saveEq();
+        emit eqChanged();
+        rebuildSignalChain();
+        return;
+    }
+}
+
+QVariantList PlayerController::eqGains() const {
+    QVariantList out;
+    for (float v : eq_) out << static_cast<double>(v);
+    return out;
+}
+
+QString PlayerController::eqPreset() const {
+    for (const EqPreset& p : kEqPresets)
+        if (p.g == eq_) return QLatin1String(p.key);
+    return {};
+}
+
+QVariantList PlayerController::eqPresets() const {
+    QVariantList out;
+    for (const EqPreset& p : kEqPresets) {
+        QVariantList g;
+        for (float v : p.g) g << static_cast<double>(v);
+        out << QVariantMap{{"key", QLatin1String(p.key)}, {"name", tr(p.name)}, {"gains", g}};
+    }
+    return out;
+}
+
+QVariantList PlayerController::eqFrequencies() const {
+    QVariantList out;
+    for (float f : Equalizer::kFrequencies) out << static_cast<double>(f);
+    return out;
+}
+
 void PlayerController::setReplayGain(int mode) {
     mode = std::clamp(mode, 0, 2);
     if (mode == rgMode_) return;
@@ -653,6 +751,7 @@ void PlayerController::ensureEngine() {
     engine_ = std::make_unique<AudioPlaybackEngine>();
     engine_->SetPreferredDevice(device_.toStdString());
     engine_->Init(exclusive_);
+    applyEq();
     // 回调来自引擎通知线程,排队回到界面线程处理
     QPointer<PlayerController> self(this);
     engine_->on_playback_ended = [self]() {
@@ -1009,6 +1108,12 @@ void PlayerController::rebuildSignalChain() {
     if (volume_ < 0.999) {
         perfect = false;
         chain_ << Stage(tr("数字音量 %1%").arg(qRound(volume_ * 100)), tr("软件音量会改变样本值,100% 时可实现无损直通"), false);
+    }
+    bool eqOn = false;
+    for (float v : eq_) eqOn = eqOn || (eqEnabled_ && v != 0.0f);
+    if (eqOn) {
+        perfect = false;
+        chain_ << Stage(tr("均衡器"), tr("按曲线调整了各频段,关闭或设为「原声」即恢复直通"), false);
     }
     chain_ << Stage(exclusive ? tr("WASAPI 独占") : tr("共享模式"),
                     exclusive ? tr("绕过系统混音器,直接送往设备") : tr("经过 Windows 系统混音器"), exclusive);

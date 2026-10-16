@@ -20,7 +20,10 @@ g++ -std=c++17 $SAN -pthread tests/host/fuzz_parser.cpp $CORE -o "$OUT/fuzz"
 g++ -std=c++17 -O2 -pthread tests/host/test_core_host.cpp $CORE -o "$OUT/core_host_o2"
 # 播放引擎:miniaudio 只启用 null 虚拟声卡后端 (无需真实音频设备)
 g++ -std=c++17 $SAN -pthread -DMA_ENABLE_ONLY_SPECIFIC_BACKENDS -DMA_ENABLE_NULL tests/host/test_engine_host.cpp \
-    src/audio_playback_engine.cpp src/fft_visualizer.cpp $CORE -o "$OUT/engine_host" -ldl -lm
+    src/audio_playback_engine.cpp src/equalizer.cpp src/fft_visualizer.cpp $CORE -o "$OUT/engine_host" -ldl -lm
+# 均衡器:miniaudio 的实现在引擎源文件里,一起链接
+g++ -std=c++17 $SAN -pthread -DMA_ENABLE_ONLY_SPECIFIC_BACKENDS -DMA_ENABLE_NULL tests/host/test_eq_host.cpp \
+    src/audio_playback_engine.cpp src/equalizer.cpp src/fft_visualizer.cpp $CORE -o "$OUT/eq_host" -ldl -lm
 g++ -std=c++17 $SAN -pthread tests/host/test_lyric_host.cpp src/lyric_manager.cpp src/lyric_provider.cpp src/tinf.cpp $CORE -o "$OUT/lyric_host"
 g++ -std=c++17 $SAN -pthread tests/host/test_lyric_online_host.cpp src/lyric_manager.cpp src/lyric_provider.cpp src/tinf.cpp $CORE -o "$OUT/lyric_online_host"
 g++ -std=c++17 $SAN -pthread tests/host/test_kugou_bridge_host.cpp src/kugou_track_bridge.cpp src/lyric_manager.cpp src/lyric_provider.cpp src/tinf.cpp $CORE -o "$OUT/kugou_bridge_host"
@@ -36,6 +39,8 @@ echo "== 3. 吞吐压测 (O2)"
 "$OUT/core_host_o2" "$OUT/fx" "$OUT/work" 165 | sed -n '/\[5\]/,$p'
 echo "== 4. 播放引擎 (null 虚拟声卡)"
 "$OUT/engine_host" "$OUT/fx"
+echo "== 4b. 均衡器 (旁路逐位不变 / 各段响应 / 前级 / 平滑)"
+"$OUT/eq_host"
 echo "== 5. 歌词内核 (KRC 解密 / 匹配 / 模糊测试)"
 "$OUT/lyric_host" "$OUT/lyric_work"
 "$OUT/lyric_online_host" "$OUT/lyric_online_work"
@@ -45,7 +50,7 @@ echo "== 5c. 整理曲库 (模板 / 冲突 / 交换改名 / 撤销)"
 "$OUT/organizer_host" "$OUT/organizer_work"
 echo "== 5d. 查找重复歌曲 (五种匹配 / 自动勾选 / 隔离 / 废纸篓 / 硬链接 / 撤销)"
 "$OUT/dedupe_host" "$OUT/dedupe_work"
-echo "== 5e. 歌单导入 (链接归一化 / 酷狗与网易云解析 / 匹配本地曲库)"
+echo "== 5e. 歌单导入 (链接归一化 / 酷狗、网易云与 QQ音乐解析 / 匹配本地曲库)"
 "$OUT/playlist_host"
 echo "== 6. 变异模糊测试"
 "$OUT/fuzz" "${FUZZ_ITERS:-500}" $(ls "$OUT"/fx/* | grep -v manifest)

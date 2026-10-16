@@ -1,7 +1,7 @@
 import QtQuick
 import PlayerUi
 
-// 导入在线歌单:贴进酷狗 / 网易云的分享链接或 ID → 读出曲目 → 与本地曲库逐首对上 → 用本地有的存成歌单
+// 导入在线歌单:贴进酷狗 / 网易云 / QQ音乐的分享链接或 ID → 读出曲目 → 与本地曲库逐首对上 → 用本地有的存成歌单
 //  卡片居中浮在暗下去的页面上;打开时从略小处放大淡入,各块错峰浮现,结果行依次浮出
 //  只用强调色与文字明暗:本地有 = 强调色标签,可能 = 描边标签,缺少 = 整行变淡
 Item {
@@ -184,7 +184,7 @@ Item {
                 Text {
                     width: parent.width
                     visible: !sheet.compact
-                    text: qsTr("粘贴酷狗或网易云的歌单链接,曲库里已有的歌会自动对上")
+                    text: qsTr("粘贴酷狗、网易云或 QQ音乐的歌单链接,曲库里已有的歌会自动对上")
                     color: Theme.textTertiary
                     font.family: Theme.fontFamily
                     font.pixelSize: 12
@@ -288,13 +288,14 @@ Item {
                                     : sheet.st === "platform" ? qsTr("这是哪个平台的歌单?")
                                     : sheet.kind === "kugou" ? qsTr("酷狗歌单")
                                     : sheet.kind === "netease" ? qsTr("网易云歌单")
+                                    : sheet.kind === "qqmusic" ? qsTr("QQ音乐歌单")
                                     : sheet.kind === "id" ? qsTr("纯数字 ID,读取后选择平台")
                                     : link.text.length ? qsTr("认不出这个链接") : qsTr("支持分享链接、短链和歌单 ID")
                                 color: sheet.st === "error" ? Theme.textSecondary : Theme.textTertiary
                                 font.family: Theme.fontFamily
                                 font.pixelSize: 12
                             }
-                            // 纯数字 ID:选平台 (两枚胶囊,点了立即读取)
+                            // 纯数字 ID:选平台 (三枚胶囊,点了立即读取)
                             Capsule {
                                 anchors.verticalCenter: parent.verticalCenter
                                 visible: sheet.st === "platform"
@@ -310,6 +311,14 @@ Item {
                                 pad: 12
                                 text: qsTr("网易云")
                                 onClicked: importer.parseAs("netease")
+                            }
+                            Capsule {
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: sheet.st === "platform"
+                                height: 26
+                                pad: 12
+                                text: qsTr("QQ音乐")
+                                onClicked: importer.parseAs("qqmusic")
                             }
                         }
                     }
