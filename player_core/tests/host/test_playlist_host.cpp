@@ -26,6 +26,13 @@ static void TestInput() {
         {"分享歌单「随便听听」: https://music.163.com/playlist?id=7480897649 (来自网易云)", Platform::NetEase, "7480897649"},
         {"netease:7480897649", Platform::NetEase, "7480897649"},
         {"  7480897649 ", Platform::Unknown, "7480897649"},
+        // 酷狗新版:global_collection_id 优先于 listid (listid=3 只是列表类型)
+        {"https://m.kugou.com/share/zlist.html?type=1&global_collection_id=collection_3_1016644002_3_0&listid=3&uid=1",
+         Platform::Kugou, "gcid:collection_3_1016644002_3_0"},
+        {"https://t1.kugou.com/3RB9v52G6V2", Platform::Kugou, "short:3RB9v52G6V2"},
+        // App 的整段分享文案:取链接,不能把文案里的酷狗码 40717681 当成歌单号
+        {"https://t1.kugou.com/3RB9v52G6V2  复制整段信息，去酷狗搜索此码 #40717681# 即可看到我的歌曲。\n"
+         "如未安装酷狗，请点此下载安装  http://www.kugou.com", Platform::Kugou, "short:3RB9v52G6V2"},
     };
     for (const auto& c : cases) {
         Platform p = Platform::Unknown;
@@ -38,6 +45,20 @@ static void TestInput() {
     Platform p;
     std::string id;
     CHECK(!PlaylistProvider::ParseInput("周杰伦 晴天", p, id));
+    CHECK(!PlaylistProvider::ParseInput("#40717681#", p, id));
+
+    // 解析整段分享文案 / 酷狗码:绝不能落到老版页面 (www2 ... special/single/40717681)
+    std::vector<std::string> urls;
+    PlaylistProvider rec([&](const std::string& url, std::string& body) { urls.push_back(url); body.clear(); return false; });
+    PlaylistResult r = rec.Parse("https://t1.kugou.com/3RB9v52G6V2  复制整段信息，去酷狗搜索此码 #40717681# 即可看到我的歌曲。");
+    CHECK(!r.ok);
+    for (const auto& u : urls) CHECK(u.find("40717681") == std::string::npos && u.find("www2.kugou") == std::string::npos);
+    r = rec.Parse("复制整段信息，去酷狗搜索此码 #40717681# 即可看到我的歌曲。");
+    CHECK(!r.ok && r.error.find("酷狗码") != std::string::npos);
+    // gcid 走新版网关,不走老页面
+    urls.clear();
+    rec.ParseAs(Platform::Kugou, "gcid:collection_3_1016644002_3_0");
+    CHECK(!urls.empty() && urls[0].find("mobiles.kugou.com") != std::string::npos);
 }
 
 static const char* kKugouPage = R"(<html><script>

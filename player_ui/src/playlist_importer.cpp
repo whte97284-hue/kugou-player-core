@@ -118,26 +118,20 @@ void PlaylistImporter::setState(const QString& s, const QString& err) {
 }
 
 void PlaylistImporter::parse(const QString& text) {
-    const std::string in = text.trimmed().toStdString();
-    if (in.empty()) return;
+    const QString in = text.trimmed();
+    if (in.isEmpty()) return;
     Platform p = Platform::Unknown;
     std::string id;
-    if (!PlaylistProvider::ParseInput(in, p, id)) {
-        // 认不出的链接可能是短链:交给后台跟随跳转后再认
-        if (text.contains(QStringLiteral("://"))) {
-            start(Platform::Unknown, text.trimmed());
-            return;
-        }
-        setState(QStringLiteral("error"), tr("认不出这个链接,请粘贴酷狗或网易云的歌单分享链接"));
-        return;
-    }
-    if (p == Platform::Unknown) {
+    // 只有纯数字 ID 需要先问平台;其余一律把原文交给 Parse —— 它会先归一化 (短链要联网跟随跳转、
+    // 整段分享文案要先抠出链接、酷狗码给出说明)。不能把 ParseInput 的中间结果 (如 "short:xxx")
+    // 直接交给 ParseAs:ParseAs 不做归一化,短链会被当成老版歌单号去请求老页面
+    if (PlaylistProvider::ParseInput(in.toStdString(), p, id) && p == Platform::Unknown) {
         pendingId_ = QString::fromStdString(id);
         ++gen_;
         setState(QStringLiteral("platform"));
         return;
     }
-    start(p, QString::fromStdString(id));
+    start(Platform::Unknown, in);
 }
 
 void PlaylistImporter::parseAs(const QString& platform) {
@@ -166,6 +160,7 @@ void PlaylistImporter::start(Platform plat, const QString& input) {
     auto alive = alive_;
     QThreadPool::globalInstance()->start([self, alive, gen, plat, in, snap, http]() {
         PlaylistProvider pp(http);
+        // plat 未知:in 是用户原文,走完整归一化;已知:in 是用户选过平台的纯数字 ID
         auto res = std::make_shared<PlaylistResult>(plat == Platform::Unknown ? pp.Parse(in) : pp.ParseAs(plat, in));
         auto matched = std::make_shared<Matched>();
         if (res->ok) *matched = MatchSnapshot(*snap, res->tracks);

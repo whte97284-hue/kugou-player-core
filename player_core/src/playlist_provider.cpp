@@ -427,6 +427,27 @@ bool PlaylistProvider::ParseInput(const std::string& raw, Platform& plat, std::s
     if (b == std::string::npos) return false;
     input = input.substr(b, e - b + 1);
 
+    // 用户常把 App 的整段分享文案原样贴进来:
+    //   "https://t1.kugou.com/3RB9v52G6V2  复制整段信息，去酷狗搜索此码 #40717681# ..."
+    // 先抠出第一个链接 (到空白或非 ASCII 字符为止) 再识别; 否则后面的「兜底抓长数字」会把酷狗码
+    // 40717681 当成老版歌单号, 去请求老页面报「未找到 global.data」
+    {
+        size_t h = input.find("http://");
+        size_t hs = input.find("https://");
+        if (hs != std::string::npos && (h == std::string::npos || hs < h)) h = hs;
+        if (h != std::string::npos) {
+            size_t t = h;
+            while (t < input.size()) {
+                const unsigned char c = static_cast<unsigned char>(input[t]);
+                if (c <= 0x20 || c >= 0x80 || c == '"' || c == '\'' || c == '<' || c == '>') break;
+                ++t;
+            }
+            std::string url = input.substr(h, t - h);
+            while (!url.empty() && (url.back() == ')' || url.back() == ',' || url.back() == '.')) url.pop_back();
+            if (url != input) return ParseInput(url, plat, id);
+        }
+    }
+
     std::string low = input;
     std::transform(low.begin(), low.end(), low.begin(),
                    [](unsigned char c) { return (char)tolower(c); });
@@ -459,7 +480,7 @@ bool PlaylistProvider::ParseInput(const std::string& raw, Platform& plat, std::s
         //   短链本身不含 ID, 需要联网跟随 302 拿真实分享 URL。
         //   这里把「待跟随」的信息编码进 id (前缀 "short:"), 由 ResolveInput 处理。
         {
-            std::regex re_short(R"(^https?://(?:t1|t2|t3|t4|t5|t6|t7|t8|t9|t10|kgl|kugou)\.kugou\.com/([A-Za-z0-9_-]+)\s*$)",
+            std::regex re_short(R"(^https?://(?:t1|t2|t3|t4|t5|t6|t7|t8|t9|t10|kgl|kugou)\.kugou\.com/([A-Za-z0-9_-]+)/?(?:[?#].*)?$)",
                                 std::regex::icase);
             if (std::regex_search(input, m, re_short)) {
                 std::string code = m[1].str();
@@ -622,7 +643,10 @@ bool PlaylistProvider::ResolveInput(const std::string& input, Platform& plat, st
             size_t b = s.find_first_not_of(" \t\r\n");
             size_t e = s.find_last_not_of(" \t\r\n");
             if (b != std::string::npos) s = s.substr(b, e - b + 1);
-            if (s.size() >= 2 && s.front() == '#' && s.back() == '#') {
+            // 只贴了酷狗码, 或贴的分享文案里没有链接、只有 "#数字#"
+            std::smatch km;
+            static const std::regex re_code(R"(#\d{5,}#)");
+            if (std::regex_search(s, km, re_code)) {
                 if (error) *error =
                     "酷狗码 (#xxxxxxxx#) 是酷狗 App 内私有索引, 没有公开网页接口, 无法解析。"
                     "请在酷狗 App 里打开该歌单, 用「分享 → 复制链接」把分享链接贴进来。";
@@ -802,11 +826,6 @@ bool PlaylistProvider::FetchKugouGcid(const std::string& gcid, PlaylistResult& o
         std::chrono::system_clock::now().time_since_epoch()).count();
     std::string ts = std::to_string(now_ms);
 
-    auto do_get = [&](const std::string& url) -> bool {
-        std::string body;
-        if (!http_(url, body)) return false;
-        return !body.empty();
-    };
     auto build_url = [&](const std::string& base,
                          std::vector<std::pair<std::string, std::string>> params) {
         params.push_back({ "srcappid", "2919" });
