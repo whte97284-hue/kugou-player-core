@@ -18,7 +18,7 @@ Item {
     signal open()
     signal play()
 
-    readonly property bool hovered: mouse.containsMouse || playMouse.containsMouse || moreMouse.containsMouse
+    readonly property bool hovered: mouse.containsMouse || (controls.item !== null && controls.item.hot)
 
     function openMenu(item, px, py) {
         const p = item.mapToItem(null, px, py)
@@ -51,57 +51,75 @@ Item {
             decodeSize: Math.ceil(card.width * 1.5)
         }
 
-        // 播放 / 暂停:正在播放这张时切换暂停,暂停中的这张不悬停也露出继续键
-        Rectangle {
-            id: playBtn
-            readonly property bool shown: card.hovered || (card.isPlaying && !player.playing)
-            width: card.compact ? 38 : 46
-            height: width
-            radius: width / 2
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            anchors.margins: card.compact ? 8 : 12
-            color: Theme.accent
-            opacity: shown ? (card.hovered ? 1 : 0.9) : 0
-            scale: shown ? (playMouse.pressed ? 0.92 : 1) : 0.7
-            Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
-            Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutBack } }
-            Icon {
-                anchors.centerIn: parent
-                anchors.horizontalCenterOffset: card.active ? 0 : 1
-                name: (card.active ? "pause" : "play") + (Theme.accentIsLight ? "-dark" : "")
-                size: card.compact ? 17 : 20
-            }
-            MouseArea {
-                id: playMouse
-                anchors.fill: parent
-                enabled: playBtn.shown
-                hoverEnabled: !Theme.scrolling
-                cursorShape: Qt.PointingHandCursor
-                onClicked: card.isPlaying ? player.toggle() : card.play()
-            }
-        }
+        // 播放键与「更多」只在需要时创建:专辑墙的格子滚出视野就会被销毁、滚进来重新创建 (GridView 不复用格子),
+        // 每张卡片少建这两组控件,滚动时逐行创建卡片的开销小很多。收起时多留一会儿,让淡出动画放完
+        readonly property bool controlsWanted: card.hovered || (card.isPlaying && !player.playing)
+        onControlsWantedChanged: if (!controlsWanted) linger.restart()
+        Timer { id: linger; interval: Theme.normal + 60 }
+        Loader {
+            id: controls
+            anchors.fill: parent
+            active: coverBox.controlsWanted || linger.running
+            sourceComponent: Item {
+                readonly property bool hot: playMouse.containsMouse || moreMouse.containsMouse
+                // 创建出来的第一帧先是隐藏状态,随后切到目标状态,淡入 / 弹出动画才会播放
+                property bool ready: false
+                Component.onCompleted: ready = true
 
-        // 更多:整张专辑的菜单 (下一首播放、加入歌单、收藏全部…)
-        Rectangle {
-            id: moreBtn
-            width: 30; height: 30; radius: 15
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.margins: 10
-            color: moreMouse.containsMouse ? Qt.rgba(0, 0, 0, 0.62) : Qt.rgba(0, 0, 0, 0.45)
-            opacity: card.hovered ? 1 : 0
-            scale: card.hovered ? 1 : 0.7
-            visible: opacity > 0
-            Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
-            Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutBack } }
-            Icon { anchors.centerIn: parent; name: "more"; size: 16 }
-            MouseArea {
-                id: moreMouse
-                anchors.fill: parent
-                hoverEnabled: !Theme.scrolling
-                cursorShape: Qt.PointingHandCursor
-                onClicked: card.openMenu(moreBtn, 0, moreBtn.height + 6)
+                // 播放 / 暂停:正在播放这张时切换暂停,暂停中的这张不悬停也露出继续键
+                Rectangle {
+                    id: playBtn
+                    readonly property bool shown: parent.ready && (card.hovered || (card.isPlaying && !player.playing))
+                    width: card.compact ? 38 : 46
+                    height: width
+                    radius: width / 2
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.margins: card.compact ? 8 : 12
+                    color: Theme.accent
+                    opacity: shown ? (card.hovered ? 1 : 0.9) : 0
+                    scale: shown ? (playMouse.pressed ? 0.92 : 1) : 0.7
+                    Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+                    Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutBack } }
+                    Icon {
+                        anchors.centerIn: parent
+                        anchors.horizontalCenterOffset: card.active ? 0 : 1
+                        name: (card.active ? "pause" : "play") + (Theme.accentIsLight ? "-dark" : "")
+                        size: card.compact ? 17 : 20
+                    }
+                    MouseArea {
+                        id: playMouse
+                        anchors.fill: parent
+                        enabled: playBtn.shown
+                        hoverEnabled: !Theme.scrolling
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: card.isPlaying ? player.toggle() : card.play()
+                    }
+                }
+
+                // 更多:整张专辑的菜单 (下一首播放、加入歌单、收藏全部…)
+                Rectangle {
+                    id: moreBtn
+                    readonly property bool shown: parent.ready && card.hovered
+                    width: 30; height: 30; radius: 15
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: 10
+                    color: moreMouse.containsMouse ? Qt.rgba(0, 0, 0, 0.62) : Qt.rgba(0, 0, 0, 0.45)
+                    opacity: shown ? 1 : 0
+                    scale: shown ? 1 : 0.7
+                    visible: opacity > 0
+                    Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+                    Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutBack } }
+                    Icon { anchors.centerIn: parent; name: "more"; size: 16 }
+                    MouseArea {
+                        id: moreMouse
+                        anchors.fill: parent
+                        hoverEnabled: !Theme.scrolling
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: card.openMenu(moreBtn, 0, moreBtn.height + 6)
+                    }
+                }
             }
         }
 

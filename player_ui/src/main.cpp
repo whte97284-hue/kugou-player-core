@@ -296,6 +296,7 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
             {"songs paused reduced", false, true, true},
         };
         for (const Case& c : cases) {
+            if (qEnvironmentVariableIsSet("KP_BENCH_WALL")) break;   // 只测专辑墙
             steps->push_back({QStringLiteral("b_%1").arg(QString(c.name).replace(' ', '_')), [=] {
                 setup(c.play, c.reduced);
                 QTimer::singleShot(400, window, [=] { bench(c.name, c.hoverList ? overList : overNav); });

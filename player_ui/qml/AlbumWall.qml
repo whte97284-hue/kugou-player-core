@@ -119,6 +119,22 @@ Item {
         return null
     }
 
+    Component {
+        id: riseAnim
+        SequentialAnimation {
+            id: rise
+            property Item cell
+            property Translate lift
+            property int delay
+            ScriptAction { script: { rise.cell.opacity = 0; rise.lift.y = 22 } }
+            PauseAnimation { duration: rise.delay }
+            ParallelAnimation {
+                OpacityAnimator { target: rise.cell; to: 1; duration: 420; easing.type: Easing.OutCubic }
+                NumberAnimation { target: rise.lift; property: "y"; to: 0; duration: 560; easing.type: Easing.OutQuint }
+            }
+        }
+    }
+
     GridView {
         id: grid
         anchors.fill: parent
@@ -220,17 +236,10 @@ Item {
             readonly property string albumKey: model.albumKey
             readonly property string letter: model.letter
             readonly property Item coverItem: cardItem.coverItem
-            Component.onCompleted: if (wall.entering) rise.start()
+            // 入场浮起只在刚进入专辑墙时需要:按需创建动画,滚动时新建的格子不带这一套
+            Component.onCompleted: if (wall.entering) riseAnim.createObject(cell, { cell: cell, lift: lift,
+                delay: Math.max(0, Math.min(420, (index % wall.columns) * 45 + Math.floor(index / wall.columns) * 70)) }).start()
             transform: Translate { id: lift }
-            SequentialAnimation {
-                id: rise
-                ScriptAction { script: { cell.opacity = 0; lift.y = 22 } }
-                PauseAnimation { duration: Math.max(0, Math.min(420, (index % wall.columns) * 45 + Math.floor(index / wall.columns) * 70)) }
-                ParallelAnimation {
-                    OpacityAnimator { target: cell; to: 1; duration: 420; easing.type: Easing.OutCubic }
-                    NumberAnimation { target: lift; property: "y"; to: 0; duration: 560; easing.type: Easing.OutQuint }
-                }
-            }
             AlbumCard {
                 id: cardItem
                 x: wall.gap / 2

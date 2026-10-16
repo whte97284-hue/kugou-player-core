@@ -73,7 +73,7 @@ Item {
             readonly property int artistIndex: model.artistIndex
             readonly property int row: index
             readonly property Item avatarItem: avatarImg
-            readonly property bool hovered: m.containsMouse || playBtn.hovered
+            readonly property bool hovered: m.containsMouse || (playLoader.item !== null && playLoader.item.hovered)
             readonly property real d: width - 36
             readonly property bool playing: model.artistIndex === page.playingArtist
             // 当前队列就是这位歌手 (从这里或歌手页点的播放):播放键变成暂停 / 继续
@@ -123,24 +123,38 @@ Item {
                     }
                 }
                 // 悬停播放:放在圆周右下 45° 处;这位歌手的队列暂停中时不悬停也露出继续键
-                IconButton {
-                    id: playBtn
-                    readonly property bool shown: cell.hovered || (cell.isQueue && !player.playing)
-                    x: cell.d * 0.854 - 20
-                    y: cell.d * 0.854 - 20
-                    width: 40; height: 40
-                    filled: true
-                    icon: cell.isQueue && player.playing ? "pause" : "play"
-                    iconSize: 17
-                    opacity: shown ? 1 : 0
-                    scale: shown ? 1 : 0.7
-                    visible: opacity > 0
-                    Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
-                    Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutBack } }
-                    onClicked: {
-                        if (cell.isQueue) { player.toggle(); return }
-                        player.shuffle = false
-                        Nav.picked(player.pickTracks(library.artistTrackIds(model.artistIndex), 0, "artist:" + model.name, true))
+                // 只在需要时创建 (GridView 滚出视野的格子会被销毁重建,少建一组控件滚动更轻);收起时多留一会儿放完淡出
+                readonly property bool btnWanted: cell.hovered || (cell.isQueue && !player.playing)
+                onBtnWantedChanged: if (!btnWanted) btnLinger.restart()
+                Timer { id: btnLinger; interval: Theme.normal + 60 }
+                Loader {
+                    id: playLoader
+                    anchors.fill: parent
+                    active: avatar.btnWanted || btnLinger.running
+                    sourceComponent: Item {
+                        readonly property bool hovered: playBtn.hovered
+                        property bool ready: false
+                        Component.onCompleted: ready = true
+                        IconButton {
+                            id: playBtn
+                            readonly property bool shown: parent.ready && (cell.hovered || (cell.isQueue && !player.playing))
+                            x: cell.d * 0.854 - 20
+                            y: cell.d * 0.854 - 20
+                            width: 40; height: 40
+                            filled: true
+                            icon: cell.isQueue && player.playing ? "pause" : "play"
+                            iconSize: 17
+                            opacity: shown ? 1 : 0
+                            scale: shown ? 1 : 0.7
+                            visible: opacity > 0
+                            Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+                            Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutBack } }
+                            onClicked: {
+                                if (cell.isQueue) { player.toggle(); return }
+                                player.shuffle = false
+                                Nav.picked(player.pickTracks(library.artistTrackIds(model.artistIndex), 0, "artist:" + model.name, true))
+                            }
+                        }
                     }
                 }
             }
