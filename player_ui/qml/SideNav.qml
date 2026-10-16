@@ -134,7 +134,8 @@ Item {
                 visible: modelData.key === "tools" && decrypt.policy !== 2 && (decrypt.pending.total || 0) > 0 && nav.current !== "tools"
                 SequentialAnimation on opacity {
                     running: parent.visible && !Theme.reduced
-                    paused: running && Theme.scrolling
+                    // 无限动画会让整个窗口一直按刷新率重画:滚动中、窗口不在前台时都停下
+                    paused: running && (Theme.scrolling || Qt.application.state !== Qt.ApplicationActive)
                     loops: Animation.Infinite
                     OpacityAnimator { from: 1; to: 0.35; duration: 1400; easing.type: Easing.InOutSine }
                     OpacityAnimator { from: 0.35; to: 1; duration: 1400; easing.type: Easing.InOutSine }

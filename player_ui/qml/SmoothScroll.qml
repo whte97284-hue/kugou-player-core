@@ -54,8 +54,13 @@ WheelHandler {
     // 而画面总是按刷新节拍显示:直接用它推进,每帧位移忽大忽小,看起来就是细碎的抖动。
     // 所以把间隔对齐到整数帧 (掉帧时按掉了几帧算),和 Qt 自己的 vsync 动画驱动、浏览器的平滑滚动同一做法
     property real vsync: 1 / 60
+    // 判定掉帧要留足余量:Qt 的动画驱动在 144Hz 下容差只有 8.7ms,几乎一直处在计时器模式,frameTime 是
+    // 界面线程被叫醒的挂钟时刻差,抖动 ±3~4ms 很常见。按 1.5 帧四舍五入的话,一帧 10.5ms 就会被当成掉了一帧、
+    // 一次走两步 —— 144Hz 下这正是「同样 144fps,滚起来却一顿一顿」的来源 (帧诊断日志实测:出帧稳定 6.9ms,
+    // 驱动在两种模式间切了上百次)。真正掉帧时间隔接近两帧 (13.9ms),所以 1.75 帧以下一律算一帧
     function frameStep(ft) {
-        const n = Math.max(1, Math.round(ft / vsync))
+        const r = ft / vsync
+        const n = r < 1.75 ? 1 : Math.round(r)
         return Math.min(0.1, n * vsync)
     }
     // 滚动中 (滚轮动画或拖动 / 惯性) 时登记到 Theme.scrolling

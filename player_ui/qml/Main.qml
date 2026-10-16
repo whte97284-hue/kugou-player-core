@@ -967,7 +967,8 @@ Window {
             desktopLyrics: settings.desktopLyrics,
             nowPlaying: nowPlaying.shown,
             page: root.detailKind.length ? root.detailKind : root.section,
-            bg: ["flow", "still", "solid"][settings.background] || ""
+            bg: ["flow", "still", "solid"][settings.background] || "",
+            appInactive: Qt.application.state !== Qt.ApplicationActive
         })
     }
     Rectangle {
