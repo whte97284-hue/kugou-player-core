@@ -3,7 +3,28 @@
 //
 //  协议来源 (2026-10-16 实测验证):
 //
-//   酷狗 (无需签名):
+//   酷狗 新版 global_collection_id (需 H5 签名, 2026-10-16 实测验证):
+//     分享短链 t1.kugou.com/xxxx → 302 → wwwapi.kugou.com/share/zlist.html
+//       ?global_collection_id=collection_3_{uid}_{n}_0&listid=3&...
+//     ⚠ 该形态走不了 www2 yueku (页面没有 global.data)。
+//     正确路径 (两步, 均需 signature):
+//       1) GET https://mobiles.kugou.com/api/v5/special/info_v2
+//              ?appid=1058&specialid=0&global_specialid={gcid}&format=json
+//          → data.specialname / nickname / songcount / imgurl
+//       2) GET https://mobiles.kugou.com/api/v5/special/song_v2
+//              ?appid=1058&global_specialid={gcid}&specialid=0&plat=0&version=8000
+//              &page=N&pagesize=300
+//          → data.info[] 每首含 filename / hash / 320hash / sqhash / duration(秒)
+//     签名: signature = MD5( KEY + "k1=v1k2=v2..."(key升序) + KEY )
+//       KEY = "NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt"  (酷狗 web 前端 infSign.min.js 公开字面量)
+//     公共参数: srcappid=2919 clientver=20000 clienttime|mid|uuid=毫秒时间戳 dfid=-
+//
+//   酷狗短链: https://t1.kugou.com/xxxxxxxxxxx → 302 → 分享页 (见上)
+//     ⚠ 分享页返回的 HTML 里也内嵌 dataFromSmarty 数组 (仅前 100 首), 可作兜底;
+//        要拿全量必须走 info_v2 / song_v2。
+//     ⚠ 酷狗码 "#12345678#" 是 App 内私有索引, 无公开 web 接口。
+//
+//   酷狗 (无需签名, 老版 specialid):
 //     GET https://www2.kugou.kugou.com/yueku/v9/special/single/{specialId}-5-9999.html
 //     页面内嵌  global.data = [ {...}, ... ];   ← 整个曲目数组
 //     另有      global = { ... name: "歌单名" ... pic: "封面" ... };
@@ -30,6 +51,8 @@
 #include <regex>
 #include <map>
 #include <memory>
+#include <utility>
+#include <chrono>
 
 // windows.h 会把 min/max 定义成宏, 与 std::min/std::max 冲突
 #ifdef min
@@ -422,23 +445,51 @@ bool PlaylistProvider::ParseInput(const std::string& raw, Platform& plat, std::s
     if (low.find("kugou.com") != std::string::npos || low.find("kgl") != std::string::npos) {
         plat = Platform::Kugou;
         std::smatch m;
-        // /yy/special/single/1067062.html  或  /special/single/xxx-5-9999.html
+
+        // ---- 2a) 优先级最高: global_collection_id (新版歌单标识) ----
+        //   形如 collection_3_1016644002_3_0
+        //   ⚠ 必须【先于】listid 判断: 酷狗分享 URL 里 listid 常是短数字(如 listid=3),
+        //     它只是「列表类型」而【不是】歌单 ID, 先取它会得到完全错误的歌单。
+        {
+            std::string gcid = ExtractQuery(input, "global_collection_id");
+            if (!gcid.empty()) { id = "gcid:" + gcid; return true; }
+        }
+
+        // ---- 2b) 短链: t1.kugou.com/xxxx / kgl.kugou.com/xxxx ----
+        //   短链本身不含 ID, 需要联网跟随 302 拿真实分享 URL。
+        //   这里把「待跟随」的信息编码进 id (前缀 "short:"), 由 ResolveInput 处理。
+        {
+            std::regex re_short(R"(^https?://(?:t1|t2|t3|t4|t5|t6|t7|t8|t9|t10|kgl|kugou)\.kugou\.com/([A-Za-z0-9_-]+)\s*$)",
+                                std::regex::icase);
+            if (std::regex_search(input, m, re_short)) {
+                std::string code = m[1].str();
+                // 排除明显是页面路径的关键字
+                std::string lc = code;
+                std::transform(lc.begin(), lc.end(), lc.begin(),
+                               [](unsigned char c) { return (char)tolower(c); });
+                if (lc != "share" && lc != "plist" && lc != "index" && lc != "plist.html") {
+                    id = "short:" + code;
+                    return true;
+                }
+            }
+        }
+
+        // ---- 2c) 老版式路径 /yy/special/single/1067062.html ----
         std::regex re_single(R"(special/single/(\d+))");
         if (std::regex_search(input, m, re_single)) { id = m[1].str(); return true; }
         // m.kugou.com/plist/list/123456
         std::regex re_plist(R"(plist/list/(\d+))");
         if (std::regex_search(input, m, re_plist)) { id = m[1].str(); return true; }
-        // 分享页参数 (m.kugou.com/share/zlist.html?listid=xxx)
-        for (const char* key : { "listid", "list_id", "specialid" }) {
+
+        // ---- 2d) 分享页其它参数 ----
+        //   specialid 优先于 listid: 前者是真歌单号, 后者多用于「列表类型」
+        for (const char* key : { "specialid", "special_id", "listid", "list_id" }) {
             std::string v = ExtractQuery(input, key);
             if (!v.empty()) {
                 std::regex re_num(R"((\d{4,}))");
                 if (std::regex_search(v, m, re_num)) { id = m[1].str(); return true; }
             }
         }
-        // global_collection_id=collection_3_xxx_yyy_0
-        std::string gcid = ExtractQuery(input, "global_collection_id");
-        if (!gcid.empty()) { id = gcid; return true; }
         // 兜底: 抓最后一段较长数字
         std::regex re_last(R"((\d{5,}))");
         if (std::regex_search(input, m, re_last)) { id = m[1].str(); return true; }
@@ -564,9 +615,45 @@ bool PlaylistProvider::FollowRedirect(const std::string& url, std::string& final
 bool PlaylistProvider::ResolveInput(const std::string& input, Platform& plat, std::string& id,
                                     std::string* error) const {
     if (!ParseInput(input, plat, id)) {
+        // 纯酷狗码 (形如 "#40717681#" 或 用户只贴了数字串但带 # 包裹)
+        //   酷狗码是酷狗 App 内的私有索引, 无公开 web 接口, 这里给明确提示。
+        {
+            std::string s = input;
+            size_t b = s.find_first_not_of(" \t\r\n");
+            size_t e = s.find_last_not_of(" \t\r\n");
+            if (b != std::string::npos) s = s.substr(b, e - b + 1);
+            if (s.size() >= 2 && s.front() == '#' && s.back() == '#') {
+                if (error) *error =
+                    "酷狗码 (#xxxxxxxx#) 是酷狗 App 内私有索引, 没有公开网页接口, 无法解析。"
+                    "请在酷狗 App 里打开该歌单, 用「分享 → 复制链接」把分享链接贴进来。";
+                return false;
+            }
+        }
         if (error) *error = "无法识别的链接或 ID";
         return false;
     }
+
+    // ---- 短链: 联网跟随重定向, 从最终 URL 里取真实标识 ----
+    if (id.compare(0, 6, "short:") == 0) {
+        std::string code = id.substr(6);
+        std::string url = "https://t1.kugou.com/" + code;
+        std::string fin;
+        std::string rerr;
+        if (!FollowRedirect(url, fin, &rerr)) {
+            if (error) *error = "短链解析失败: " + rerr;
+            return false;
+        }
+        // 最终 URL 应是分享页: .../share/zlist.html?...&global_collection_id=xxx&...
+        Platform p2 = Platform::Unknown; std::string i2;
+        if (!ParseInput(fin, p2, i2) || p2 != Platform::Kugou) {
+            if (error) *error = "短链跳转后仍无法识别歌单 ID";
+            return false;
+        }
+        plat = p2; id = i2;
+        // i2 此时可能是 "gcid:collection_..." 或纯数字, 交由 FetchKugou/ParseAs 处理
+        return true;
+    }
+
     // 平台未知 + 是纯数字 → 失败 (必须能判断平台)
     if (plat == Platform::Unknown) {
         // 可能输入是短链, 试着跟随重定向再判断一次
@@ -586,10 +673,279 @@ bool PlaylistProvider::ResolveInput(const std::string& input, Platform& plat, st
 }
 
 // ============================================================================
-//  酷狗: 网页版内嵌 global.data
+//  酷狗 H5 签名 (infSign) —— 用于 mobiles.kugou.com 的 API 网关
+//  算法: MD5( KEY + 按 key 升序拼接的 "k=v" + KEY )
+//  密钥来自酷狗 web 前端 staticssl.kugou.com/common/js/min/infSign.min.js
+//  (该 js 里的字面量 'NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt')
+//  这是【公开】的 H5 端签名, 非 App 私有密钥, 用于公开歌单数据。
+// ============================================================================
+namespace {
+
+const char* kKgSignKey = "NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt";
+
+// ---------------------------------------------------------------------------
+// 自包含 MD5 (RFC 1321)。仅实现在此文件内部, 不引第三方库。
+// ---------------------------------------------------------------------------
+struct Md5Ctx {
+    uint32_t a = 0x67452301, b = 0xefcdab89, c = 0x98badcfe, d = 0x10325476;
+    uint64_t total = 0;
+    unsigned char buf[64];
+    size_t buflen = 0;
+};
+
+static inline uint32_t md5_rotl(uint32_t x, int n) { return (x << n) | (x >> (32 - n)); }
+
+static const uint32_t kMd5K[64] = {
+    0xd76aa478,0xe8c7b756,0x242070db,0xc1bdceee,0xf57c0faf,0x4787c62a,0xa8304613,0xfd469501,
+    0x698098d8,0x8b44f7af,0xffff5bb1,0x895cd7be,0x6b901122,0xfd987193,0xa679438e,0x49b40821,
+    0xf61e2562,0xc040b340,0x265e5a51,0xe9b6c7aa,0xd62f105d,0x02441453,0xd8a1e681,0xe7d3fbc8,
+    0x21e1cde6,0xc33707d6,0xf4d50d87,0x455a14ed,0xa9e3e905,0xfcefa3f8,0x676f02d9,0x8d2a4c8a,
+    0xfffa3942,0x8771f681,0x6d9d6122,0xfde5380c,0xa4beea44,0x4bdecfa9,0xf6bb4b60,0xbebfbc70,
+    0x289b7ec6,0xeaa127fa,0xd4ef3085,0x04881d05,0xd9d4d039,0xe6db99e5,0x1fa27cf8,0xc4ac5665,
+    0xf4292244,0x432aff97,0xab9423a7,0xfc93a039,0x655b59c3,0x8f0ccc92,0xffeff47d,0x85845dd1,
+    0x6fa87e4f,0xfe2ce6e0,0xa3014314,0x4e0811a1,0xf7537e82,0xbd3af235,0x2ad7d2bb,0xeb86d391
+};
+static const int kMd5S[64] = {
+    7,12,17,22, 7,12,17,22, 7,12,17,22, 7,12,17,22,
+    5, 9,14,20, 5, 9,14,20, 5, 9,14,20, 5, 9,14,20,
+    4,11,16,23, 4,11,16,23, 4,11,16,23, 4,11,16,23,
+    6,10,15,21, 6,10,15,21, 6,10,15,21, 6,10,15,21
+};
+
+static void md5_block(Md5Ctx& ctx, const unsigned char* p) {
+    uint32_t M[16];
+    for (int i = 0; i < 16; ++i)
+        M[i] = (uint32_t)p[i*4] | ((uint32_t)p[i*4+1] << 8) |
+               ((uint32_t)p[i*4+2] << 16) | ((uint32_t)p[i*4+3] << 24);
+    uint32_t A = ctx.a, B = ctx.b, C = ctx.c, D = ctx.d;
+    for (int i = 0; i < 64; ++i) {
+        uint32_t F; int g;
+        if (i < 16)      { F = (B & C) | (~B & D);        g = i; }
+        else if (i < 32) { F = (D & B) | (~D & C);        g = (5*i + 1) % 16; }
+        else if (i < 48) { F = B ^ C ^ D;                 g = (3*i + 5) % 16; }
+        else             { F = C ^ (B | ~D);              g = (7*i) % 16; }
+        F = F + A + kMd5K[i] + M[g];
+        A = D; D = C; C = B;
+        B = B + md5_rotl(F, kMd5S[i]);
+    }
+    ctx.a += A; ctx.b += B; ctx.c += C; ctx.d += D;
+}
+
+static void md5_update(Md5Ctx& ctx, const void* data, size_t len) {
+    const unsigned char* p = (const unsigned char*)data;
+    ctx.total += len;
+    if (ctx.buflen) {
+        size_t need = 64 - ctx.buflen;
+        size_t take = len < need ? len : need;
+        memcpy(ctx.buf + ctx.buflen, p, take);
+        ctx.buflen += take; p += take; len -= take;
+        if (ctx.buflen == 64) { md5_block(ctx, ctx.buf); ctx.buflen = 0; }
+    }
+    while (len >= 64) { md5_block(ctx, p); p += 64; len -= 64; }
+    if (len) { memcpy(ctx.buf, p, len); ctx.buflen = len; }
+}
+
+static std::string md5_hex(const std::string& in) {
+    Md5Ctx ctx;
+    md5_update(ctx, in.data(), in.size());
+    uint64_t bits = ctx.total * 8;
+    unsigned char pad = 0x80;
+    md5_update(ctx, &pad, 1);
+    unsigned char zero = 0;
+    while (ctx.buflen != 56) md5_update(ctx, &zero, 1);
+    unsigned char lenb[8];
+    for (int i = 0; i < 8; ++i) lenb[i] = (unsigned char)((bits >> (8*i)) & 0xFF);
+    md5_update(ctx, lenb, 8);
+    static const char* hex = "0123456789abcdef";
+    std::string out;
+    out.reserve(32);
+    uint32_t v[4] = { ctx.a, ctx.b, ctx.c, ctx.d };
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j) {
+            unsigned char byte = (unsigned char)((v[i] >> (8*j)) & 0xFF);
+            out += hex[byte >> 4];
+            out += hex[byte & 0xF];
+        }
+    return out;
+}
+
+// 酷狗 H5 签名: 参数按 key 升序, 拼 "k=v", 前后各包一次密钥, 取 MD5
+//   params: 有序的 (key,value) 列表 (含空值也要参与, 顺序无所谓, 函数内会排序)
+static std::string KgSign(const std::vector<std::pair<std::string, std::string>>& params) {
+    std::vector<std::pair<std::string, std::string>> sorted = params;
+    std::sort(sorted.begin(), sorted.end(),
+              [](const std::pair<std::string, std::string>& x,
+                 const std::pair<std::string, std::string>& y) { return x.first < y.first; });
+    std::string s = kKgSignKey;
+    for (const auto& kv : sorted) { s += kv.first; s += '='; s += kv.second; }
+    s += kKgSignKey;
+    return md5_hex(s);
+}
+
+} // namespace
+
+// ============================================================================
+//  酷狗: 两种形态
 // ============================================================================
 
+bool PlaylistProvider::FetchKugouGcid(const std::string& gcid, PlaylistResult& out) const {
+    out.meta.source = "kugou";
+    out.meta.id = gcid;
+
+    if (gcid.rfind("collection_", 0) != 0) {
+        out.error = "global_collection_id 格式不正确";
+        return false;
+    }
+
+    // ---- 时间戳 (毫秒) ----
+    long long now_ms = (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::string ts = std::to_string(now_ms);
+
+    auto do_get = [&](const std::string& url) -> bool {
+        std::string body;
+        if (!http_(url, body)) return false;
+        return !body.empty();
+    };
+    auto build_url = [&](const std::string& base,
+                         std::vector<std::pair<std::string, std::string>> params) {
+        params.push_back({ "srcappid", "2919" });
+        params.push_back({ "clientver", "20000" });
+        params.push_back({ "clienttime", ts });
+        params.push_back({ "mid", ts });
+        params.push_back({ "uuid", ts });
+        params.push_back({ "dfid", "-" });
+        std::string sig = KgSign(params);
+        std::string url = base + "?";
+        for (const auto& kv : params) url += kv.first + "=" + kv.second + "&";
+        url += "signature=" + sig;
+        return url;
+    };
+
+    // ---- 第一步: 元信息 (歌单名 / 作者 / 总数) ----
+    {
+        std::vector<std::pair<std::string, std::string>> p = {
+            { "appid", "1058" },
+            { "specialid", "0" },
+            { "global_specialid", gcid },
+            { "format", "jsonp" },
+        };
+        std::string url = build_url("https://mobiles.kugou.com/api/v5/special/info_v2", p);
+        std::string body;
+        if (!http_(url, body) || body.empty()) {
+            out.error = "酷狗歌单元信息请求失败 (网络或接口变更)";
+#ifdef PLAYLIST_DEBUG
+            out.error += "\n[DEBUG] url=" + url + "\n[DEBUG] body=" + body.substr(0, 300);
+#endif
+            return false;
+        }
+        JsonParser jp(body);
+        JValPtr root = jp.Parse();
+        const JVal* data = root && root->IsObj() ? root->Get("data") : nullptr;
+        if (!data || !data->IsObj()) {
+            out.error = "酷狗歌单元信息解析失败 (歌单可能不存在或已删除)";
+#ifdef PLAYLIST_DEBUG
+            out.error += "\n[DEBUG] url=" + url + "\n[DEBUG] resp=" + body.substr(0, 300);
+#endif
+            return false;
+        }
+        out.meta.name = StripHtml(JStr(data->Get("specialname")));
+        out.meta.author = JStr(data->Get("nickname"));
+        out.meta.description = JStr(data->Get("intro"));
+        std::string img = JStrRaw(data->Get("imgurl"));
+        // 封面 {size} 占位替换
+        size_t sp = img.find("{size}");
+        if (sp != std::string::npos) img.replace(sp, 6, "240");
+        out.meta.cover_url = img;
+        out.meta.total = (int)JNum(data->Get("songcount"));
+    }
+
+    // ---- 第二步: 分页拉全部曲目 (每页最多 300) ----
+    const int kPageSize = 300;
+    int total = out.meta.total;
+    int page = 1;
+    int fetched = 0;
+    // 上限保护: 最多 100 页 (3 万首), 防止异常歌单死循环
+    for (; page <= 100; ++page) {
+        int limit = kPageSize;
+        if (total > 0) {
+            int remain = total - fetched;
+            if (remain <= 0) break;
+            if (remain < limit) limit = remain;
+        }
+        std::vector<std::pair<std::string, std::string>> p = {
+            { "appid", "1058" },
+            { "global_specialid", gcid },
+            { "specialid", "0" },
+            { "plat", "0" },
+            { "version", "8000" },
+            { "page", std::to_string(page) },
+            { "pagesize", std::to_string(limit) },
+        };
+        std::string url = build_url("https://mobiles.kugou.com/api/v5/special/song_v2", p);
+        std::string body;
+        if (!http_(url, body) || body.empty()) {
+            if (page == 1) { out.error = "酷狗歌单曲目请求失败 (网络或接口变更)"; return false; }
+            break;   // 部分成功: 保留已拿到的
+        }
+        JsonParser jp(body);
+        JValPtr root = jp.Parse();
+        const JVal* data = root && root->IsObj() ? root->Get("data") : nullptr;
+        const JVal* info = data && data->IsObj() ? data->Get("info") : nullptr;
+        if (!info || !info->IsArr() || info->Size() == 0) break;
+
+        for (size_t k = 0; k < info->Size(); ++k) {
+            const JVal* s = info->At(k);
+            if (!s || !s->IsObj()) continue;
+            PlaylistTrack t;
+            t.source = "kugou";
+            // filename 形如 "Artist - Title"; 另用 trans_param? 此处优先拆 filename
+            std::wstring fn = StripHtml(JStr(s->Get("filename")));
+            std::wstring sep = L" - ";
+            size_t d = fn.find(sep);
+            if (d != std::wstring::npos) {
+                t.artist = fn.substr(0, d);
+                t.title  = fn.substr(d + sep.size());
+            } else {
+                t.title = fn;
+            }
+            // 兜底: 若 filename 拆不出, 用 songname/author_name (部分接口有)
+            if (t.title.empty())  t.title  = StripHtml(JStr(s->Get("songname")));
+            if (t.artist.empty()) t.artist = StripHtml(JStr(s->Get("author_name")));
+            if (t.album.empty())  t.album  = JStr(s->Get("album_name"));
+
+            // duration 单位: 秒 (老接口是毫秒, 这里统一换算)
+            double dur = JNum(s->Get("duration"));
+            if (dur > 0) t.duration_ms = (uint32_t)((long long)(dur * 1000.0 + 0.5));
+
+            t.id              = JStrRaw(s->Get("hash"));
+            t.kugou_hash_320  = JStrRaw(s->Get("320hash"));
+            t.kugou_hash_flac = JStrRaw(s->Get("sqhash"));
+            double aid        = JNum(s->Get("audio_id"));
+            if (aid > 0) t.kugou_audio_id = std::to_string((long long)aid);
+            t.kugou_album_id  = JStrRaw(s->Get("album_id"));
+
+            if (t.title.empty()) continue;
+            if (t.duration_ms > 0) ++out.with_duration;
+            if (!t.album.empty())  ++out.with_album;
+            out.tracks.push_back(std::move(t));
+        }
+        fetched = (int)out.tracks.size();
+    }
+
+    if (out.tracks.empty()) { out.error = "歌单为空或全部条目无效"; return false; }
+    if (out.meta.total <= 0) out.meta.total = (int)out.tracks.size();
+    out.ok = true;
+    return true;
+}
+
 bool PlaylistProvider::FetchKugou(const std::string& id, PlaylistResult& out) const {
+    // 新版 global_collection_id 形态
+    if (id.rfind("gcid:", 0) == 0)
+        return FetchKugouGcid(id.substr(5), out);
+    if (id.rfind("collection_", 0) == 0)
+        return FetchKugouGcid(id, out);
+
     out.meta.source = "kugou";
     out.meta.id = id;
 
@@ -918,17 +1274,36 @@ bool PlaylistProvider::DefaultHttpGet(const std::string& url, std::string& body)
     HINTERNET con = WinHttpConnect(ses, hostbuf.c_str(), uc.nPort, 0);
     if (!con) { WinHttpCloseHandle(ses); return false; }
 
+    // ⚠ Referer 必须在 WinHttpOpenRequest 时传入:
+    //   若在此传 WINHTTP_NO_REFERER, 后续 WinHttpAddRequestHeaders("Referer: ...")
+    //   【不会生效】(WinHTTP 认为 Referer 槽位已占)。
+    const wchar_t* ref = (url.find("163.com") != std::string::npos)
+                             ? L"https://music.163.com/"
+                             : WINHTTP_NO_REFERER;
+
     HINTERNET req = WinHttpOpenRequest(con, L"GET", full_path.c_str(), nullptr,
-        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, https ? WINHTTP_FLAG_SECURE : 0);
+        ref, WINHTTP_DEFAULT_ACCEPT_TYPES, https ? WINHTTP_FLAG_SECURE : 0);
     if (!req) { WinHttpCloseHandle(con); WinHttpCloseHandle(ses); return false; }
 
     WinHttpAddRequestHeaders(req, L"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                                  L"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
                              (DWORD)-1L, WINHTTP_ADDREQ_FLAG_ADD);
-    // 网易云需要 Referer
-    if (url.find("163.com") != std::string::npos)
-        WinHttpAddRequestHeaders(req, L"Referer: https://music.163.com/",
-                                 (DWORD)-1L, WINHTTP_ADDREQ_FLAG_ADD);
+
+    // ⚠ 酷狗 mobiles.kugou.com API 网关【强制】要求客户端标识【请求头】:
+    //     mid / dfid / clienttime  —— 缺任意一个一律回 {"errcode":1001,"status":0}
+    //   (实测: 只带 UA 不行、只带 Referer 不行; 这三个头与 query 里的
+    //    mid=uuid=clienttime 保持一致即可。UA 只要非空就通过。)
+    if (url.find("kugou.com") != std::string::npos &&
+        url.find("mobiles.kugou.com") != std::string::npos) {
+        std::string ts = std::to_string((long long)
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        std::wstring wmid = L"mid: " + ToWide(ts);
+        std::wstring wct  = L"clienttime: " + ToWide(ts);
+        WinHttpAddRequestHeaders(req, wmid.c_str(), (DWORD)-1L, WINHTTP_ADDREQ_FLAG_ADD);
+        WinHttpAddRequestHeaders(req, wct.c_str(),  (DWORD)-1L, WINHTTP_ADDREQ_FLAG_ADD);
+        WinHttpAddRequestHeaders(req, L"dfid: -",   (DWORD)-1L, WINHTTP_ADDREQ_FLAG_ADD);
+    }
 
     bool ok = WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                                  WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&

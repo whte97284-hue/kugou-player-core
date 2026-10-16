@@ -99,6 +99,10 @@ public:
     bool FetchKugou(const std::string& id, PlaylistResult& out) const;
     bool FetchNetease(const std::string& id, PlaylistResult& out) const;
 
+    // 酷狗新版 global_collection_id 形态 (collection_3_xxx_n_0)
+    //   走 mobiles.kugou.com/api/v5/special/{info_v2,song_v2} + H5 签名
+    bool FetchKugouGcid(const std::string& gcid, PlaylistResult& out) const;
+
     // 默认 WinHTTP 实现 (与 LyricProvider::DefaultHttpGet 等价,可共享)
     static bool DefaultHttpGet(const std::string& url, std::string& body);
 

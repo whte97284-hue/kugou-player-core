@@ -71,6 +71,11 @@ int main(int argc, char** argv) {
         "https://m.kugou.com/share/zlist.html?listid=4761867",
         "https://www.kugou.com/share/xxxxx?specialid=4761867",
         "https://www.kugou.com/share/xxxxx?global_collection_id=collection_3_1127147424_165_0",
+        // ⚠ 新版分享链接: 同时含 listid=3 (列表类型, 误导) 和 global_collection_id (真 ID)
+        //   必须优先取 global_collection_id
+        "http://wwwapi.kugou.com/share/zlist.html?chain=3RB9v52G6V2&from=pcCode&global_collection_id=collection_3_1016644002_3_0&listid=3&share_type=collect&type=0&uid=1016644002",
+        // 短链 (需联网跟随 302)
+        "https://t1.kugou.com/3RB9v52G6V2",
         "https://music.163.com/playlist?id=7480897649&userid=123",
         "https://music.163.com/#/playlist?id=7480897649",
         "https://y.music.163.com/m/playlist?id=7480897649",
@@ -91,6 +96,8 @@ int main(int argc, char** argv) {
         for (int i = 1; i < argc; ++i) Dump(ArgToUtf8(argv[i]));
     } else {
         Dump("https://www.kugou.com/yy/special/single/1067062.html");
+        Dump("https://t1.kugou.com/3RB9v52G6V2");        // 新版短链 → gcid 全量
+        Dump("#40717681#");                              // 酷狗码 (应给明确提示)
         Dump("https://music.163.com/playlist?id=7480897649");
     }
     printf("\n");
