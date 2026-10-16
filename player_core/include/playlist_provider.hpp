@@ -14,6 +14,8 @@
 //  当前实现的平台:
 //    · Kugou   —— 酷狗。走网页版 yueku 页面内嵌的 global.data JSON (无需签名)
 //    · NetEase —— 网易云。两步式: playlist/detail 取 trackIds → song/detail 批量补全
+//    · QQMusic —— QQ音乐。单步式: musicu.fcg 的 uniform_get_Dissinfo 分页取全部曲目
+//                 (匿名免签名, 实测 GET 亦可, 无需 POST)
 //
 //  与 LyricProvider 的关系:
 //    · 复用同一套 HttpGetFn 钩子 / WinHTTP 默认实现
@@ -24,8 +26,8 @@ namespace playlist_core {
 
 // 单条曲目 (跨平台统一模型)
 struct PlaylistTrack {
-    std::string source;        // "kugou" / "netease"
-    std::string id;            // 平台内主键: 酷狗=hash / 网易云=歌曲数字 id
+    std::string source;        // "kugou" / "netease" / "qqmusic"
+    std::string id;            // 平台内主键: 酷狗=hash / 网易云=歌曲数字 id / QQ音乐=songmid
     std::wstring title;        // 歌名 (酷狗为 songname,干净无后缀)
     std::wstring artist;       // 歌手 (多人已按 " / " 拼接)
     std::wstring album;        // 专辑名 (可能为空)
@@ -37,6 +39,9 @@ struct PlaylistTrack {
     std::string kugou_audio_id;   // 酷狗 audio_id
     std::string kugou_album_id;   // 酷狗 album_id
     std::string netease_album_id; // 网易云专辑 id
+    std::string qq_media_mid;     // QQ音乐 media_mid (取解密 ekey 的入参, 见 file.media_mid)
+    std::string qq_album_mid;     // QQ音乐 album mid
+    int         qq_song_type = 0; // QQ音乐 songtype (0=普通, 1=伴唱等)
 };
 
 // 歌单元信息
@@ -66,7 +71,7 @@ struct PlaylistResult {
 using HttpGetFn = std::function<bool(const std::string& url, std::string& body)>;
 
 // 平台标识
-enum class Platform { Unknown, Kugou, NetEase };
+enum class Platform { Unknown, Kugou, NetEase, QQMusic };
 
 class PlaylistProvider {
 public:
@@ -98,6 +103,7 @@ public:
     // 各平台单独入口
     bool FetchKugou(const std::string& id, PlaylistResult& out) const;
     bool FetchNetease(const std::string& id, PlaylistResult& out) const;
+    bool FetchQQMusic(const std::string& id, PlaylistResult& out) const;
 
     // 酷狗新版 global_collection_id 形态 (collection_3_xxx_n_0)
     //   走 mobiles.kugou.com/api/v5/special/{info_v2,song_v2} + H5 签名

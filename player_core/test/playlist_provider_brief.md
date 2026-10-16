@@ -78,7 +78,7 @@ struct PlaylistResult {
 
 ---
 
-## 4. 输入形态（13 种实测通过）
+## 4. 输入形态（19 种实测通过）
 
 ### 酷狗
 ```
@@ -102,12 +102,25 @@ https://music.163.com/#/my/m/music/playlist?id=7480897649
 netease:7480897649                 ← 自定义 scheme
 ```
 
+### QQ音乐（2026-10-16 新增）
+```
+https://c6.y.qq.com/base/fcgi-bin/u?__=57XH6jdnq48F   ← 短链（需联网跟随 302×3）
+https://y.qq.com/n/ryqq_v2/playlist/8962418095        ← 新版网页版路径
+https://i.y.qq.com/n2/m/share/details/taoge.html?...&id=8962418095   ← H5 分享页
+https://i2.y.qq.com/n3/other/pages/details/playlist.html?...&id=...  ← H5 分享页
+qq:8962418095                      ← 自定义 scheme
+分享歌单《En》: https://c6.y.qq.com/... 快来听!     ← 整段分享文案（自动抠 URL）
+```
+
 ### 纯数字 ID
 ```
 7480897649
 ```
 ⚠ **纯数字无法判断平台**。此时 `ParseInput` 返回 `Platform::Unknown` + 填入 id。
 前端需要**让用户选平台**，然后调 `ParseAs(Platform::NetEase, id)`。
+
+✅ **整段分享文案**：从 App 里复制出来的文本往往是一整句（含书名号、感叹号），
+`ParseInput` 会**先抠出第一个 http(s):// 开头的连续串**再解析，无需前端预处理。
 
 ---
 
@@ -250,6 +263,52 @@ KEY = "NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt"     ← js 里的公开字面量
    → songs[].name / ar[].name / al.name / al.id / dt / id
 ```
 
+### QQ音乐 —— 单步式，匿名免签名（2026-10-16 实测）
+
+```
+GET https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&data={URL编码的JSON}
+
+data = {
+  "comm":  { "ct": 24, "cv": 0 },
+  "req_1": {
+    "module": "music.srfDissInfo.aiDissInfo",
+    "method": "uniform_get_Dissinfo",
+    "param": {
+      "disstid":     {歌单ID},
+      "song_begin":  N,          ← 分页起点
+      "song_num":    300,        ← 实测 300 稳定；1000 会被服务端自行截到 ~997
+      "enc_host_uin": "",
+      "tag":      1,
+      "userinfo": 1
+    }
+  }
+}
+```
+
+**响应**：
+```
+req_1.data.dirinfo.{ title, desc, picurl, listennum }
+req_1.data.total_song_num              ← 标称总数（有下架曲目时 > 实际）
+req_1.data.songlist[]                  每首:
+    name             歌名（另有 title 同值）
+    singer[].name    歌手（多人，需按 " / " 拼接）
+    mid              ★ songmid（QQ音乐主键，**字段名是 mid 不是 songmid**）
+    interval         ★ 时长（**【秒】！** 与网易云的毫秒 dt 不同）
+    album.{name,mid} 专辑
+    file.media_mid   ★ 取解密 ekey 的入参（见 QQMUSIC_QMC2_VIP_FEASIBILITY.md）
+    songtype         歌曲类型（0=普通）
+```
+
+**⚠ 实测关键结论**：
+- **GET 亦可**：官方虽走 POST，但 `GET + query`（`format=json&data={json}`）同样返回 200 与完整数据
+  → **本内核可复用现有 GET-only 钩子，无需新增 POST 通道**
+- **无需签名、无需登录、无需 ekey**（与解密链路完全独立，别混淆）
+- **分页**：`song_begin` 递增，**步长用上次实际返回条数**（不是固定 300），并以 `mid` 去重
+- **短链** `c6.y.qq.com/base/fcgi-bin/u?__=xxx` → **302 ×3** →
+  `i.y.qq.com/n2/m/share/details/taoge.html?...&id={id}` → `y.qq.com/n/ryqq_v2/playlist/{id}`
+- `*.y.qq.com` 各子域**共用证书**，不会触发 WinHTTP 12175（酷狗 CDN 才会）
+- `Referer` 传 `https://y.qq.com/`（同网易云一样，**必须在 `WinHttpOpenRequest` 第 5 参传入**）
+
 ---
 
 ## 7. 实测结果（全通）
@@ -263,8 +322,11 @@ KEY = "NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt"     ← js 里的公开字面量
 | 网易云 | 7480897649 随便听听 | 123 | **123** |
 | 网易云 | 3778678 热歌榜 | 200 | **200** |
 | 网易云 | 19723756 飙升榜 | 100 | **100** |
+| QQ音乐 | 8962418095 En（短链 `c6.y.qq.com/base/fcgi-bin/u?__=57XH6jdnq48F`） | 1131 | **1129** |
 
-字段完整度：歌名/歌手/时长 **100%**；专辑 98%~100%（酷狗新版无专辑名，见 §6）。
+字段完整度：歌名/歌手 **100%**；
+时长 酷狗/网易云 100%、QQ音乐 1127/1129；
+专辑 网易云 98%~100%、酷狗老版 100%（新版无专辑名）、QQ音乐 1114/1129。
 
 ---
 

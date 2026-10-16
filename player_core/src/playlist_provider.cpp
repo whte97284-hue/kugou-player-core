@@ -34,6 +34,25 @@
 //        → playlist.name / trackCount / trackIds[].id   (注意: trackIds 元素是对象)
 //     2) GET  http://music.163.com/api/song/detail/?id={csv}&ids=%5B{csv}%5D
 //        → songs[].name / ar[].name / dt / id / al.id
+//
+//   QQ音乐 (匿名, 无需签名 / 无需登录 / 无需 ekey):
+//     GET https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&data={URL编码的JSON}
+//       data = {"comm":{"ct":24,"cv":0},
+//               "req_1":{"module":"music.srfDissInfo.aiDissInfo",
+//                        "method":"uniform_get_Dissinfo",
+//                        "param":{"disstid":{歌单ID},"song_begin":N,"song_num":300,
+//                                 "enc_host_uin":"","tag":1,"userinfo":1}}}
+//     → req_1.data.songlist[]  每首含 name / singer[].name / mid(songmid) /
+//                               interval(【秒】!) / album.{name,mid} / file.media_mid
+//       req_1.data.dirinfo.{title,desc,picurl,listennum}  + total_song_num
+//     ⚠ 实测 GET 亦可 (官方虽走 POST, 但 GET+query 同样返回 200 与完整数据),
+//       因此本内核可复用现有 GET-only 钩子, 无需新增 POST 通道。
+//     ⚠ interval 单位是【秒】(网易云 dt 是毫秒, 勿混)。
+//     ⚠ 分页用 song_begin 递增 (步长=上次实际返回条数), 并以 mid 去重。
+//     短链: c6.y.qq.com/base/fcgi-bin/u?__=xxx → 302 ×3 →
+//              i.y.qq.com/n2/m/share/details/taoge.html?...&id={id} →
+//              y.qq.com/n/ryqq_v2/playlist/{id}
+//       ⚠ *.y.qq.com 各子域共用证书, 不会触发 WinHTTP 12175。
 // ============================================================================
 #include "../include/playlist_provider.hpp"
 
@@ -52,6 +71,7 @@
 #include <map>
 #include <memory>
 #include <utility>
+#include <set>
 #include <chrono>
 
 // windows.h 会把 min/max 定义成宏, 与 std::min/std::max 冲突
@@ -371,6 +391,7 @@ const char* PlatformName(Platform p) {
     switch (p) {
         case Platform::Kugou:   return "kugou";
         case Platform::NetEase: return "netease";
+        case Platform::QQMusic: return "qqmusic";
         default:                return "unknown";
     }
 }
@@ -378,6 +399,7 @@ const char* PlatformName(Platform p) {
 Platform PlatformFromName(const std::string& name) {
     if (name == "kugou" || name == "kg")     return Platform::Kugou;
     if (name == "netease" || name == "wyy" || name == "163") return Platform::NetEase;
+    if (name == "qq" || name == "qqmusic" || name == "qqm")  return Platform::QQMusic;
     return Platform::Unknown;
 }
 
@@ -397,6 +419,11 @@ Platform PlaylistProvider::DetectPlatform(const std::string& input) {
     if (low.find("163cn.tv") != std::string::npos)      return Platform::NetEase;
     if (low.find("y.music.163") != std::string::npos)   return Platform::NetEase;
     if (low.find("netease") != std::string::npos)       return Platform::NetEase;
+    // QQ音乐: 域名众多, 统一用 "qq.com" 兜底
+    //   y.qq.com(网页版) / c6.y.qq.com(短链) / i.y.qq.com · i2.y.qq.com(H5) / u.y.qq.com(API)
+    if (low.find("y.qq.com") != std::string::npos)      return Platform::QQMusic;
+    if (low.find("qq.com") != std::string::npos)        return Platform::QQMusic;
+    if (low.find("qqmusic") != std::string::npos)       return Platform::QQMusic;
     return Platform::Unknown;
 }
 
@@ -537,7 +564,42 @@ bool PlaylistProvider::ParseInput(const std::string& raw, Platform& plat, std::s
         return false;
     }
 
-    // 4) 自定义 scheme: "kugou:1067062" / "netease:7480897649"
+    // 4) QQ音乐形态
+    if (low.find("qq.com") != std::string::npos || low.find("qqmusic") != std::string::npos) {
+        plat = Platform::QQMusic;
+        std::smatch m;
+
+        // ---- 4a) 短链: c6.y.qq.com/base/fcgi-bin/u?__=xxx ----
+        //   短链里没有歌单号, 必须联网跟随 302 (实测 3 跳) 拿最终 URL:
+        //     ... -> i.y.qq.com/n2/m/share/details/taoge.html?...&id=8962418095
+        //     ... -> y.qq.com/n/ryqq_v2/playlist/8962418095
+        //   把完整 URL 编码进 id (前缀 "shorturl:"), 由 ResolveInput 处理。
+        if (low.find("/base/fcgi-bin/u") != std::string::npos ||
+            low.find("/fcgi-bin/u") != std::string::npos) {
+            id = "shorturl:" + input;
+            return true;
+        }
+
+        // ---- 4b) 新版网页版路径 /n/ryqq_v2/playlist/8962418095 ----
+        std::regex re_pl(R"(/playlist/(\d+))");
+        if (std::regex_search(input, m, re_pl)) { id = m[1].str(); return true; }
+
+        // ---- 4c) H5 分享页 taoge.html?...&id=8962418095 ----
+        for (const char* key : { "id", "disstid", "dissid" }) {
+            std::string v = ExtractQuery(input, key);
+            if (!v.empty()) {
+                std::regex re_num(R"(^(\d+)$)");
+                if (std::regex_match(v, m, re_num)) { id = m[1].str(); return true; }
+            }
+        }
+
+        // ---- 4d) 兜底: 抓较长的纯数字段 ----
+        std::regex re_last(R"((\d{6,}))");
+        if (std::regex_search(input, m, re_last)) { id = m[1].str(); return true; }
+        return false;
+    }
+
+    // 5) 自定义 scheme: "kugou:1067062" / "netease:7480897649" / "qq:8962418095"
     size_t colon = input.find(':');
     if (colon != std::string::npos && colon < 10) {
         std::string pfx = low.substr(0, colon);
@@ -546,6 +608,9 @@ bool PlaylistProvider::ParseInput(const std::string& raw, Platform& plat, std::s
         }
         if (pfx == "netease" || pfx == "wyy" || pfx == "163") {
             plat = Platform::NetEase; id = input.substr(colon + 1); return !id.empty();
+        }
+        if (pfx == "qq" || pfx == "qqmusic" || pfx == "qqm") {
+            plat = Platform::QQMusic; id = input.substr(colon + 1); return !id.empty();
         }
     }
 
@@ -658,6 +723,27 @@ bool PlaylistProvider::ResolveInput(const std::string& input, Platform& plat, st
     }
 
     // ---- 短链: 联网跟随重定向, 从最终 URL 里取真实标识 ----
+
+    // QQ音乐短链 (c6.y.qq.com/base/fcgi-bin/u?__=xxx): 实测 3 跳
+    //   -> i.y.qq.com/n2/m/share/details/taoge.html?...&id=8962418095
+    //   -> y.qq.com/n/ryqq_v2/playlist/8962418095
+    // ⚠ *.y.qq.com 各子域共用证书, 不会触发 WinHTTP 12175
+    if (id.compare(0, 9, "shorturl:") == 0) {
+        std::string url = id.substr(9);
+        std::string fin, rerr;
+        if (!FollowRedirect(url, fin, &rerr, 8)) {
+            if (error) *error = "QQ音乐短链解析失败: " + rerr;
+            return false;
+        }
+        Platform p2 = Platform::Unknown; std::string i2;
+        if (!ParseInput(fin, p2, i2) || i2.empty() || i2.compare(0, 9, "shorturl:") == 0) {
+            if (error) *error = "QQ音乐短链跳转后仍无法识别歌单 ID";
+            return false;
+        }
+        plat = p2; id = i2;
+        return true;
+    }
+
     if (id.compare(0, 6, "short:") == 0) {
         std::string code = id.substr(6);
         std::string url = "https://t1.kugou.com/" + code;
@@ -1208,6 +1294,153 @@ bool PlaylistProvider::FetchNetease(const std::string& id, PlaylistResult& out) 
 }
 
 // ============================================================================
+//  QQ音乐: musicu.fcg 单步式, 匿名免签名, song_begin 分页
+// ============================================================================
+
+bool PlaylistProvider::FetchQQMusic(const std::string& id, PlaylistResult& out) const {
+    out.meta.source = "qqmusic";
+    out.meta.id = id;
+
+    bool all_digit = !id.empty() &&
+        std::all_of(id.begin(), id.end(), [](char c) { return c >= '0' && c <= '9'; });
+    if (!all_digit) { out.error = "QQ音乐歌单 ID 非法 (应为纯数字)"; return false; }
+
+    std::vector<PlaylistTrack> tracks;
+    std::set<std::string> seen;
+    const int kPage = 300;      // 实测 300 稳定; 1000 亦可但会被服务端自行截到 ~997
+    int begin = 0;
+    int total = 0;
+    bool first = true;
+    bool got_any_page = false;
+    int guard = 0;
+
+    while (guard++ < 50) {
+        // 组装 musicu.fcg 的 data JSON (紧凑无空格, 减少 URL 长度)
+        std::string req = "{\"comm\":{\"ct\":24,\"cv\":0},\"req_1\":{"
+            "\"module\":\"music.srfDissInfo.aiDissInfo\","
+            "\"method\":\"uniform_get_Dissinfo\","
+            "\"param\":{\"disstid\":" + id + ",\"enc_host_uin\":\"\","
+            "\"tag\":1,\"userinfo\":1,"
+            "\"song_begin\":" + std::to_string(begin) + ","
+            "\"song_num\":" + std::to_string(kPage) + "}}}";
+
+        std::string url = "https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&data=" +
+                          UrlEncode(req);
+        std::string body;
+        if (!http_(url, body)) {
+            if (first) { out.error = "QQ音乐歌单请求失败 (网络或接口变更)"; return false; }
+            break;   // 后续页失败不致命, 保留已拿到的部分
+        }
+        got_any_page = true;
+
+        JsonParser jp(body);
+        JValPtr root = jp.Parse();
+        if (!root || !root->IsObj()) {
+            if (first) { out.error = "QQ音乐歌单响应解析失败"; return false; }
+            break;
+        }
+        const JVal* r1 = root->Get("req_1");
+        if (!r1 || !r1->IsObj()) {
+            if (first) { out.error = "QQ音乐响应缺少 req_1 (接口变更?)"; return false; }
+            break;
+        }
+        double code = JNum(r1->Get("code"));
+        const JVal* data = r1->Get("data");
+        if (!data || !data->IsObj()) {
+            if (first) {
+                out.error = (code == 0)
+                    ? "QQ音乐未返回歌单数据 (可能无版权或接口变更)"
+                    : "QQ音乐歌单不可访问 (code=" + std::to_string((long long)code) + ")";
+                return false;
+            }
+            break;
+        }
+
+        if (first) {
+            const JVal* di = data->Get("dirinfo");
+            if (di && di->IsObj()) {
+                out.meta.name        = StripHtml(JStr(di->Get("title")));
+                out.meta.description = StripHtml(JStr(di->Get("desc")));
+                out.meta.cover_url   = JStrRaw(di->Get("picurl"));
+            }
+            total = (int)JNum(data->Get("total_song_num"));
+            out.meta.total = total;
+        }
+
+        const JVal* sl = data->Get("songlist");
+        if (!sl || !sl->IsArr() || sl->Size() == 0) break;
+
+        int new_cnt = 0;
+        for (size_t k = 0; k < sl->Size(); ++k) {
+            const JVal* s = sl->At(k);
+            if (!s || !s->IsObj()) continue;
+
+            // mid 即 songmid, 是 QQ音乐侧的主键
+            std::string mid = JStrRaw(s->Get("mid"));
+            if (mid.empty()) continue;
+            if (seen.count(mid)) continue;
+            seen.insert(mid);
+            ++new_cnt;
+
+            PlaylistTrack t;
+            t.source = "qqmusic";
+            t.id     = mid;
+
+            std::wstring nm = JStr(s->Get("name"));
+            if (nm.empty()) nm = JStr(s->Get("title"));
+            t.title = StripHtml(nm);
+
+            const JVal* sg = s->Get("singer");
+            if (sg && sg->IsArr()) {
+                std::wstring a;
+                for (size_t j = 0; j < sg->Size(); ++j) {
+                    const JVal* one = sg->At(j);
+                    if (!one) continue;
+                    std::wstring xn = JStr(one->Get("name"));
+                    if (xn.empty()) continue;
+                    if (!a.empty()) a += L" / ";
+                    a += xn;
+                }
+                t.artist = a;
+            }
+
+            const JVal* al = s->Get("album");
+            if (al && al->IsObj()) {
+                t.album        = JStr(al->Get("name"));
+                t.qq_album_mid = JStrRaw(al->Get("mid"));
+            }
+
+            // ⚠ interval 单位是【秒】(勿与网易云的毫秒 dt 混淆)
+            double sec = JNum(s->Get("interval"));
+            if (sec > 0) t.duration_ms = (uint32_t)(long long)(sec * 1000.0 + 0.5);
+
+            const JVal* fl = s->Get("file");
+            if (fl && fl->IsObj()) t.qq_media_mid = JStrRaw(fl->Get("media_mid"));
+
+            if (s->Get("songtype")) t.qq_song_type = (int)JNum(s->Get("songtype"));
+
+            if (!t.title.empty()) tracks.push_back(std::move(t));
+        }
+
+        if (new_cnt == 0) break;                  // 无新增 → 已到尾部
+        begin += (int)sl->Size();                 // 按【实际返回条数】推进, 不用 kPage
+        if (total > 0 && begin >= total) break;
+    }
+
+    if (!got_any_page) { out.error = "QQ音乐歌单请求失败 (网络或接口变更)"; return false; }
+    if (tracks.empty()) { out.error = "歌单为空或全部条目无效"; return false; }
+
+    out.tracks.swap(tracks);
+    out.with_duration = 0; out.with_album = 0;
+    for (const auto& t : out.tracks) {
+        if (t.duration_ms > 0) ++out.with_duration;
+        if (!t.album.empty())  ++out.with_album;
+    }
+    out.ok = true;
+    return true;
+}
+
+// ============================================================================
 //  主入口
 // ============================================================================
 
@@ -1228,6 +1461,7 @@ PlaylistResult PlaylistProvider::ParseAs(Platform plat, const std::string& id) c
     switch (plat) {
         case Platform::Kugou:   FetchKugou(id, r); break;
         case Platform::NetEase: FetchNetease(id, r); break;
+        case Platform::QQMusic: FetchQQMusic(id, r); break;
         default:
             r.error = "平台未指定或不支持";
             break;
@@ -1296,9 +1530,13 @@ bool PlaylistProvider::DefaultHttpGet(const std::string& url, std::string& body)
     // ⚠ Referer 必须在 WinHttpOpenRequest 时传入:
     //   若在此传 WINHTTP_NO_REFERER, 后续 WinHttpAddRequestHeaders("Referer: ...")
     //   【不会生效】(WinHTTP 认为 Referer 槽位已占)。
-    const wchar_t* ref = (url.find("163.com") != std::string::npos)
-                             ? L"https://music.163.com/"
-                             : WINHTTP_NO_REFERER;
+    const wchar_t* ref = WINHTTP_NO_REFERER;
+    if (url.find("163.com") != std::string::npos) {
+        ref = L"https://music.163.com/";
+    } else if (url.find("y.qq.com") != std::string::npos ||
+               url.find("qq.com") != std::string::npos) {
+        ref = L"https://y.qq.com/";
+    }
 
     HINTERNET req = WinHttpOpenRequest(con, L"GET", full_path.c_str(), nullptr,
         ref, WINHTTP_DEFAULT_ACCEPT_TYPES, https ? WINHTTP_FLAG_SECURE : 0);
