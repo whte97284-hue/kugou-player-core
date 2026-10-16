@@ -93,7 +93,9 @@ Item {
     // 只在换封面时渲染一次 (Backdrop 自带图层),滚动时只是平移,不逐帧重绘
     Item {
         id: wash
-        width: page.width
+        // 向左铺到窗口边缘 (侧栏底下):页面本身从侧栏右侧开始,只铺页面宽度时侧栏处会有一道硬边
+        x: -Theme.navWidth
+        width: page.width + Theme.navWidth
         height: list.headerItem ? list.headerItem.height + 180 : 0
         y: list.headerItem ? list.headerItem.y - list.contentY : 0
         visible: y + height > 0 && albumTracks.cover.length > 0

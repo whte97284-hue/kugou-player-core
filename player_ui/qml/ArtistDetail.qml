@@ -57,7 +57,9 @@ Item {
     // ---- 头部底色:代表专辑的封面模糊铺在头部后面,往下渐隐,随列表一起滚走 ----
     Item {
         id: wash
-        width: page.width
+        // 向左铺到窗口边缘 (侧栏底下):页面本身从侧栏右侧开始,只铺页面宽度时侧栏处会有一道硬边
+        x: -Theme.navWidth
+        width: page.width + Theme.navWidth
         height: list.headerItem ? list.headerItem.heroHeight + 180 : 0
         y: list.headerItem ? list.headerItem.y - list.contentY : 0
         visible: y + height > 0 && !!page.info.cover
