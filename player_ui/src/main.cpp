@@ -787,6 +787,7 @@ int main(int argc, char* argv[]) {
     const double scale = SettingsService::StartupScale();
     if (scale > 0.5 && scale < 3.0 && std::abs(scale - 1.0) > 0.01 && qEnvironmentVariableIsEmpty("QT_SCALE_FACTOR"))
         qputenv("QT_SCALE_FACTOR", QByteArray::number(scale, 'f', 2));
+    FrameDiag::ApplyStartupOptions();
     TimedApp app(argc, argv);
     FrameDiag::CaptureGraphicsInfo();
     // 全局线程池只跑提取封面主色、加载歌词、统计缓存这类零星后台任务,默认按逻辑核数 (可达 20) 铺线程没有必要

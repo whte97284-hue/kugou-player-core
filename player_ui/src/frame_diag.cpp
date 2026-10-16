@@ -4,25 +4,80 @@
 #include <QDir>
 #include <QGuiApplication>
 #include <QLoggingCategory>
+#include <QRegularExpression>
 #include <QScreen>
 #include <QSGRendererInterface>
 #include <QStandardPaths>
 #include <QSysInfo>
+#include <QSettings>
+#include <QThread>
+#include <QCoreApplication>
 #include <algorithm>
 #include <atomic>
+#include <mutex>
 
 namespace {
 QStringList g_graphicsLines;
 // Qt 动画驱动的模式:vsync (每帧按一个刷新周期推进动画时间,最顺) / timer (按挂钟时间推进,会抖)。
 // 连续几帧超过 1.25 个刷新周期 (按主屏刷新率算) 它就切到 timer,要连续 10 帧准时才切回来
-std::atomic<int> g_driverTimer{0};
+// 线程化渲染循环里有两个驱动:界面线程的 (NumberAnimation、Behavior、FrameAnimation 等) 和
+// 渲染线程的 (OpacityAnimator / ScaleAnimator / UniformAnimator 等 Animator)。日志不带线程信息,按发出日志的线程区分
+std::atomic<int> g_driverTimer{0};     // 界面线程驱动
+std::atomic<int> g_rtDriverTimer{0};   // 渲染线程驱动
 std::atomic<int> g_driverSwitches{0};
+std::atomic<int> g_rtDriverSwitches{0};
+bool OnGuiThread() { return QCoreApplication::instance() && QThread::currentThread() == QCoreApplication::instance()->thread(); }
 QtMessageHandler g_prevHandler = nullptr;
 
+// Qt 自己的逐帧耗时日志 (qt.scenegraph.time.renderloop,只在诊断开着时打开),整毫秒精度:
+//  界面线程:polish (布局 / 建代理) · animations (推进动画、跑绑定) · blockedForSync (等渲染线程同步)
+//  渲染线程:sync (把场景同步进渲染树、上传纹理) · render (录制命令) · swap (present,含等垂直同步)
+struct FrameParts {
+    std::mutex m;
+    std::vector<int> polish, anim, blocked, sync, render, swap;
+} g_parts;
+const QRegularExpression& GuiRe() {
+    static const QRegularExpression re(QStringLiteral("polish=(\\d+) ms.*blockedForSync=(\\d+) ms, animations=(\\d+)"));
+    return re;
+}
+const QRegularExpression& RtRe() {
+    static const QRegularExpression re(QStringLiteral("frame rendered in \\d+ ?ms, sync=(\\d+), render=(\\d+), swap=(\\d+)"));
+    return re;
+}
+
 void CaptureHandler(QtMsgType type, const QMessageLogContext& ctx, const QString& msg) {
+    if (ctx.category && qstrcmp(ctx.category, "qt.scenegraph.time.renderloop") == 0) {
+        if (msg.contains(QLatin1String("Frame prepared"))) {
+            const auto m = GuiRe().match(msg);
+            if (m.hasMatch()) {
+                std::lock_guard<std::mutex> l(g_parts.m);
+                g_parts.polish.push_back(m.captured(1).toInt());
+                g_parts.blocked.push_back(m.captured(2).toInt());
+                g_parts.anim.push_back(m.captured(3).toInt());
+            }
+        } else if (msg.contains(QLatin1String("frame rendered"))) {
+            const auto m = RtRe().match(msg);
+            if (m.hasMatch()) {
+                std::lock_guard<std::mutex> l(g_parts.m);
+                g_parts.sync.push_back(m.captured(1).toInt());
+                g_parts.render.push_back(m.captured(2).toInt());
+                g_parts.swap.push_back(m.captured(3).toInt());
+            }
+        }
+        return;
+    }
     if (ctx.category && qstrcmp(ctx.category, "qt.scenegraph.general") == 0) {
-        if (msg.contains(QLatin1String("switched to timer mode"))) { g_driverTimer = 1; ++g_driverSwitches; return; }
-        if (msg.contains(QLatin1String("switched to vsync mode"))) { g_driverTimer = 0; ++g_driverSwitches; return; }
+        const bool gui = OnGuiThread();
+        if (msg.contains(QLatin1String("switched to timer mode"))) {
+            (gui ? g_driverTimer : g_rtDriverTimer) = 1;
+            ++(gui ? g_driverSwitches : g_rtDriverSwitches);
+            return;
+        }
+        if (msg.contains(QLatin1String("switched to vsync mode"))) {
+            (gui ? g_driverTimer : g_rtDriverTimer) = 0;
+            ++(gui ? g_driverSwitches : g_rtDriverSwitches);
+            return;
+        }
         if (msg.contains(QLatin1String("using walltime"))) g_driverTimer = 1;
         if (g_graphicsLines.size() < 40) g_graphicsLines << msg.trimmed();
         return; // 启动信息只收进诊断,不往控制台刷
@@ -47,6 +102,27 @@ QString ApiName(QSGRendererInterface::GraphicsApi api) {
     }
 }
 } // namespace
+
+void FrameDiag::ApplyStartupOptions() {
+    const QSettings s;
+    const QString rhi = s.value(QStringLiteral("render/rhi")).toString();
+    if (!rhi.isEmpty() && qEnvironmentVariableIsEmpty("QSG_RHI_BACKEND")) qputenv("QSG_RHI_BACKEND", rhi.toLatin1());
+    if (s.value(QStringLiteral("render/simpleDriver"), false).toBool() && qEnvironmentVariableIsEmpty("QSG_USE_SIMPLE_ANIMATION_DRIVER"))
+        qputenv("QSG_USE_SIMPLE_ANIMATION_DRIVER", "1");
+}
+
+QString FrameDiag::rhiChoice() const { return QSettings().value(QStringLiteral("render/rhi")).toString(); }
+void FrameDiag::setRhiChoice(const QString& v) {
+    if (v == rhiChoice()) return;
+    QSettings().setValue(QStringLiteral("render/rhi"), v);
+    emit renderOptionsChanged();
+}
+bool FrameDiag::simpleDriver() const { return QSettings().value(QStringLiteral("render/simpleDriver"), false).toBool(); }
+void FrameDiag::setSimpleDriver(bool v) {
+    if (v == simpleDriver()) return;
+    QSettings().setValue(QStringLiteral("render/simpleDriver"), v);
+    emit renderOptionsChanged();
+}
 
 void FrameDiag::CaptureGraphicsInfo() {
     QLoggingCategory::setFilterRules(QStringLiteral("qt.scenegraph.general=true"));
@@ -114,6 +190,13 @@ void FrameDiag::setEnabled(bool on) {
     recent_.clear();
     lastSwap_ = 0;
     stallMax_ = stallWindowMax_ = secondStall_ = 0;
+    QLoggingCategory::setFilterRules(on ? QStringLiteral("qt.scenegraph.general=true\nqt.scenegraph.time.renderloop=true")
+                                        : QStringLiteral("qt.scenegraph.general=true"));
+    {
+        std::lock_guard<std::mutex> l(g_parts.m);
+        g_parts.polish.clear(); g_parts.anim.clear(); g_parts.blocked.clear();
+        g_parts.sync.clear(); g_parts.render.clear(); g_parts.swap.clear();
+    }
     if (on) {
         lastProbe_ = clock_.nsecsElapsed();
         probe_.start();
@@ -123,6 +206,14 @@ void FrameDiag::setEnabled(bool on) {
             QString head = QStringLiteral("\n==== %1  %2  Qt %3\n").arg(QDateTime::currentDateTime().toString(Qt::ISODate),
                                                                         QSysInfo::prettyProductName(), QString::fromLatin1(qVersion()));
             head += QStringLiteral("graphics: %1\n").arg(graphics());
+            head += QStringLiteral("env: QSG_RHI_BACKEND=%1 QSG_USE_SIMPLE_ANIMATION_DRIVER=%2 QSG_RENDER_LOOP=%3\n")
+                        .arg(qEnvironmentVariable("QSG_RHI_BACKEND"), qEnvironmentVariable("QSG_USE_SIMPLE_ANIMATION_DRIVER"),
+                             qEnvironmentVariable("QSG_RENDER_LOOP"));
+            head += QStringLiteral("windows: %1 visible\n").arg([] {
+                int n = 0;
+                for (QWindow* w : QGuiApplication::topLevelWindows()) n += w->isVisible();
+                return n;
+            }());
             for (const QString& l : g_graphicsLines) head += QStringLiteral("  sg: %1\n").arg(l);
             if (window_ && window_->screen())
                 head += QStringLiteral("screen: %1  %2 Hz  dpr %3\n").arg(window_->screen()->name())
@@ -130,7 +221,7 @@ void FrameDiag::setEnabled(bool on) {
             for (const QScreen* sc : QGuiApplication::screens())
                 head += QStringLiteral("  monitor %1%2: %3 Hz %4x%5\n").arg(sc->name(), sc == QGuiApplication::primaryScreen() ? " (primary)" : "")
                             .arg(sc->refreshRate()).arg(sc->size().width()).arg(sc->size().height());
-            head += QStringLiteral("time      fps  p50   p99   max   janks render gui_stall  state\n");
+            head += QStringLiteral("time      fps  p50   p99   max   janks render gui_stall  [max ms: polish anim | sync render swap]  state\n");
             log_.write(head.toUtf8());
             log_.flush();
         }
@@ -194,6 +285,8 @@ void FrameDiag::publish() {
     s["render"] = render.empty() ? 0.0 : Pct(render, 0.9);
     s["timerMode"] = g_driverTimer.load() != 0;
     s["switches"] = g_driverSwitches.load();
+    s["rtTimerMode"] = g_rtDriverTimer.load() != 0;
+    s["rtSwitches"] = g_rtDriverSwitches.load();
     const QScreen* primary = QGuiApplication::primaryScreen();
     s["primaryHz"] = primary ? primary->refreshRate() : 0.0;
     stats_ = s;
@@ -219,8 +312,18 @@ void FrameDiag::publish() {
             }
         }
         if (window_ && !window_->isActive()) st << QStringLiteral("inactive");
-        if (g_driverTimer.load()) st << QStringLiteral("DRIVER=timer");
-        const QString line = QStringLiteral("%1 %2 %3 %4 %5 %6 %7 %8  %9\n")
+        if (g_driverTimer.load()) st << QStringLiteral("GUI_DRIVER=timer");
+        if (g_rtDriverTimer.load()) st << QStringLiteral("RT_DRIVER=timer");
+        QString parts;
+        {
+            std::lock_guard<std::mutex> l(g_parts.m);
+            auto mx = [](const std::vector<int>& v) { return v.empty() ? 0 : *std::max_element(v.begin(), v.end()); };
+            parts = QStringLiteral("[%1 %2 | %3 %4 %5]").arg(mx(g_parts.polish), 2).arg(mx(g_parts.anim), 2)
+                        .arg(mx(g_parts.sync), 2).arg(mx(g_parts.render), 2).arg(mx(g_parts.swap), 2);
+            g_parts.polish.clear(); g_parts.anim.clear(); g_parts.blocked.clear();
+            g_parts.sync.clear(); g_parts.render.clear(); g_parts.swap.clear();
+        }
+        const QString line = QStringLiteral("%1 %2 %3 %4 %5 %6 %7 %8  %10  %9\n")
             .arg(QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss")))
             .arg(second_.size(), 4)
             .arg(Pct(second_, 0.5), 5, 'f', 1)
@@ -229,7 +332,7 @@ void FrameDiag::publish() {
             .arg(j, 5)
             .arg(Pct(secondRender_, 0.9), 6, 'f', 1)
             .arg(secondStall_, 8, 'f', 1)
-            .arg(st.join(' '));
+            .arg(st.join(' '), parts);
         log_.write(line.toUtf8());
         log_.flush();
     }

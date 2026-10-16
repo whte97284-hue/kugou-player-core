@@ -26,10 +26,20 @@ class FrameDiag : public QObject {
     Q_PROPERTY(QString logPath READ logPath CONSTANT)
     // 由 QML 绑定进来的状态,只用于记日志
     Q_PROPERTY(QVariantMap state READ state WRITE setState)
+    // 启动参数 (下次启动生效,便于对比):图形接口 (空 = 默认 / d3d11 / d3d12 / opengl / vulkan)、
+    // Qt 的「简单动画驱动」(始终按挂钟推进,不在两种模式间切换)
+    Q_PROPERTY(QString rhiChoice READ rhiChoice WRITE setRhiChoice NOTIFY renderOptionsChanged)
+    Q_PROPERTY(bool simpleDriver READ simpleDriver WRITE setSimpleDriver NOTIFY renderOptionsChanged)
 public:
     explicit FrameDiag(QObject* parent = nullptr);
     // 在 QGuiApplication 创建之后、窗口创建之前调用:打开 scenegraph 启动信息并截获它
     static void CaptureGraphicsInfo();
+    // 在 QGuiApplication 创建之前调用:按保存的启动参数设置环境变量 (用户自己设了环境变量时不覆盖)
+    static void ApplyStartupOptions();
+    QString rhiChoice() const;
+    void setRhiChoice(const QString& v);
+    bool simpleDriver() const;
+    void setSimpleDriver(bool v);
 
     void attach(QQuickWindow* window);
     bool enabled() const { return enabled_; }
@@ -44,6 +54,7 @@ public:
 signals:
     void enabledChanged();
     void statsChanged();
+    void renderOptionsChanged();
 
 private:
     void tick();        // 2ms:界面线程迟到量

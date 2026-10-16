@@ -1026,7 +1026,8 @@ Window {
                       + (Math.abs((diag.st.primaryHz || 0) - (diag.st.hz || 0)) > 1 ? " (主屏 " + Math.round(diag.st.primaryHz) + " Hz)" : "")
                       + "  ·  实测 " + (diag.st.p50 > 0 ? Math.round(1000 / diag.st.p50) : 0)
                       + " Hz  ·  录制 " + (diag.st.render || 0).toFixed(1) + " ms  ·  界面线程阻塞 " + Math.round(diag.st.stall || 0) + " ms"
-                      + "\n动画驱动 " + (diag.st.timerMode ? "计时器模式 (会抖)" : "垂直同步模式") + "  ·  切换 " + (diag.st.switches || 0) + " 次"
+                      + "\n界面线程动画驱动 " + (diag.st.timerMode ? "计时器模式" : "垂直同步") + " (切换 " + (diag.st.switches || 0) + " 次)"
+                      + "\n渲染线程动画驱动 " + (diag.st.rtTimerMode ? "计时器模式" : "垂直同步") + " (切换 " + (diag.st.rtSwitches || 0) + " 次)"
                 color: Qt.rgba(1, 1, 1, 0.7)
                 font.family: Theme.fontFamily
                 font.pixelSize: 11
@@ -1041,6 +1042,38 @@ Window {
                 wrapMode: Text.WrapAnywhere
                 maximumLineCount: 2
                 elide: Text.ElideRight
+            }
+            // 启动参数:点选后重启生效,用来对比哪种组合不卡
+            Row {
+                spacing: 10
+                Text { text: "图形接口"; color: Qt.rgba(1, 1, 1, 0.5); font.family: Theme.fontFamily; font.pixelSize: 11 }
+                Repeater {
+                    model: [{ t: "默认", v: "" }, { t: "D3D11", v: "d3d11" }, { t: "D3D12", v: "d3d12" }, { t: "OpenGL", v: "opengl" }, { t: "Vulkan", v: "vulkan" }]
+                    Text {
+                        text: modelData.t
+                        color: frameDiag.rhiChoice === modelData.v ? Theme.accent : Qt.rgba(1, 1, 1, 0.7)
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 11
+                        font.weight: frameDiag.rhiChoice === modelData.v ? Font.DemiBold : Font.Normal
+                        MouseArea { anchors.fill: parent; anchors.margins: -4; cursorShape: Qt.PointingHandCursor; onClicked: frameDiag.rhiChoice = modelData.v }
+                    }
+                }
+            }
+            Row {
+                spacing: 10
+                Text { text: "动画驱动"; color: Qt.rgba(1, 1, 1, 0.5); font.family: Theme.fontFamily; font.pixelSize: 11 }
+                Repeater {
+                    model: [{ t: "默认", v: false }, { t: "简单 (只按挂钟)", v: true }]
+                    Text {
+                        text: modelData.t
+                        color: frameDiag.simpleDriver === modelData.v ? Theme.accent : Qt.rgba(1, 1, 1, 0.7)
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 11
+                        font.weight: frameDiag.simpleDriver === modelData.v ? Font.DemiBold : Font.Normal
+                        MouseArea { anchors.fill: parent; anchors.margins: -4; cursorShape: Qt.PointingHandCursor; onClicked: frameDiag.simpleDriver = modelData.v }
+                    }
+                }
+                Text { text: "· 重启后生效"; color: Qt.rgba(1, 1, 1, 0.4); font.family: Theme.fontFamily; font.pixelSize: 11 }
             }
             Text {
                 width: parent.width
