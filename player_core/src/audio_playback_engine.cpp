@@ -185,6 +185,7 @@ bool AudioPlaybackEngine::InitDevice(uint32_t sampleRate, uint32_t channels, boo
     impl_->device_initialized = true;
     impl_->out_rate = impl_->device.sampleRate;
     impl_->out_channels = impl_->device.playback.channels;
+    equalizer_.Configure(impl_->out_rate, impl_->out_channels);
     exclusive_active_.store(exclusiveOk);
     output_rate_.store(impl_->device.playback.internalSampleRate);
     ma_format internal = impl_->device.playback.internalFormat;
@@ -480,6 +481,9 @@ void AudioPlaybackEngine::OnAudioFrames(void* pOutput, uint32_t frameCount) {
     }
     if (got < frameCount) std::fill(out + got * ch, out + totalSamples, 0.0f);
     impl_->cursor.store(cursor);
+
+    // 均衡器 (关闭且已回落到 0 dB 时直接返回,不碰样本)
+    if (got > 0) equalizer_.Process(out, got);
 
     // 音量 × ReplayGain:按样本线性斜坡逼近目标值,避免拉链噪声
     const float target = volume_.load() * impl_->Cur().rg;

@@ -4,14 +4,30 @@ import PlayerUi
 // 沉浸播放页 v4:整窗铺满模糊封面,左边封面与控制,右边歌词占满整个高度,没有用不到的空白
 //  左栏:封面 → 歌名歌手 (居中) → 进度 (时间在两侧) → 控制 → 音量
 //  右栏:歌词居中排版,当前句停在视口偏上处、用强调色随演唱点亮,译文跟在原句下面;无歌词时为「接下来播放」
-//  顶栏:左收起、中间音质小胶囊、右边歌词 / 队列切换
+//  顶栏:左上角收起;右下角一排同样式的图标按钮:歌词来源、音质、歌词 / 队列切换
+//  大屏时封面、字号、按钮按窗口高度等比放大 (k,最多 1.35 倍)
 Item {
     id: np
     property bool shown: false
     signal closeRequested()
     signal chainClicked()
+    property bool chainOpen: false   // 信号链详情是否展开 (音质按钮据此显示选中)
     // 共享元素飞行用:大封面。封面本身不参与进场位移,飞行落点在整个过程中保持不动
     readonly property Item coverItem: cover
+    // 大封面的投影:飞行副本按它的参数带着投影落地
+    readonly property Item coverShadow: coverShadow
+    function automationTab(t) { side.tab = String(t) }
+    function automationLyricPanel(on) { if (on) { side.tab = "lyrics"; lyricPanel.open() } else lyricPanel.close() }
+    function automationEqPanel(on) { if (on) eqPanel.open(); else eqPanel.close() }
+    function automationEqHover(i) { eqPanel.hoverBand = i }
+    function automationLyricPick(i) { lyricPanel.pick(i) }
+    function automationLyricHover(i) { lyricPanel.hoverRow = i }
+    function automationLyricSave() { lyricPanel.save() }
+    function automationLyricOnlyTranslated(on) { lyricPanel.onlyTranslated = on }
+    function openMenu(item, px, py) {
+        const p = item.mapToItem(null, px, py)
+        Nav.trackMenu(player.trackId, p.x, p.y, {})
+    }
 
     // 进场错峰:封面下方各行依次上浮淡入 (order 越大越晚),退场同时下沉
     component Rise: Item {
@@ -31,7 +47,7 @@ Item {
     Behavior on opacity { OpacityAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
     // 完全淡入后为 true:此时底下的曲库页面与极光背景被整屏盖住,可以停止绘制它们
     property bool covering: false
-    onShownChanged: if (shown) coverDelay.restart(); else { coverDelay.stop(); covering = false }
+    onShownChanged: if (shown) { coverDelay.restart(); introduceChrome() } else { coverDelay.stop(); covering = false }
     Timer { id: coverDelay; interval: Theme.normal + 40; onTriggered: np.covering = true }
 
     // ---------------- 背景 ----------------
@@ -43,120 +59,116 @@ Item {
     // ---------------- 版面 ----------------
     readonly property real padX: Math.max(40, width * 0.045)
     readonly property real leftW: Math.round(width * 0.46)
+    // 大屏放大系数:820 高以下为 1
+    readonly property real k: Math.max(1, Math.min(1.35, height / 820))
     // 封面下方固定内容的总高度 (歌名、歌手、进度、控制、音量与间距)
-    readonly property real belowCover: 224
-    readonly property real coverSize: Math.round(Math.max(200, Math.min(leftW - padX - 24, height - belowCover - 120, 520)))
+    readonly property real belowCover: Math.round(224 * k)
+    readonly property real coverSize: Math.round(Math.max(200, Math.min(leftW - padX - 24, height - belowCover - 120, 760)))
     readonly property real colX: Math.round(padX + (leftW - padX - coverSize) / 2)
     readonly property real colY: Math.round((height - coverSize - belowCover) / 2 + 8)
     readonly property real sideX: leftW + Math.max(16, width * 0.02)
     readonly property real sideW: width - padX - sideX
 
+    // ---------------- 界面控件随鼠标隐现 ----------------
+    // 收起按钮、右下角按钮组 (以及窗口按钮) 平时淡出,不和封面、歌词抢眼;鼠标一动就淡入,
+    // 停下约 2.5 秒后再淡出。指着控件、面板或信号链开着时保持显示
+    property bool chromeAwake: true
+    readonly property bool chromeShown: chromeAwake || lyricPanel.shown || eqPanel.shown || chainOpen || tabsHover.hovered || backHover.hovered
+    property real chrome: chromeShown ? 1 : 0
+    Behavior on chrome { NumberAnimation { duration: np.chromeShown ? 220 : 700; easing.type: Easing.OutCubic } }
+    function wake() { chromeAwake = true; chromeIdle.interval = 2500; chromeIdle.restart() }
+    // 进入播放页:控件随页面淡入后先停留约一秒再淡出,让人知道它们在那里
+    function introduceChrome() { chromeAwake = true; chromeIdle.interval = 1700; chromeIdle.restart() }
+    Timer { id: chromeIdle; interval: 2500; onTriggered: np.chromeAwake = false }
+    // 只认鼠标真的移动:歌词在静止的光标下滚动也会产生悬停事件,不能因此一直显示
+    HoverHandler {
+        id: npHover
+        property point last: Qt.point(-1, -1)
+        onPointChanged: {
+            const p = point.scenePosition
+            if (Math.abs(p.x - last.x) + Math.abs(p.y - last.y) < 3) return
+            last = p
+            np.wake()
+        }
+    }
+
     // ---------------- 顶栏 ----------------
+    // 收起:放进窗口顶栏那一行,与右上角窗口按钮同一条中线 (y = 17),离封面留出空当
+    // (标题栏的拖动区从左侧导航宽度之后才开始,这里点得到)
     IconButton {
-        x: 20
-        y: 16
+        x: 10
+        opacity: np.chrome
+        visible: opacity > 0.01
+        HoverHandler { id: backHover }
+        y: -3
         icon: "back"
-        iconSize: 18
+        iconSize: 16
         rotation: -90
+        tip: qsTr("收起  Esc")
         onClicked: np.closeRequested()
     }
 
-    // 音质小胶囊:平时只有一个点与「24/96」这类简写;悬停时平滑拉宽、换成完整信号链,点击展开详情
-    Rectangle {
-        id: qcap
-        readonly property bool open: chainMouse.containsMouse
-        readonly property real shortW: shortText.implicitWidth + 40
-        readonly property real longW: Math.min(np.width * 0.5, longText.implicitWidth + 40)
-        anchors.horizontalCenter: parent.horizontalCenter
-        y: 22
-        height: 28
-        width: open ? longW : shortW
-        radius: 14
-        color: Qt.rgba(1, 0.96, 0.9, open ? 0.09 : 0.05)
-        border.width: 1
-        border.color: Theme.hairline
-        clip: true
-        visible: player.hasTrack
-        opacity: np.shown ? 1 : 0
-        Behavior on opacity { SequentialAnimation { PauseAnimation { duration: np.shown ? 260 : 0 } OpacityAnimator { duration: 360 } } }
-        Behavior on width { NumberAnimation { duration: 420; easing.type: Easing.OutQuint } }
-        Behavior on color { ColorAnimation { duration: Theme.normal } }
-        Rectangle {
-            x: 15
-            anchors.verticalCenter: parent.verticalCenter
-            width: 5; height: 5; radius: 2.5
-            color: player.bitPerfect ? Theme.accent : Theme.textTertiary
-        }
-        Text {
-            id: shortText
-            x: 27
-            anchors.verticalCenter: parent.verticalCenter
-            text: player.quality
-            opacity: qcap.open ? 0 : 1
-            color: Theme.textSecondary
-            font.family: Theme.fontFamily
-            font.pixelSize: 12
-            font.weight: Font.DemiBold
-            Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
-        }
-        Text {
-            id: longText
-            x: 27
-            width: qcap.longW - 40
-            anchors.verticalCenter: parent.verticalCenter
-            text: player.chainSummary
-            elide: Text.ElideRight
-            opacity: qcap.open ? 1 : 0
-            color: Theme.textSecondary
-            font.family: Theme.fontFamily
-            font.pixelSize: 12
-            Behavior on opacity { SequentialAnimation { PauseAnimation { duration: qcap.open ? 120 : 0 } OpacityAnimator { duration: Theme.normal } } }
-        }
-        MouseArea {
-            id: chainMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: np.chainClicked()
-        }
-    }
-
-    // 歌词 / 队列切换:放在右下角,避开顶部的窗口按钮
-    Row {
+    // 右下角按钮组:竖排贴着右缘,不伸进歌词栏;四个按钮同尺寸、等间距
+    Column {
         id: tabs
         anchors.right: parent.right
-        anchors.rightMargin: 20
+        anchors.rightMargin: 14
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: 14
+        anchors.bottomMargin: 22
         spacing: 4
         z: 2
-        opacity: np.shown ? 1 : 0
-        Behavior on opacity { SequentialAnimation { PauseAnimation { duration: np.shown ? 260 : 0 } OpacityAnimator { duration: 360 } } }
+        property real entry: np.shown ? 1 : 0
+        Behavior on entry { SequentialAnimation { PauseAnimation { duration: np.shown ? 260 : 0 } NumberAnimation { duration: 360 } } }
+        opacity: entry * np.chrome
+        visible: opacity > 0.01
+        HoverHandler { id: tabsHover }
+        // 四个按钮同一种样式:图标 19px、40×40 点击区、强调色表示「开着 / 选中」,右侧短竖线标出当前项
+        //  歌词来源 (图标随来源变化,点开来源面板) · 音质 (悬停看完整信号链,点开详情;直通时强调色) · 歌词 · 队列
         Repeater {
-            model: [{ key: "lyrics", icon: "lyrics" }, { key: "queue", icon: "queue" }]
+            model: [
+                { key: "source", tip: qsTr("歌词来源") },
+                { key: "quality", tip: qsTr("音质") },
+                { key: "eq", icon: "eq", tip: qsTr("均衡器") },
+                { key: "lyrics", icon: "lyrics", tip: qsTr("歌词") },
+                { key: "queue", icon: "queue", tip: qsTr("播放队列") }
+            ]
             Item {
+                id: tabBtn
+                readonly property string key: modelData.key
                 width: 40
-                height: 38
-                readonly property bool active: side.tab === modelData.key
+                height: 40
+                visible: player.hasTrack || key === "lyrics" || key === "queue" || key === "eq"
+                readonly property bool active: key === "source" ? lyricPanel.shown : key === "quality" ? np.chainOpen
+                                             : key === "eq" ? eqPanel.shown : side.tab === key
+                readonly property bool lit: active || (key === "quality" && player.bitPerfect)
+                                            || (key === "eq" && player.eqEnabled && player.eqPreset !== "flat")
+                readonly property string icon: key === "source" ? Nav.lyricIcon(player.lyricSource.kind) : key === "quality" ? "hires" : modelData.icon
+                readonly property string tip: key === "source"
+                    ? (player.lyricSource.label ? qsTr("歌词来源 · %1").arg(player.lyricSource.label) : qsTr("搜索歌词"))
+                    : key === "quality" ? (player.chainSummary || player.quality || qsTr("音质"))
+                    : key === "eq" ? (player.eqEnabled ? qsTr("均衡器 · 已开启") : qsTr("均衡器"))
+                    : modelData.tip
+                onTipChanged: if (tm.containsMouse) Nav.hint(tabBtn, tip)
                 Icon {
                     anchors.centerIn: parent
-                    anchors.verticalCenterOffset: -3
-                    name: modelData.icon
+                    name: tabBtn.icon
                     size: 19
-                    tint: active ? Theme.accent : "transparent"
-                    opacity: active || tm.containsMouse ? 1 : 0.5
+                    tint: tabBtn.lit ? Theme.accent : "transparent"
+                    opacity: tabBtn.lit || tm.containsMouse ? 1 : 0.5
+                    scale: tm.pressed ? 0.9 : 1
                     Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+                    Behavior on scale { ScaleAnimator { duration: Theme.fast; easing.type: Easing.OutCubic } }
                 }
                 Rectangle {
-                    anchors.bottom: parent.bottom
-                    anchors.bottomMargin: 2
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    width: 16
-                    height: 2
+                    anchors.right: parent.right
+                    anchors.rightMargin: -2
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 2
+                    height: 16
                     radius: 1
                     color: Theme.accent
-                    opacity: active ? 1 : 0
-                    scale: active ? 1 : 0.3
+                    opacity: tabBtn.active ? 1 : 0
+                    scale: tabBtn.active ? 1 : 0.3
                     Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
                     Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
                 }
@@ -165,9 +177,64 @@ Item {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: side.tab = modelData.key
+                    onContainsMouseChanged: containsMouse ? Nav.hint(parent, tabBtn.tip) : Nav.unhint(parent)
+                    onClicked: {
+                        if (tabBtn.key === "eq") {
+                            if (eqPanel.shown) { eqPanel.close(); return }
+                            lyricPanel.close()
+                            eqPanel.open()
+                        } else if (tabBtn.key === "source") {
+                            if (lyricPanel.shown) { lyricPanel.close(); return }
+                            eqPanel.close()
+                            side.tab = "lyrics"
+                            lyricPanel.open()
+                        } else if (tabBtn.key === "quality") {
+                            np.chainClicked()
+                        } else {
+                            side.tab = tabBtn.key
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    // 歌词来源面板:右下角对齐来源胶囊,从那里弹出
+    LyricSourcePanel {
+        id: lyricPanel
+        // 从竖排按钮左侧展开,底边与按钮组对齐
+        anchorRight: tabs.x - 10
+        anchorBottom: tabs.y + tabs.height
+        Connections { target: np; function onShownChanged() { if (!np.shown) lyricPanel.close() } }
+    }
+
+    // 均衡器面板:同样从按钮组左侧展开
+    EqualizerPanel {
+        id: eqPanel
+        objectName: "eqPanel"
+        anchorRight: tabs.x - 10
+        anchorBottom: tabs.y + tabs.height
+        Connections { target: np; function onShownChanged() { if (!np.shown) eqPanel.close() } }
+    }
+
+    component MetaLink: Text {
+        id: link
+        property real maxWidth: 200
+        property bool linked: true
+        signal activated()
+        width: Math.min(implicitWidth, maxWidth)
+        elide: Text.ElideRight
+        color: linkMouse.containsMouse && linked ? Theme.text : Theme.textSecondary
+        font.family: Theme.fontFamily
+        font.pixelSize: Math.round(14 * np.k)
+        font.underline: linkMouse.containsMouse && linked
+        MouseArea {
+            id: linkMouse
+            anchors.fill: parent
+            enabled: link.linked
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: link.activated()
         }
     }
 
@@ -186,7 +253,7 @@ Item {
             height: np.coverSize
             scale: player.playing || !player.hasTrack ? 1 : 0.9
             Behavior on scale { ScaleAnimator { duration: player.playing ? 680 : 520; easing.type: player.playing ? Easing.OutBack : Easing.OutQuint; easing.overshoot: 1.2 } }
-            SoftShadow { target: cover; spread: 44; offsetY: player.playing ? 24 : 12; strength: player.playing ? 0.9 : 0.6
+            SoftShadow { id: coverShadow; target: cover; spread: 44; offsetY: player.playing ? 24 : 12; strength: player.playing ? 0.9 : 0.6
                 Behavior on offsetY { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } }
                 Behavior on strength { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } } }
             CrossfadeCover {
@@ -195,7 +262,13 @@ Item {
                 height: np.coverSize
                 radius: 12
                 source: player.cover
-                decodeSize: 1024
+            }
+            // 右键封面:这首歌的菜单
+            MouseArea {
+                anchors.fill: cover
+                acceptedButtons: Qt.RightButton
+                enabled: player.hasTrack
+                onClicked: (e) => np.openMenu(cover, e.x, e.y)
             }
         }
 
@@ -228,8 +301,21 @@ Item {
                     elide: Text.ElideRight
                     color: Theme.text
                     font.family: Theme.fontFamily
-                    font.pixelSize: 22
+                    font.pixelSize: Math.round(22 * np.k)
                     font.weight: Font.Bold
+                }
+                // 左「更多」、右「收藏」对称,歌名真正居中
+                IconButton {
+                    id: npMore
+                    anchors.left: parent.left
+                    anchors.leftMargin: -8
+                    anchors.verticalCenter: titleText.verticalCenter
+                    width: 36; height: 36
+                    icon: "more"
+                    iconSize: 18
+                    restOpacity: 0.6
+                    tip: qsTr("更多")
+                    onClicked: np.openMenu(npMore, npMore.width / 2, npMore.height)
                 }
                 IconButton {
                     readonly property bool fav: playlists.revision >= 0 && player.hasTrack && playlists.isFavorite(player.trackId)
@@ -239,20 +325,45 @@ Item {
                     width: 36; height: 36
                     icon: fav ? "heart-filled" : "heart"
                     iconTint: fav ? Theme.accent : "transparent"
-                    popOnChange: true
                     iconSize: 18
-                    onClicked: playlists.toggleFavorite(player.trackId)
+                    tip: (fav ? qsTr("取消收藏") : qsTr("收藏")) + "  Ctrl+L"
+                    onClicked: { playlists.toggleFavorite(player.trackId); popNow() }
                 }
             }
-            Text {
-                topPadding: 3
+            // 歌手 · 专辑:各自可点,收起播放页并打开歌手 / 专辑
+            Item {
                 width: parent.width
-                horizontalAlignment: Text.AlignHCenter
-                text: player.artist + (player.album.length ? "  ·  " + player.album : "")
-                elide: Text.ElideRight
-                color: Theme.textSecondary
-                font.family: Theme.fontFamily
-                font.pixelSize: 14
+                height: metaRow.height + 3
+                Row {
+                    id: metaRow
+                    y: 3
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    spacing: 0
+                    MetaLink {
+                        text: player.artist
+                        maxWidth: (titleBlock.width - sepText.width) * (player.album.length ? 0.45 : 1)
+                        onActivated: {
+                            const i = library.artistOfTrack(player.trackId)
+                            if (i >= 0) Nav.openArtist(i)
+                        }
+                        linked: library.generation >= 0 && player.hasTrack && library.artistOfTrack(player.trackId) >= 0
+                    }
+                    Text {
+                        id: sepText
+                        visible: player.album.length > 0
+                        text: "  ·  "
+                        color: Theme.textSecondary
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Math.round(14 * np.k)
+                    }
+                    MetaLink {
+                        visible: player.album.length > 0
+                        text: player.album
+                        maxWidth: (titleBlock.width - sepText.width) * 0.55
+                        linked: player.albumIndex >= 0
+                        onActivated: Nav.openAlbum(player.albumIndex)
+                    }
+                }
             }
             }}
 
@@ -298,7 +409,8 @@ Item {
             Item { width: 1; height: 10 }
             Item {
                 width: parent.width
-                height: 62
+                height: Math.round(62 * np.k)
+                // 随机与单曲循环互斥 (与播放条的四态按钮一致:随机时循环整个列表)
                 IconButton {
                     anchors.left: parent.left
                     anchors.leftMargin: -6
@@ -308,7 +420,11 @@ Item {
                     iconSize: 16
                     iconTint: player.shuffle ? Theme.accent : "transparent"
                     restOpacity: player.shuffle ? 1 : 0.5
-                    onClicked: player.shuffle = !player.shuffle
+                    tip: player.shuffle ? qsTr("关闭随机播放") : qsTr("随机播放")
+                    onClicked: {
+                        player.shuffle = !player.shuffle
+                        if (player.shuffle && player.repeatMode === 2) player.repeatMode = 1
+                    }
                 }
                 IconButton {
                     anchors.right: parent.right
@@ -319,41 +435,97 @@ Item {
                     iconSize: 16
                     iconTint: player.repeatMode > 0 ? Theme.accent : "transparent"
                     restOpacity: player.repeatMode > 0 ? 1 : 0.5
-                    onClicked: player.repeatMode = (player.repeatMode + 1) % 3
+                    tip: player.repeatMode === 2 ? qsTr("单曲循环") : player.repeatMode === 1 ? qsTr("列表循环") : qsTr("不循环")
+                    onClicked: {
+                        const m = (player.repeatMode + 1) % 3
+                        if (m === 2) player.shuffle = false
+                        player.repeatMode = m
+                    }
                 }
                 Row {
                     anchors.centerIn: parent
-                    spacing: Math.max(14, Math.min(30, np.coverSize * 0.06))
-                    IconButton { icon: "prev"; nudge: -1; iconSize: 21; width: 46; height: 46; anchors.verticalCenter: parent.verticalCenter; onClicked: player.previous() }
+                    spacing: Math.max(14, Math.min(30 * np.k, np.coverSize * 0.06))
+                    IconButton {
+                        icon: "prev"; nudge: -1
+                        iconSize: Math.round(21 * np.k)
+                        width: Math.round(46 * np.k); height: width
+                        anchors.verticalCenter: parent.verticalCenter
+                        tip: qsTr("上一首  Ctrl+←")
+                        onClicked: player.previous()
+                    }
                     IconButton {
                         icon: player.playing ? "pause" : "play"
                         morphOnChange: true
-                        iconSize: 24
-                        width: 60; height: 60
+                        iconSize: Math.round(24 * np.k)
+                        width: Math.round(60 * np.k); height: width
                         filled: true
+                        tip: (player.playing ? qsTr("暂停") : qsTr("播放")) + "  空格"
                         onClicked: player.toggle()
                     }
-                    IconButton { icon: "next"; nudge: 1; iconSize: 21; width: 46; height: 46; anchors.verticalCenter: parent.verticalCenter; onClicked: player.next() }
+                    IconButton {
+                        icon: "next"; nudge: 1
+                        iconSize: Math.round(21 * np.k)
+                        width: Math.round(46 * np.k); height: width
+                        anchors.verticalCenter: parent.verticalCenter
+                        tip: qsTr("下一首  Ctrl+→")
+                        onClicked: player.next()
+                    }
                 }
             }
             }}
 
             Rise { order: 3; Column { width: parent.width
-            Item { width: 1; height: 12 }
-            Row {
+            Item { width: 1; height: 6 }
+            // 音量:左键静音 / 恢复,右键开到最大;整行支持滚轮
+            Item {
                 width: parent.width
-                spacing: 12
-                Icon { anchors.verticalCenter: parent.verticalCenter; name: "mute"; size: 14; opacity: 0.45 }
-                SeekBar {
+                height: 32
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.NoButton
+                    property real acc: 0
+                    onWheel: (w) => {
+                        acc += w.angleDelta.y
+                        const steps = Math.trunc(acc / 120)
+                        if (steps !== 0) { acc -= steps * 120; player.changeVolume(steps * 0.02) }
+                        w.accepted = true
+                    }
+                }
+                IconButton {
+                    id: muteBtn
+                    x: -9
                     anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - 14 * 2 - 24
+                    width: 32; height: 32
+                    icon: player.volume < 0.01 ? "mute" : "volume"
+                    iconSize: 14
+                    restOpacity: 0.45
+                    tip: (player.volume < 0.01 ? qsTr("取消静音") : qsTr("静音")) + "  Ctrl+M"
+                    onClicked: Nav.toggleMute()
+                }
+                SeekBar {
+                    id: volBar
+                    anchors.left: muteBtn.right
+                    anchors.leftMargin: 3
+                    anchors.right: volText.left
+                    anchors.rightMargin: 8
+                    anchors.verticalCenter: parent.verticalCenter
                     showTip: false
                     position: player.volume
                     duration: 1
                     onSeekRequested: (v) => player.volume = v
                     onDragValueChanged: if (dragging) player.volume = dragValue
                 }
-                Icon { anchors.verticalCenter: parent.verticalCenter; name: "volume"; size: 14; opacity: 0.45 }
+                Text {
+                    id: volText
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 32
+                    horizontalAlignment: Text.AlignRight
+                    text: Math.round(player.volume * 100)
+                    color: Theme.textTertiary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11
+                }
             }
             }}
         }
@@ -392,7 +564,7 @@ Item {
             // 一首歌的歌词全部实例化:每行位置都是实测的,不会因估算行高在滚动中途跳动
             cacheBuffer: 100000
             boundsBehavior: Flickable.StopAtBounds
-            readonly property int fontSize: Math.round(Math.max(20, Math.min(28, np.width / 44)))
+            readonly property int fontSize: Math.round(Math.max(20, Math.min(36, np.width / 46)))
             property bool following: true
 
             layer.enabled: true
@@ -416,7 +588,7 @@ Item {
                 // 夹在可滚动范围内:前几句时列表停在顶端,当前句自己往下走;末尾同理
                 t = Math.max(originY - topMargin, Math.min(t, originY + contentHeight + bottomMargin - height))
                 settle.stop()
-                if (!animate || Theme.reduced || Math.abs(contentY - t) < 0.5) { contentY = t; return }
+                if (!animate || Math.abs(contentY - t) < 0.5) { contentY = t; return }
                 // 跨越很远 (拖动进度条) 时稍慢一点,相邻换句约 0.62 秒
                 settle.duration = Math.abs(contentY - t) > height * 0.6 ? 820 : 620
                 settle.to = t
@@ -472,10 +644,12 @@ Item {
                     scale: row.current || !player.lyricsSynced ? 1 : 0.9
                     Behavior on scale { ScaleAnimator { duration: 620; easing.type: Easing.OutQuint } }
 
+                    // 单行宽度用 TextMetrics 量 (换行文字的 implicitWidth 依赖自身宽度,直接用会形成绑定环)
+                    TextMetrics { id: lineMetrics; font: line.font; text: line.text }
                     Text {
                         id: line
                         // 单行时宽度贴合文字,逐字点亮的进度才能对准文字本身;换行时占满整栏
-                        width: Math.min(row.width - 24, implicitWidth)
+                        width: Math.min(row.width - 24, Math.ceil(lineMetrics.advanceWidth) + 2)
                         x: (row.width - width) / 2
                         y: 9
                         text: modelData.text
@@ -489,7 +663,7 @@ Item {
                         Behavior on color { ColorAnimation { duration: 360 } }
 
                         // 当前句:未唱部分压暗,随演唱进度从左到右点亮 (交界处约 28px 柔和过渡)
-                        layer.enabled: row.current && !Theme.reduced
+                        layer.enabled: row.current
                         layer.effect: ShaderEffect {
                             readonly property real start: modelData.time
                             readonly property real span: modelData.duration > 0 ? modelData.duration : 3
@@ -524,18 +698,64 @@ Item {
                 }
             }
         }
-        Icon {
+        Column {
             anchors.centerIn: parent
             visible: side.tab === "lyrics" && !side.hasLyrics
-            name: "lyrics"
-            size: 36
-            opacity: 0.15
+            spacing: 12
+            Icon { anchors.horizontalCenter: parent.horizontalCenter; name: "lyrics"; size: 36; opacity: 0.15 }
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: qsTr("没有找到歌词")
+                color: Theme.textTertiary
+                font.family: Theme.fontFamily
+                font.pixelSize: 14
+            }
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: qsTr("同名 .lrc · 内嵌歌词 · 酷狗歌词库 · 在线")
+                color: Theme.textTertiary
+                opacity: 0.7
+                font.family: Theme.fontFamily
+                font.pixelSize: 12
+            }
+            Item { width: 1; height: 4 }
+            Capsule {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: qsTr("搜索歌词")
+                filled: true
+                pad: 20
+                onClicked: lyricPanel.open()
+            }
+        }
+
+        // 接下来播放:标题 + 剩余
+        Row {
+            visible: side.tab === "queue"
+            // 在顶部窗口拖动条与收起按钮的高度以下
+            y: 92
+            x: 10
+            spacing: 10
+            Text {
+                anchors.baseline: queueCount.baseline
+                text: qsTr("接下来播放")
+                color: Theme.text
+                font.family: Theme.fontFamily
+                font.pixelSize: 18
+                font.weight: Font.Bold
+            }
+            Text {
+                id: queueCount
+                text: qsTr("%1 首 · 剩余 %2").arg(Math.max(0, player.queueLength - player.queuePosition - 1)).arg(player.queueRemaining)
+                color: Theme.textTertiary
+                font.family: Theme.fontFamily
+                font.pixelSize: 12
+            }
         }
 
         // 接下来播放
         ListView {
             id: queueView
-            y: 72
+            y: 128
             width: parent.width
             height: parent.height - y - 32
             clip: true
@@ -556,19 +776,27 @@ Item {
                 Rectangle {
                     anchors.fill: parent
                     radius: Theme.radiusM
-                    color: current ? Theme.accentAlpha(0.12) : (hovered ? Theme.hover : "transparent")
+                    color: current ? Theme.accentAlpha(0.12) : "transparent"
+                }
+                Rectangle {
+                    anchors.fill: parent
+                    radius: Theme.radiusM
+                    color: Theme.hover
+                    opacity: hovered && !current ? 1 : 0
+                    Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
                 }
                 MouseArea {
                     id: rowMouse
                     anchors.fill: parent
-                    hoverEnabled: true
+                    // 滚动时行从鼠标下掠过,不逐行闪高亮
+                    hoverEnabled: !Theme.scrolling
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     cursorShape: Qt.PointingHandCursor
                     onClicked: (e) => {
                         if (e.button === Qt.RightButton) {
                             const p = mapToItem(null, e.x, e.y)
-                            Nav.trackMenu(model.trackId, p.x, p.y, {})
-                        } else player.playQueueIndex(model.queueIndex)
+                            Nav.trackMenu(model.trackId, p.x, p.y, { queueIndex: model.queueIndex })
+                        } else if (!current) player.playQueueIndex(model.queueIndex)
                     }
                 }
                 RoundedImage {
@@ -635,6 +863,7 @@ Item {
                     iconSize: 12
                     enabled: !current
                     opacity: hovered && !current ? 1 : 0
+                    tip: qsTr("从播放队列移除")
                     onClicked: player.removeFromQueue(model.queueIndex)
                 }
             }

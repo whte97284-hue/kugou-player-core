@@ -353,6 +353,7 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
         auto addTrack = [&](const std::wstring& path, const AudioMetadata& meta, const WorkItem& w) {
             // 解密产物记下加密源:专辑归类、隐藏文件夹都按源文件所在目录判断
             TrackItem t = MusicCatalog::BuildTrack(path, meta, path == w.path ? std::wstring() : w.path);
+            t.added_time = w.mtime;
             if (!t.has_cover && !w.folder_cover.empty()) {
                 t.external_cover_path = w.folder_cover;
                 externalCovers.fetch_add(1);
@@ -489,6 +490,7 @@ std::vector<IngestionItemResult> AudioIngestionPipeline::RunSync(MusicCatalog& c
                             m.duration_ms = end > tr.start_ms ? end - tr.start_ms : 0;
                             m.cover_data.clear(); // 封面只保留偏移,不重复复制
                             TrackItem t = MusicCatalog::BuildTrack(w.path, m);
+                            t.added_time = w.mtime;
                             t.is_cue_track = true;
                             t.cue_start_ms = tr.start_ms;
                             t.cue_end_ms = tr.end_ms;

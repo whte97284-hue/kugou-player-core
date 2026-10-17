@@ -13,6 +13,9 @@ Item {
     readonly property var best: searchModel.top
     readonly property bool hasTop: best && best.kind !== undefined
     readonly property bool empty: q.length > 0 && !hasTop && searchModel.count === 0
+    // 歌手 / 专辑带不重复最佳匹配卡片里已经大大显示的那一位 / 那一张
+    readonly property var stripArtists: searchModel.artists.filter(a => !(hasTop && best.kind === "artist" && a.index === best.index))
+    readonly property var stripAlbums: searchModel.albums.filter(a => !(hasTop && best.kind === "album" && a.index === best.index))
 
     function focusWith(t) {
         // 从侧栏 / 快捷键回到搜索页时保留上次的搜索,只有带着新词进来才替换
@@ -27,7 +30,7 @@ Item {
         if (!hasTop) return
         if (best.kind === "artist") Nav.openArtist(best.index)
         else if (best.kind === "album") Nav.openAlbum(best.index)
-        else player.playTracks(searchModel.trackIds(), 0)
+        else Nav.picked(player.pickTracks(searchModel.trackIds(), 0))
     }
 
     Timer { id: debounce; interval: 90; onTriggered: searchModel.query = input.text }
@@ -37,7 +40,8 @@ Item {
         id: field
         x: page.sidePadding
         y: 54
-        width: Math.min(860, page.width - page.sidePadding * 2)
+        // 与结果列表同宽,下划线和歌曲行右端对齐
+        width: page.width - page.sidePadding * 2
         height: 56
         Icon {
             id: glass
@@ -62,8 +66,8 @@ Item {
             font.weight: Font.DemiBold
             clip: true
             onTextChanged: debounce.restart()
-            Keys.onReturnPressed: page.sel >= 0 ? player.playTracks(searchModel.trackIds(), page.sel) : page.openTop()
-            Keys.onEnterPressed: page.sel >= 0 ? player.playTracks(searchModel.trackIds(), page.sel) : page.openTop()
+            Keys.onReturnPressed: page.sel >= 0 ? Nav.picked(player.pickTracks(searchModel.trackIds(), page.sel)) : page.openTop()
+            Keys.onEnterPressed: page.sel >= 0 ? Nav.picked(player.pickTracks(searchModel.trackIds(), page.sel)) : page.openTop()
             Keys.onDownPressed: page.moveSel(1)
             Keys.onUpPressed: page.moveSel(-1)
             Keys.onEscapePressed: text.length ? (text = "") : page.back()
@@ -77,7 +81,7 @@ Item {
             iconSize: 15
             opacity: input.text.length ? 1 : 0
             visible: opacity > 0
-            Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+            Behavior on opacity { NumberAnimation { duration: Theme.fast } }
             onClicked: { input.text = ""; input.forceActiveFocus() }
         }
         // 下划线:聚焦时从中间向两侧展开为强调色
@@ -97,7 +101,15 @@ Item {
     // ---------------- 结果 ----------------
     // 单个可滚动列:最佳匹配 / 歌手 / 专辑 / 歌曲。键盘焦点始终留在输入框:↑↓ 选择歌曲,回车播放
     property int sel: -1
-    onQChanged: { sel = -1; results.contentY = 0; if (q.length) refresh.restart() }
+    // 新搜索停在顶部,直到用户自己滚动 / 选歌:头部 (最佳匹配 / 歌手 / 专辑带) 随结果换高度后要重新定位,
+    // 不能写 contentY = 0 (有 header 的 ListView 顶端是 originY),否则头部整个留在视口上方
+    property bool pinTop: false
+    onQChanged: { sel = -1; pinTop = true; if (q.length) refresh.restart() }
+    function rewind() { if (pinTop) results.positionViewAtBeginning() }
+    Connections {
+        target: searchModel
+        function onResultsChanged() { Qt.callLater(page.rewind) }
+    }
     // 结果刷新:新结果从略下方轻轻浮上并淡入,而不是整页瞬间替换
     ParallelAnimation {
         id: refresh
@@ -108,13 +120,14 @@ Item {
         const n = searchModel.count
         if (n === 0) return
         sel = Math.max(-1, Math.min(n - 1, sel + d))
-        if (sel < 0) { results.contentY = 0; return }
+        if (sel < 0) { pinTop = true; results.positionViewAtBeginning(); return }
+        pinTop = false
         results.positionViewAtIndex(sel, ListView.Contain)
         const r = results.itemAtIndex(sel)
         if (!r) return
-        // 别让选中行藏到底部播放条下面
+        // 别让选中行藏到底部播放条下面 (不超出列表两端)
         const over = r.y + r.height - (results.contentY + results.height - page.bottomInset)
-        if (over > 0) results.contentY += over
+        if (over > 0) results.contentY = Math.max(results.originY, Math.min(results.contentY + over, results.originY + results.contentHeight - results.height))
     }
 
     // 结果用 ListView 虚拟化:歌曲再多也只创建可见的几十行,滚动不卡;
@@ -137,17 +150,19 @@ Item {
         boundsBehavior: Flickable.StopAtBounds
         opacity: page.q.length ? 1 : 0
         Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
-        SmoothScroll { flickable: results }
+        SmoothScroll { flickable: results; onScrolled: page.pinTop = false }
+        onMovementStarted: page.pinTop = false
 
         header: Column {
             id: col
             width: results.innerWidth
             topPadding: 24
             spacing: 0
+            onHeightChanged: Qt.callLater(page.rewind)
 
             // 最佳匹配 + 歌手
             Row {
-                visible: page.hasTop || searchModel.artists.length > 0
+                visible: page.hasTop || page.stripArtists.length > 0
                 width: parent.width
                 height: visible ? 196 : 0
                 spacing: 28
@@ -188,6 +203,7 @@ Item {
                             font.weight: Font.Bold
                         }
                         Row {
+                            width: parent.width
                             spacing: 8
                             Icon {
                                 anchors.verticalCenter: parent.verticalCenter
@@ -197,6 +213,8 @@ Item {
                             }
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
+                                width: parent.width - 22
+                                elide: Text.ElideRight
                                 text: !page.best ? "" : (page.best.kind === "artist" ? page.best.summary : (page.best.subtitle || page.best.artist || ""))
                                 color: Theme.textSecondary
                                 font.family: Theme.fontFamily
@@ -225,9 +243,10 @@ Item {
                         Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutBack } }
                         onClicked: {
                             const t = page.best
-                            if (t.kind === "album") player.playAlbum(t.index, 0)
-                            else if (t.kind === "artist") { artistTracks.artistIndex = t.index; player.playTracks(artistTracks.trackIds(), 0) }
-                            else player.playTracks(searchModel.trackIds(), 0)
+                            if (t.kind === "album") Nav.picked(player.pickAlbum(t.index, 0, true))
+                            // 不写 artistTracks:那是歌手详情页正在显示的列表
+                            else if (t.kind === "artist") { player.shuffle = false; Nav.picked(player.pickTracks(library.artistTrackIds(t.index), 0, "artist:" + t.name, true)) }
+                            else Nav.picked(player.pickTracks(searchModel.trackIds(), 0))
                         }
                     }
                 }
@@ -241,7 +260,7 @@ Item {
                     spacing: 18
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
-                    model: searchModel.artists
+                    model: page.stripArtists
                     SmoothScroll { flickable: artistStrip; horizontal: true }
                     delegate: Item {
                         width: 128
@@ -270,7 +289,7 @@ Item {
                         MouseArea {
                             id: am
                             anchors.fill: parent
-                            hoverEnabled: true
+                            hoverEnabled: !Theme.scrolling
                             cursorShape: Qt.PointingHandCursor
                             onClicked: Nav.openArtist(modelData.index)
                         }
@@ -279,63 +298,20 @@ Item {
             }
 
             // 专辑带
-            Item { width: 1; height: searchModel.albums.length ? 30 : 0 }
-            Marker { visible: searchModel.albums.length > 0; icon: "album-open"; count: searchModel.albums.length }
-            ListView {
-                id: albumStrip
-                visible: searchModel.albums.length > 0
+            Item { width: 1; height: page.stripAlbums.length ? 30 : 0 }
+            Marker { visible: page.stripAlbums.length > 0; icon: "album-open"; count: page.stripAlbums.length }
+            Item { width: 1; height: page.stripAlbums.length ? 12 : 0 }
+            AlbumStrip {
                 width: parent.width
-                height: visible ? 206 : 0
-                orientation: ListView.Horizontal
-                spacing: 20
-                clip: true
-                boundsBehavior: Flickable.StopAtBounds
-                model: searchModel.albums
-                SmoothScroll { flickable: albumStrip; horizontal: true }
-                delegate: Item {
-                    width: 150
-                    height: albumStrip.height
-                    readonly property bool hovered: alm.containsMouse
-                    RoundedImage {
-                        y: 10 + (parent.hovered ? -3 : 0)
-                        width: 150; height: 150
-                        radius: 8
-                        source: modelData.cover
-                        decodeSize: 220
-                        Behavior on y { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
-                    }
-                    Text {
-                        y: 170
-                        width: parent.width
-                        text: Nav.highlight(modelData.title, page.q, Theme.accent)
-                        textFormat: Text.StyledText
-                        elide: Text.ElideRight
-                        color: Theme.text
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 13
-                        font.weight: Font.DemiBold
-                    }
-                    Text {
-                        y: 189
-                        width: parent.width
-                        text: modelData.artist
-                        elide: Text.ElideRight
-                        color: Theme.textTertiary
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 11
-                    }
-                    MouseArea {
-                        id: alm
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: Nav.openAlbum(modelData.index)
-                    }
-                }
+                model: page.stripAlbums
+                showArtist: true
+                query: page.q
+                onOpen: (index) => Nav.openAlbum(index)
             }
 
             Item { width: 1; height: searchModel.count ? 26 : 0 }
-            Marker { visible: searchModel.count > 0; icon: "note"; count: searchModel.count }
+            // 列表最多列 500 首,数字写匹配总数
+            Marker { visible: searchModel.count > 0; icon: "note"; count: searchModel.total }
             Item { width: 1; height: 6 }
         }
         delegate: TrackRow {
@@ -348,28 +324,51 @@ Item {
             quality: model.quality
             duration: model.duration
             cover: model.cover
+            albumIndex: model.albumIndex
             showAlbum: true
             highlight: page.q
-            Rectangle {
-                anchors.fill: parent
-                radius: Theme.radiusM
-                color: "transparent"
-                border.width: 1
-                border.color: Theme.accentAlpha(0.55)
-                visible: page.sel === index
-            }
-            onActivated: player.playTracks(searchModel.trackIds(), index)
+            keyFocus: page.sel === index
+            onActivated: Nav.picked(player.pickTracks(searchModel.trackIds(), index, "", false, Nav.pickNow))
         }
     }
 
-    // 空查询 / 无结果:只留一个淡淡的图标
+    // 空查询:只留一个淡淡的图标;无结果时图标下写明没找到,并提示可以怎么搜
     Icon {
+        id: emptyIcon
         anchors.centerIn: parent
         anchors.verticalCenterOffset: -20
         name: "search"
         size: 64
         opacity: page.q.length === 0 ? 0.06 : (page.empty ? 0.14 : 0)
         Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+    }
+    Column {
+        anchors.top: emptyIcon.bottom
+        anchors.topMargin: 18
+        anchors.horizontalCenter: parent.horizontalCenter
+        width: Math.min(560, page.width - page.sidePadding * 2)
+        spacing: 6
+        opacity: page.empty ? 1 : 0
+        visible: opacity > 0
+        Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+        Text {
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            elide: Text.ElideMiddle
+            text: qsTr("没有找到与「%1」相关的结果").arg(page.q)
+            color: Theme.textTertiary
+            font.family: Theme.fontFamily
+            font.pixelSize: 13
+        }
+        Text {
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            text: qsTr("可以试试拼音或首字母,比如 zjl")
+            color: Theme.textTertiary
+            font.family: Theme.fontFamily
+            font.pixelSize: 12
+            opacity: 0.8
+        }
     }
 
     component Marker: Row {
@@ -381,7 +380,7 @@ Item {
         Icon { anchors.verticalCenter: parent.verticalCenter; name: parent.icon; size: 15; opacity: 0.5 }
         Text {
             anchors.verticalCenter: parent.verticalCenter
-            text: parent.count
+            text: parent.count.toLocaleString(Qt.locale(), "f", 0)
             color: Theme.textTertiary
             font.family: Theme.fontFamily
             font.pixelSize: 12

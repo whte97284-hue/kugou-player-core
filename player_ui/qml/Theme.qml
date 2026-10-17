@@ -30,6 +30,15 @@ QtObject {
     function warnAlpha(a) { return Qt.rgba(warn.r, warn.g, warn.b, a) }
     function perfectAlpha(a) { return Qt.rgba(perfect.r, perfect.g, perfect.b, a) }
 
+    // 桌面歌词已唱部分的配色 (设置页与歌词窗口共用);0 跟随封面强调色
+    readonly property var lyricPresets: [
+        { name: qsTr("跟随封面"), c: accent },
+        { name: qsTr("冰蓝"), c: "#8fd8ff" },
+        { name: qsTr("樱粉"), c: "#ff9cbc" },
+        { name: qsTr("薄荷"), c: "#7ee8be" },
+        { name: qsTr("柠檬"), c: "#ffe27a" }
+    ]
+
     // 强调色的派生色:用于按钮底色、柔光
     function accentAlpha(a) { return Qt.rgba(accent.r, accent.g, accent.b, a) }
     // 强调色偏亮时,其上的文字与图标改用深色 (驯化后的强调色大多属于此类,深字更显精致)
@@ -54,8 +63,28 @@ QtObject {
     readonly property int normal: reduced ? 140 : 260
     readonly property int slow: reduced ? 220 : 520
 
+    // 详情页左右留白:窄窗 44、宽窗 64;超宽屏时内容列最宽 1560 居中
+    function pagePadding(w) { return Math.max(w > 1400 ? 64 : 44, Math.round((w - 1560) / 2)) }
+
+    // 正在滚动的列表数 (SmoothScroll 维护):滚动期间暂停背景流动、呼吸点、悬停效果,把每一帧都留给滚动
+    property int scrollers: 0
+    // 停下后再保持 220ms:慢慢一格一格拨滚轮时,每格之间都会短暂停住,不保持的话「滚动中」会逐格开关,
+    // 每次开关都让所有可见行的 hoverEnabled 重算、鼠标下那一行高亮淡入又淡出、背景恢复又暂停
+    property bool scrollHold: false
+    readonly property bool scrolling: scrollers > 0 || scrollHold
+    onScrollersChanged: if (scrollers === 0) { scrollHold = true; holdTimer.restart() } else holdTimer.stop()
+    property Timer holdTimer: Timer { interval: 220; onTriggered: theme.scrollHold = false }
+
     readonly property int navWidth: 72
-    readonly property int islandHeight: 84
+    readonly property int islandHeight: 76
+
+    // 秒 → m:ss;一小时以上 h:mm:ss (CUE 整轨、DJ 串烧)
+    function formatTime(s) {
+        s = Math.max(0, Math.floor(s))
+        const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), r = s % 60
+        const ss = (r < 10 ? "0" : "") + r
+        return h > 0 ? h + ":" + (m < 10 ? "0" : "") + m + ":" + ss : m + ":" + ss
+    }
 
     // 字节数 → 人类可读
     function formatBytes(b) {

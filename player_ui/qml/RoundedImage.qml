@@ -11,6 +11,7 @@ Item {
     property bool fadeIn: true // 共享元素飞行用的副本关掉淡入,首帧即可见
     property bool placeholder: true // 未就绪时的浅色底
     property bool outline: true
+    property vector4d corners: Qt.vector4d(1, 1, 1, 1) // 左上 / 右上 / 右下 / 左下是否圆角
 
     Rectangle {
         anchors.fill: parent
@@ -34,6 +35,7 @@ Item {
         property variant source: img
         property size size: Qt.size(width, height)
         property real radius: root.radius
+        property vector4d corners: root.corners
         fragmentShader: "qrc:/shaders/rounded.frag.qsb"
         opacity: img.status === Image.Ready ? 1 : 0
         Behavior on opacity { enabled: root.fadeIn; OpacityAnimator { duration: Theme.normal } }

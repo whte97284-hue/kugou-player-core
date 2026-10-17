@@ -15,7 +15,7 @@ Rectangle {
     visible: opacity > 0
     scale: shown ? 1 : 0.96
     transformOrigin: Item.BottomRight
-    Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+    Behavior on opacity { NumberAnimation { duration: Theme.normal } }
     Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
 
     Column {

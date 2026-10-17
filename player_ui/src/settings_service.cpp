@@ -45,6 +45,28 @@ SettingsService::SettingsService(LibraryService* lib, QObject* parent) : QObject
 
 double SettingsService::StartupScale() { return QSettings().value("ui/scale", 1.0).toDouble(); }
 
+// 旧版只有开关 player/fade:开 = 标准,关 = 关
+int SettingsService::FadeLevel() {
+    QSettings s;
+    if (s.contains("player/fadeLevel")) return qBound(0, s.value("player/fadeLevel").toInt(), 3);
+    return s.value("player/fade", true).toBool() ? 2 : 0;
+}
+int SettingsService::FadeOutMs() {
+    static const int ms[] = {0, 100, 180, 450};
+    return ms[FadeLevel()];
+}
+int SettingsService::FadeInMs() {
+    static const int ms[] = {0, 150, 280, 700};
+    return ms[FadeLevel()];
+}
+
+void SettingsService::setFadeLevel(int v) {
+    v = qBound(0, v, 3);
+    if (v == fadeLevel()) return;
+    QSettings().setValue("player/fade", v > 0);
+    put("player/fadeLevel", v);
+}
+
 void SettingsService::put(const char* key, const QVariant& v) {
     QSettings s;
     if (s.value(key) == v) return;

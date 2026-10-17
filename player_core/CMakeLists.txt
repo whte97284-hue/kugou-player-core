@@ -14,13 +14,20 @@ add_library(player_core STATIC
     src/playlist_manager.cpp
     src/play_queue_controller.cpp
     src/scan_cache.cpp
+    src/library_organizer.cpp
+    src/library_dedupe.cpp
     src/decryptor.cpp
     src/audio_ingestion_pipeline.cpp
     src/fft_visualizer.cpp
     src/audio_playback_engine.cpp
+    src/equalizer.cpp
     src/lyric_manager.cpp
+    src/lyric_provider.cpp
+    src/playlist_provider.cpp
+    src/playlist_matcher.cpp
     src/tinf.cpp
     src/kugou_track_bridge.cpp
+    src/cover_fetcher.cpp
 )
 target_include_directories(player_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(player_core PUBLIC cxx_std_17)

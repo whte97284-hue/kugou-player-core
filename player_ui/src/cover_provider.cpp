@@ -71,7 +71,8 @@ QString CoverIdentity(const TrackItem& t) {
 }
 
 int Bucket(int edge) {
-    for (int b : {128, 256, 512, 1024})
+    // 768 一档:播放页大封面 (约 520 逻辑像素 × 1.25~1.5 缩放) 与专辑详情 (640) 不必解到 1024
+    for (int b : {128, 256, 512, 768, 1024})
         if (edge <= b) return b;
     return 1600;
 }

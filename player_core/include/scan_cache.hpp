@@ -34,6 +34,9 @@ public:
     // 命中条件:路径存在且大小、修改时间均一致
     const ScanCacheEntry* Find(const std::wstring& path, uint64_t size, uint64_t mtime) const;
     void Put(const std::wstring& path, ScanCacheEntry entry);
+    // 文件被移动 / 复制到新路径后沿用原来的解析结果 (下次扫描时大小与修改时间一致才会命中);
+    // keepSource = false 时删掉旧路径的记录。返回沿用的条数
+    size_t Carry(const std::vector<std::pair<std::wstring, std::wstring>>& moves, bool keepSource);
 
     size_t Size() const { return entries_.size(); }
     void Clear() { entries_.clear(); }

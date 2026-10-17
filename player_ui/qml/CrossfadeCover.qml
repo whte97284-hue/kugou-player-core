@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 import PlayerUi
 
 // 封面交叉淡化:新封面在后层加载完成后再淡入并轻微收拢,旧封面同时淡出,切歌时不闪占位色
@@ -6,7 +7,8 @@ Item {
     id: root
     property string source
     property real radius: 12
-    property int decodeSize: 1024
+    // 按实际显示的物理像素解码 (不再固定 1024:一张 1024² 解码图常驻 4 MB,交叉淡化时还有两张)
+    property int decodeSize: Math.ceil(Math.max(width, height) * Screen.devicePixelRatio)
     property bool frontIsA: true
 
     onSourceChanged: {

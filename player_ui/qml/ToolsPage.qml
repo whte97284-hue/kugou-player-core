@@ -189,7 +189,7 @@ Item {
                     Capsule {
                         visible: modelData.key === "" || modelData.n > 0
                         accent: page.q.filterKind === modelData.key
-                        text: "# " + modelData.label + "  " + modelData.n
+                        text: modelData.label + "  " + modelData.n
                         onClicked: page.q.filterKind = modelData.key
                     }
                 }
@@ -458,7 +458,7 @@ Item {
         visible: opacity > 0
         scale: shown ? 1 : 0.96
         transformOrigin: Item.TopLeft
-        Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+        Behavior on opacity { NumberAnimation { duration: Theme.fast } }
         Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
         Column {
             id: pmCol

@@ -3,8 +3,9 @@ import PlayerUi
 
 // 底部播放条 (通栏):顶边是可拖动的进度线
 //  左:旋转迷你黑胶 · 歌名 / 歌手与时间 · 收藏
-//  中 (相对整个窗口居中):播放模式 · 上一首 · 播放 · 下一首 · 播放列表
-//  右:小频谱 · 信号链胶囊 · 常驻音量
+//  中 (相对整个窗口居中):播放模式 · 上一首 · 播放 · 下一首 · 播放队列
+//  右:小频谱 · 信号链胶囊 · 桌面歌词 · 常驻音量
+// 窗口较窄 (< 1000) 时收起频谱、音量只留图标,控制区右移让出歌名的位置
 Item {
     id: island
     signal chainClicked()
@@ -12,8 +13,8 @@ Item {
     signal queueClicked()
     property bool queueOpen: false
     readonly property Item disc: discVinyl
-    height: 76
-    readonly property bool compact: width < 900
+    height: Theme.islandHeight
+    readonly property bool compact: width < 1000
 
     // ---- 面板 ----
     // 与背景联动:条内铺一份和窗口背景完全对齐的模糊封面 (同一张图、同一位置),再压一层深色,
@@ -132,17 +133,20 @@ Item {
             font.pixelSize: 15
             font.weight: Font.DemiBold
         }
-        // 歌手,后面跟着播放时间 (时间常驻,歌手名过长时先省略歌手)
+        // 歌手 (可点,打开歌手页),后面跟着播放时间 (时间常驻,歌手名过长时先省略歌手);定时关闭开着时再跟一个月亮
         Row {
             spacing: 8
             visible: player.hasTrack
             Text {
-                width: Math.min(implicitWidth, island.leftEnd - titleCol.x - favBtn.width - 6 - timeText.implicitWidth - 8)
+                id: artistText
+                width: Math.min(implicitWidth, island.leftEnd - titleCol.x - favBtn.width - 6 - timeText.implicitWidth - 8
+                                - (sleepMark.visible ? sleepMark.width + 8 : 0))
                 text: island.shownArtist
                 elide: Text.ElideRight
-                color: Theme.textSecondary
+                color: titleMouse.overArtist ? Theme.text : Theme.textSecondary
                 font.family: Theme.fontFamily
                 font.pixelSize: 12
+                font.underline: titleMouse.overArtist
             }
             Text {
                 id: timeText
@@ -151,14 +155,63 @@ Item {
                 font.family: Theme.fontFamily
                 font.pixelSize: 12
             }
+            Row {
+                id: sleepMark
+                visible: player.sleepMinutes !== 0
+                spacing: 3
+                Icon { anchors.verticalCenter: parent.verticalCenter; name: "moon"; size: 11; tint: Theme.accent }
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: player.sleepMinutes === -1 ? qsTr("本曲后") : Theme.formatTime(player.sleepRemaining)
+                    color: Theme.accent
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12
+                }
+            }
         }
     }
+    // 点歌名区打开播放页;点歌手名打开歌手页;点月亮取消定时关闭;右键打开这首歌的菜单
     MouseArea {
+        id: titleMouse
         anchors.left: discBox.right
         anchors.right: titleCol.right
         height: parent.height
+        hoverEnabled: player.hasTrack
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        property bool overArtist: false
+        property bool overSleep: false
+        function inside(item, x, y) {
+            if (!item.visible) return false
+            const p = mapToItem(item, x, y)
+            return p.x >= -2 && p.x <= item.width + 2 && p.y >= -3 && p.y <= item.height + 3
+        }
+        function track(x, y) {
+            overArtist = containsMouse && artistText.text.length > 0 && inside(artistText, x, y) && library.artistOfTrack(player.trackId) >= 0
+            const s = containsMouse && inside(sleepMark, x, y)
+            if (s !== overSleep) {
+                overSleep = s
+                if (s) Nav.hint(sleepMark, player.sleepMinutes === -1 ? qsTr("当前歌曲播完后停止 · 点击取消") : qsTr("定时关闭 · 点击取消"))
+                else Nav.unhint(sleepMark)
+            }
+        }
+        onPositionChanged: (e) => track(e.x, e.y)
+        onContainsMouseChanged: if (!containsMouse) track(-1, -1)
         cursorShape: player.hasTrack ? Qt.PointingHandCursor : Qt.ArrowCursor
-        onClicked: if (player.hasTrack) island.expandRequested()
+        onClicked: (e) => {
+            if (!player.hasTrack) return
+            if (e.button === Qt.RightButton) {
+                const p = mapToItem(null, e.x, e.y)
+                Nav.trackMenu(player.trackId, p.x, p.y, {})
+            } else if (overSleep) {
+                Nav.unhint(sleepMark)
+                player.setSleepTimer(0)
+                Nav.toast("check", qsTr("已取消定时关闭"))
+            } else if (overArtist) {
+                Nav.openArtist(library.artistOfTrack(player.trackId))
+            } else {
+                island.expandRequested()
+            }
+        }
     }
     IconButton {
         id: favBtn
@@ -171,9 +224,9 @@ Item {
         icon: fav ? "heart-filled" : "heart"
         iconTint: fav ? Theme.accent : "transparent"
         restOpacity: fav ? 1 : 0.6
-        popOnChange: true
         iconSize: 16
-        onClicked: playlists.toggleFavorite(player.trackId)
+        tip: (fav ? qsTr("取消收藏") : qsTr("收藏")) + "  Ctrl+L"
+        onClicked: { playlists.toggleFavorite(player.trackId); popNow() }
     }
 
     // ---- 中:控制 (相对整条居中) ----
@@ -185,7 +238,8 @@ Item {
         IconButton {
             anchors.verticalCenter: parent.verticalCenter
             width: 36; height: 36
-            icon: player.repeatMode === 2 ? "repeat-one" : (player.shuffle ? "shuffle" : "repeat")
+            // 图标与提示同一优先级 (随机优先),两者永远一致
+            icon: player.shuffle ? "shuffle" : player.repeatMode === 2 ? "repeat-one" : "repeat"
             iconSize: 16
             tip: player.shuffle ? qsTr("随机播放") : player.repeatMode === 2 ? qsTr("单曲循环") : player.repeatMode === 1 ? qsTr("列表循环") : qsTr("顺序播放")
             iconTint: player.shuffle || player.repeatMode > 0 ? Theme.accent : "transparent"
@@ -199,7 +253,7 @@ Item {
                 else { player.repeatMode = 1; player.shuffle = true }
             }
         }
-        IconButton { icon: "prev"; nudge: -1; iconSize: 18; width: 40; height: 40; anchors.verticalCenter: parent.verticalCenter; onClicked: player.previous() }
+        IconButton { icon: "prev"; nudge: -1; iconSize: 18; width: 40; height: 40; anchors.verticalCenter: parent.verticalCenter; tip: qsTr("上一首  Ctrl+←"); onClicked: player.previous() }
         Item {
             width: 50
             height: 50
@@ -218,16 +272,17 @@ Item {
                 iconSize: 19
                 width: 48; height: 48
                 filled: true
+                tip: (player.playing ? qsTr("暂停") : qsTr("播放")) + "  空格"
                 onClicked: player.toggle()
             }
         }
-        IconButton { icon: "next"; nudge: 1; iconSize: 18; width: 40; height: 40; anchors.verticalCenter: parent.verticalCenter; onClicked: player.next() }
+        IconButton { icon: "next"; nudge: 1; iconSize: 18; width: 40; height: 40; anchors.verticalCenter: parent.verticalCenter; tip: qsTr("下一首  Ctrl+→"); onClicked: player.next() }
         IconButton {
             anchors.verticalCenter: parent.verticalCenter
             width: 36; height: 36
             icon: "queue"
             iconSize: 17
-            tip: qsTr("播放列表")
+            tip: qsTr("播放队列  Ctrl+Q")
             iconTint: island.queueOpen ? Theme.accent : "transparent"
             restOpacity: island.queueOpen ? 1 : 0.7
             onClicked: island.queueClicked()
@@ -253,6 +308,7 @@ Item {
             opacity: 0.9
         }
         Rectangle {
+            id: qualityChip
             visible: player.hasTrack
             anchors.verticalCenter: parent.verticalCenter
             height: 26
@@ -285,7 +341,45 @@ Item {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
+                onContainsMouseChanged: containsMouse ? Nav.hint(qualityChip, qsTr("输出链路详情")) : Nav.unhint(qualityChip)
+                onPressed: Nav.unhint(qualityChip)
                 onClicked: island.chainClicked()
+            }
+        }
+        // 桌面歌词开关 (同 Ctrl+D):「词」字小胶囊,与左边的音质胶囊同一形态;关闭时细描边,开启时填满强调色
+        Item {
+            id: lyricBtn
+            anchors.verticalCenter: parent.verticalCenter
+            width: 34; height: 26
+            readonly property bool on: settings.desktopLyrics
+            Rectangle {
+                id: lyricChip
+                anchors.fill: parent
+                radius: 13
+                color: lyricBtn.on ? Theme.accent : (lyricMouse.containsMouse ? Theme.pressed : Qt.rgba(1, 1, 1, 0.05))
+                border.width: lyricBtn.on ? 0 : 1
+                border.color: lyricMouse.containsMouse ? Theme.textTertiary : Qt.rgba(1, 1, 1, 0.14)
+                scale: lyricMouse.pressed ? 0.92 : 1
+                Behavior on color { ColorAnimation { duration: Theme.fast } }
+                Behavior on scale { ScaleAnimator { duration: 160; easing.type: Easing.OutCubic } }
+                Text {
+                    anchors.centerIn: parent
+                    text: qsTr("词")
+                    color: lyricBtn.on ? Theme.onAccent : (lyricMouse.containsMouse ? Theme.text : Theme.textSecondary)
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 13
+                    font.weight: Font.Bold
+                }
+            }
+            MouseArea {
+                id: lyricMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                readonly property string tipText: (lyricBtn.on ? qsTr("关闭桌面歌词") : qsTr("打开桌面歌词")) + "  Ctrl+D"
+                onTipTextChanged: if (containsMouse) Nav.hint(lyricBtn, tipText)
+                onContainsMouseChanged: containsMouse ? Nav.hint(lyricBtn, tipText) : Nav.unhint(lyricBtn)
+                onClicked: settings.desktopLyrics = !settings.desktopLyrics
             }
         }
         VolumeControl { anchors.verticalCenter: parent.verticalCenter; pinned: !island.compact }

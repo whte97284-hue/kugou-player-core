@@ -7,12 +7,11 @@
 ## 1. 酷狗 KGM / KGMA 解密内核 (KuGou Music)
 
 * **涉及文件**：
-  * 原型/工具：`tools/kgm/kgm-dec.exe`，`tools/kgm/kgm.mask`
-  * 纯 C++ 翻译落地源文件：`tools/kgm/kgm_decoder.cpp`
+  * 原生 C++ 实现，掩码表已内置 (`player_core/src/decryptor.cpp`)，不再需要外部 `kgm.mask` 或 `kgm-dec.exe`
   * 统一工具接口：`player_core/include/decryptor.hpp` (`DecryptorRegistry` · id `kgm`)
 * **格式魔数与算法机制**：
   * 文件头魔数：前 16 字节为特征识别区：KGM/KGMA 为 `7C D5 32 EB 86 02 7F 4B A8 AF A6 8E 0F FF 99 14`，VPR 为 `05 28 BC 96 E9 E4 5A 43 91 AA BD D0 7A F5 36 31`，包含 `header_len`、`crypto_ver` 等字段；
-  * 核心逆向算法：基于 `kgm.mask` 掩码文件建立的内存映射表，结合文件头中的 16 字节 `file_key`；
+  * 核心逆向算法：基于内置掩码表，结合文件头中的 16 字节 `file_key`；
   * 逐字节还原公式：对密文字节先异或 `file_key`，随后将高 4 位与低 4 位分别结合掩码进行半字节混淆逆运算，还原为原生 `fLaC`、`ID3/MP3` 或 `OggS` 裸音频流。
 
 ---
@@ -55,7 +54,7 @@
 
 | id  | 格式               | 实现           | 可用条件                                    |
 |-----|--------------------|----------------|---------------------------------------------|
-| kgm | .kgm / .kgma / .vpr | 原生 C++       | `tools/kgm/kgm.mask` 存在                    |
+| kgm | .kgm / .kgma / .vpr | 原生 C++       | 始终可用 (掩码内置)                           |
 | ncm | .ncm               | 原生 C++       | 始终可用                                    |
 | kgg | .kgg               | kgg-dec.exe    | Windows + `tools/kgg/kgg-dec.exe` + `infra.dll` |
 

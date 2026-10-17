@@ -1,6 +1,7 @@
 #include "../include/decryptor.hpp"
 
 #include "../include/audio_tag_parser.hpp"
+#include "../include/cover_fetcher.hpp"
 #include "../include/platform_io.hpp"
 #include "tag_internal.hpp"
 
@@ -695,6 +696,13 @@ public:
             return r;
         }
         cleanup();
+        // KGG 解出的 FLAC 没有 PICTURE 块 (kgg-dec 只做纯字节流解密)。
+        // 这里补一次封面:本地算大小/MD5 对酷狗 sqhash,严格匹配优先,歌名兜底。
+        // 失败**不影响**解密结果 —— 拿不到封面就算了,音频本身是好的。
+        {
+            std::string coverErr, coverSrc;
+            cover_core::EnsureCover(r.output, &coverErr, &coverSrc);
+        }
         r.ok = true;
         return r;
 #else

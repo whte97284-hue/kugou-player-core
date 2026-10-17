@@ -100,10 +100,64 @@ bool SongCleaner::GuessFromFileName(const std::wstring& fileName, std::wstring& 
     return false;
 }
 
+std::wstring SongCleaner::StripTrackPrefix(const std::wstring& name) {
+    if (name.size() < 3 || name[0] != L'0') return name;
+    size_t i = 0;
+    while (i < name.size() && i < 3 && std::iswdigit(name[i])) ++i;
+    if (i < 2 || i >= name.size() || std::iswdigit(name[i])) return name;
+    std::wstring rest = Trim(name.substr(i));
+    return rest.empty() ? name : rest;
+}
+
+namespace {
+bool HasCjk(const std::wstring& s) {
+    for (wchar_t c : s)
+        if (c >= 0x3040 && c <= 0x9FFF) return true;
+    return false;
+}
+bool HasAsciiLetter(const std::wstring& s) {
+    for (wchar_t c : s)
+        if ((c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z')) return true;
+    return false;
+}
+} // namespace
+
+bool SongCleaner::GuessFromFolder(const std::wstring& folderName, std::wstring& outArtist, std::wstring& outAlbum) {
+    const std::wstring f = Trim(folderName);
+    if (f.empty()) return false;
+    std::wstring a, b;
+    // "歌手 - 专辑" / "歌手－专辑":分隔明确,中英文都认
+    for (const wchar_t* sep : {L" - ", L"－", L" – ", L" — "}) {
+        size_t p = f.find(sep);
+        if (p != std::wstring::npos) {
+            a = Trim(f.substr(0, p));
+            b = Trim(f.substr(p + std::wcslen(sep)));
+            break;
+        }
+    }
+    // "周杰伦 叶惠美":只在两边都是中文时按空格拆,避免把 "Taylor Swift" 拆成歌手 Taylor
+    if (a.empty()) {
+        size_t p = f.find(L' ');
+        if (p == std::wstring::npos) return false;
+        a = Trim(f.substr(0, p));
+        b = Trim(f.substr(p + 1));
+        if (!HasCjk(a) || HasAsciiLetter(a) || !HasCjk(b) || a.size() > 8) return false;
+    }
+    // 年份开头 ("2003 - 叶惠美") 不是歌手
+    bool digits = !a.empty();
+    for (wchar_t c : a)
+        if (!std::iswdigit(c)) digits = false;
+    if (a.empty() || b.empty() || digits) return false;
+    outArtist = a;
+    outAlbum = b;
+    return true;
+}
+
 CleanedSongInfo SongCleaner::Clean(const std::wstring& rawTitle, 
                                    const std::wstring& rawArtist, 
                                    const std::wstring& rawAlbum, 
-                                   const std::wstring& fileName) {
+                                   const std::wstring& fileName,
+                                   const std::wstring& folderName) {
     CleanedSongInfo info;
     std::wstring t = CleanTitle(rawTitle);
     std::wstring a = Trim(rawArtist);
@@ -113,7 +167,7 @@ CleanedSongInfo SongCleaner::Clean(const std::wstring& rawTitle,
     if (t.empty() || a.empty() || a == L"未知艺术家") {
         std::wstring gArtist, gTitle;
         if (GuessFromFileName(fileName, gArtist, gTitle)) {
-            if (t.empty()) t = CleanTitle(gTitle);
+            if (t.empty()) t = StripTrackPrefix(CleanTitle(gTitle));
             if (a.empty()) a = gArtist;
             info.was_cleaned = true;
         }
@@ -124,7 +178,16 @@ CleanedSongInfo SongCleaner::Clean(const std::wstring& rawTitle,
         std::wstring stem = fileName;
         size_t dot = stem.rfind(L'.');
         if (dot != std::wstring::npos && dot > 0) stem = stem.substr(0, dot);
-        t = CleanTitle(stem);
+        t = StripTrackPrefix(CleanTitle(stem));
+    }
+    // 标签和文件名都没有歌手时,看所在目录是否形如「周杰伦 叶惠美」
+    if ((a.empty() || a == L"未知艺术家") && !folderName.empty()) {
+        std::wstring fArtist, fAlbum;
+        if (GuessFromFolder(folderName, fArtist, fAlbum)) {
+            a = fArtist;
+            if (al == Trim(folderName)) al = fAlbum; // 专辑本来就是拿目录名充数的,换成去掉歌手后的部分
+            info.was_cleaned = true;
+        }
     }
     if (a.empty()) a = L"未知艺术家";
     if (al.empty()) al = L"未知专辑";

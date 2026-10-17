@@ -23,11 +23,13 @@ Item {
                     const n = spec.values.length
                     return n ? (spec.values[Math.min(n - 1, Math.floor((index + 0.5) * n / spec.bars))] || 0) : 0
                 }
+                // 不再把安静的频段整根藏起来 (那样会变成断断续续的虚线):
+                // 低电平用幂曲线略微抬高,并保留一条暗淡的底线
                 Rectangle {
                     anchors.bottom: parent.bottom
                     width: parent.width
-                    visible: v > 0.02
-                    height: Math.max(2, parent.height * v)
+                    height: Math.max(2, parent.height * Math.pow(v, 0.7))
+                    opacity: 0.35 + 0.65 * Math.min(1, v * 4)
                     radius: Math.min(2, width / 2)
                     gradient: Gradient {
                         GradientStop { position: 0.0; color: Theme.accent }

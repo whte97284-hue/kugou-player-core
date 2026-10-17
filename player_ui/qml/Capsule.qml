@@ -10,11 +10,12 @@ Rectangle {
     property bool filled: false
     property bool interactive: true
     property int pad: 14
+    property int trailing: 0   // 右侧额外留白 (放下拉箭头等),文字随之左移
     readonly property bool hovered: area.containsMouse
     readonly property alias pressed: area.pressed
     signal clicked()
 
-    implicitWidth: label.implicitWidth + pad * 2
+    implicitWidth: label.implicitWidth + pad * 2 + trailing
     implicitHeight: 32
     width: implicitWidth
     height: implicitHeight
@@ -36,6 +37,7 @@ Rectangle {
     Text {
         id: label
         anchors.centerIn: parent
+        anchors.horizontalCenterOffset: -cap.trailing / 2
         text: cap.text
         color: cap.filled ? Theme.onAccent : cap.accent ? Theme.accent : Theme.textSecondary
         font.family: Theme.fontFamily

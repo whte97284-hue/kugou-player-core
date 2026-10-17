@@ -77,6 +77,8 @@ int TrackFromFileName(const std::wstring& name) {
     if (digits == 0 || digits > 3 || i >= name.size()) return 0;
     wchar_t sep = name[i];
     if (sep == L'.' || sep == L' ' || sep == L'-' || sep == L'_' || sep == L')' || sep == L']') return v;
+    // "05东风破":补零曲号直接接歌名
+    if (digits >= 2 && name[0] == L'0' && !(sep >= L'0' && sep <= L'9')) return v;
     return 0;
 }
 
@@ -86,8 +88,9 @@ TrackItem MusicCatalog::BuildTrack(const std::wstring& filePath, const AudioMeta
     std::wstring fileName = FileNameOf(filePath);
 
     // 1. 元数据启发式清洗与补全
-    std::wstring rawAlbum = meta.album.empty() ? AlbumFromPath(sourcePath.empty() ? filePath : sourcePath) : meta.album;
-    CleanedSongInfo cleaned = SongCleaner::Clean(meta.title, meta.artist, rawAlbum, fileName);
+    const std::wstring folder = AlbumFromPath(sourcePath.empty() ? filePath : sourcePath);
+    std::wstring rawAlbum = meta.album.empty() ? folder : meta.album;
+    CleanedSongInfo cleaned = SongCleaner::Clean(meta.title, meta.artist, rawAlbum, fileName, folder);
 
     TrackItem track;
     track.file_path = filePath;
