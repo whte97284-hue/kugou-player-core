@@ -10,6 +10,8 @@
 #include <QStandardPaths>
 #include <QSysInfo>
 #include <QSettings>
+#include <QLibraryInfo>
+#include <QVersionNumber>
 #include <QThread>
 #include <QCoreApplication>
 #include <algorithm>
@@ -103,10 +105,22 @@ QString ApiName(QSGRendererInterface::GraphicsApi api) {
 }
 } // namespace
 
+// 没选过图形接口时的默认值:Windows 上运行时 Qt ≥ 6.9 用 D3D12 (实测开桌面歌词时掉帧明显少于 D3D11;
+// 6.9 起 D3D11/12 都改由独立的 vblank 线程驱动刷新)。D3D12 建不起来时 Qt 会退到软件光栅,不会黑屏
+QString FrameDiag::DefaultRhi() {
+#ifdef Q_OS_WIN
+    if (QLibraryInfo::version() >= QVersionNumber(6, 9)) return QStringLiteral("d3d12");
+#endif
+    return {};
+}
+
 void FrameDiag::ApplyStartupOptions() {
     const QSettings s;
-    const QString rhi = s.value(QStringLiteral("render/rhi")).toString();
+    QString rhi = s.value(QStringLiteral("render/rhi")).toString();
+    if (rhi.isEmpty()) rhi = DefaultRhi();
     if (!rhi.isEmpty() && qEnvironmentVariableIsEmpty("QSG_RHI_BACKEND")) qputenv("QSG_RHI_BACKEND", rhi.toLatin1());
+    const QString loop = s.value(QStringLiteral("render/loop")).toString();
+    if (!loop.isEmpty() && qEnvironmentVariableIsEmpty("QSG_RENDER_LOOP")) qputenv("QSG_RENDER_LOOP", loop.toLatin1());
     if (s.value(QStringLiteral("render/simpleDriver"), false).toBool() && qEnvironmentVariableIsEmpty("QSG_USE_SIMPLE_ANIMATION_DRIVER"))
         qputenv("QSG_USE_SIMPLE_ANIMATION_DRIVER", "1");
 }
@@ -115,6 +129,12 @@ QString FrameDiag::rhiChoice() const { return QSettings().value(QStringLiteral("
 void FrameDiag::setRhiChoice(const QString& v) {
     if (v == rhiChoice()) return;
     QSettings().setValue(QStringLiteral("render/rhi"), v);
+    emit renderOptionsChanged();
+}
+QString FrameDiag::renderLoop() const { return QSettings().value(QStringLiteral("render/loop")).toString(); }
+void FrameDiag::setRenderLoop(const QString& v) {
+    if (v == renderLoop()) return;
+    QSettings().setValue(QStringLiteral("render/loop"), v);
     emit renderOptionsChanged();
 }
 bool FrameDiag::simpleDriver() const { return QSettings().value(QStringLiteral("render/simpleDriver"), false).toBool(); }

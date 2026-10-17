@@ -1106,7 +1106,7 @@ Window {
                 spacing: 10
                 Text { text: "图形接口"; color: Qt.rgba(1, 1, 1, 0.5); font.family: Theme.fontFamily; font.pixelSize: 11 }
                 Repeater {
-                    model: [{ t: "默认", v: "" }, { t: "D3D11", v: "d3d11" }, { t: "D3D12", v: "d3d12" }, { t: "OpenGL", v: "opengl" }, { t: "Vulkan", v: "vulkan" }]
+                    model: [{ t: frameDiag.defaultRhi.length ? "默认 (" + frameDiag.defaultRhi.toUpperCase() + ")" : "默认", v: "" }, { t: "D3D11", v: "d3d11" }, { t: "D3D12", v: "d3d12" }, { t: "OpenGL", v: "opengl" }, { t: "Vulkan", v: "vulkan" }]
                     Text {
                         text: modelData.t
                         color: frameDiag.rhiChoice === modelData.v ? Theme.accent : Qt.rgba(1, 1, 1, 0.7)
@@ -1114,6 +1114,21 @@ Window {
                         font.pixelSize: 11
                         font.weight: frameDiag.rhiChoice === modelData.v ? Font.DemiBold : Font.Normal
                         MouseArea { anchors.fill: parent; anchors.margins: -4; cursorShape: Qt.PointingHandCursor; onClicked: frameDiag.rhiChoice = modelData.v }
+                    }
+                }
+            }
+            Row {
+                spacing: 10
+                Text { text: "渲染循环"; color: Qt.rgba(1, 1, 1, 0.5); font.family: Theme.fontFamily; font.pixelSize: 11 }
+                Repeater {
+                    model: [{ t: "默认", v: "" }, { t: "threaded", v: "threaded" }, { t: "basic", v: "basic" }]
+                    Text {
+                        text: modelData.t
+                        color: frameDiag.renderLoop === modelData.v ? Theme.accent : Qt.rgba(1, 1, 1, 0.7)
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 11
+                        font.weight: frameDiag.renderLoop === modelData.v ? Font.DemiBold : Font.Normal
+                        MouseArea { anchors.fill: parent; anchors.margins: -4; cursorShape: Qt.PointingHandCursor; onClicked: frameDiag.renderLoop = modelData.v }
                     }
                 }
             }

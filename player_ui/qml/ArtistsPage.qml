@@ -78,6 +78,8 @@ Item {
             readonly property bool playing: model.artistIndex === page.playingArtist
             // 当前队列就是这位歌手 (从这里或歌手页点的播放):播放键变成暂停 / 继续
             readonly property bool isQueue: player.queueTag === "artist:" + model.name
+            // 复用来显示另一位歌手时,上一位遗留的播放键直接撤掉
+            GridView.onReused: btnLinger.stop()
 
             Item {
                 id: avatar

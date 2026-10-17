@@ -20,6 +20,9 @@ Item {
 
     readonly property bool hovered: mouse.containsMouse || (controls.item !== null && controls.item.hot)
 
+    // 格子被复用来显示另一张专辑时调用:上一张遗留的按钮直接撤掉,不在新专辑上播放淡出
+    function settle() { linger.stop() }
+
     function openMenu(item, px, py) {
         const p = item.mapToItem(null, px, py)
         Nav.trackMenu(-1, p.x, p.y, { albumIndex: card.albumIndex })

@@ -237,8 +237,19 @@ Item {
             readonly property string letter: model.letter
             readonly property Item coverItem: cardItem.coverItem
             // 入场浮起只在刚进入专辑墙时需要:按需创建动画,滚动时新建的格子不带这一套
-            Component.onCompleted: if (wall.entering) riseAnim.createObject(cell, { cell: cell, lift: lift,
-                delay: Math.max(0, Math.min(420, (index % wall.columns) * 45 + Math.floor(index / wall.columns) * 70)) }).start()
+            property var rising: null
+            Component.onCompleted: if (wall.entering) {
+                rising = riseAnim.createObject(cell, { cell: cell, lift: lift,
+                    delay: Math.max(0, Math.min(420, (index % wall.columns) * 45 + Math.floor(index / wall.columns) * 70)) })
+                rising.start()
+            }
+            // Qt 6.9 起 GridView 真正复用格子:收进复用池时把没放完的入场动画收尾,复用出来的格子直接是停稳的样子
+            GridView.onPooled: {
+                if (rising) { rising.stop(); rising.destroy(); rising = null }
+                cell.opacity = 1
+                lift.y = 0
+            }
+            GridView.onReused: cardItem.settle()
             transform: Translate { id: lift }
             AlbumCard {
                 id: cardItem

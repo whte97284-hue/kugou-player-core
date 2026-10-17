@@ -6,9 +6,9 @@ import PlayerUi
 ListView {
     id: strip
     property int coverSize: 150
-    // 第二行写歌手而不是年份 (搜索结果里专辑来自不同歌手);highlight 为搜索词高亮
+    // 第二行写歌手而不是年份 (搜索结果里专辑来自不同歌手);query 为要高亮的搜索词
     property bool showArtist: false
-    property string highlight
+    property string query
     signal open(int index, Item coverItem)
     width: parent ? parent.width : 0
     height: count > 0 ? coverSize + 64 : 0
@@ -35,8 +35,8 @@ ListView {
         Text {
             y: strip.coverSize + 10
             width: parent.width
-            text: strip.highlight.length ? Nav.highlight(modelData.title, strip.highlight, Theme.accent) : modelData.title
-            textFormat: strip.highlight.length ? Text.StyledText : Text.PlainText
+            text: strip.query.length ? Nav.highlight(modelData.title, strip.query, Theme.accent) : modelData.title
+            textFormat: strip.query.length ? Text.StyledText : Text.PlainText
             elide: Text.ElideRight
             color: parent.hovered ? Theme.accent : Theme.text
             font.family: Theme.fontFamily

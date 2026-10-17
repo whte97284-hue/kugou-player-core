@@ -30,6 +30,9 @@ class FrameDiag : public QObject {
     // Qt 的「简单动画驱动」(始终按挂钟推进,不在两种模式间切换)
     Q_PROPERTY(QString rhiChoice READ rhiChoice WRITE setRhiChoice NOTIFY renderOptionsChanged)
     Q_PROPERTY(bool simpleDriver READ simpleDriver WRITE setSimpleDriver NOTIFY renderOptionsChanged)
+    // 渲染循环 (空 = 默认 threaded / basic)、没选图形接口时实际用的默认值
+    Q_PROPERTY(QString renderLoop READ renderLoop WRITE setRenderLoop NOTIFY renderOptionsChanged)
+    Q_PROPERTY(QString defaultRhi READ DefaultRhi CONSTANT)
 public:
     explicit FrameDiag(QObject* parent = nullptr);
     // 在 QGuiApplication 创建之后、窗口创建之前调用:打开 scenegraph 启动信息并截获它
@@ -39,6 +42,9 @@ public:
     QString rhiChoice() const;
     void setRhiChoice(const QString& v);
     bool simpleDriver() const;
+    QString renderLoop() const;
+    void setRenderLoop(const QString& v);
+    static QString DefaultRhi();
     void setSimpleDriver(bool v);
 
     void attach(QQuickWindow* window);

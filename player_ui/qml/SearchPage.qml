@@ -305,7 +305,7 @@ Item {
                 width: parent.width
                 model: page.stripAlbums
                 showArtist: true
-                highlight: page.q
+                query: page.q
                 onOpen: (index) => Nav.openAlbum(index)
             }
 

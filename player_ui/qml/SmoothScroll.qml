@@ -63,13 +63,13 @@ WheelHandler {
         const n = r < 1.75 ? 1 : Math.round(r)
         return Math.min(0.1, n * vsync)
     }
-    // 滚动中 (滚轮动画或拖动 / 惯性) 时登记到 Theme.scrolling
-    readonly property bool active: anim.running || (flickable ? flickable.moving : false)
+    // 滚动中 (滚轮动画或拖动 / 惯性) 时登记到 Theme.scrolling (不叫 active:那是 WheelHandler 自带的属性)
+    readonly property bool engaged: anim.running || (flickable ? flickable.moving : false)
     property bool counted: false
-    onActiveChanged: {
-        if (active === counted) return
-        counted = active
-        Theme.scrollers += active ? 1 : -1
+    onEngagedChanged: {
+        if (engaged === counted) return
+        counted = engaged
+        Theme.scrollers += engaged ? 1 : -1
     }
     Component.onDestruction: if (counted) Theme.scrollers -= 1
     property FrameAnimation anim: FrameAnimation {
