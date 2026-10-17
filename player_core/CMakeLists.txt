@@ -27,6 +27,7 @@ add_library(player_core STATIC
     src/playlist_matcher.cpp
     src/tinf.cpp
     src/kugou_track_bridge.cpp
+    src/cover_fetcher.cpp
 )
 target_include_directories(player_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(player_core PUBLIC cxx_std_17)
