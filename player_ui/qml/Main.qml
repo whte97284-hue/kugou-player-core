@@ -972,6 +972,11 @@ Window {
     function automationWallFilter(f) { albumModel.filter = f }
     function automationWallScroll(y) { wall.automationScroll(y) }
     function automationWallSortMenu(on) { wall.automationSortMenu(on) }
+    function automationCoverPanel(on) { wall.automationCoverPanel(on) }
+    function automationCoverRun() { wall.automationCoverRun() }
+    function automationCoverPick(i) { wall.automationCoverPick(i) }
+    function automationCoverRunAll() { wall.automationCoverRunAll() }
+    function automationCoverLog() { wall.automationCoverLog() }
     function automationAlbumCell(c) { settings.albumCell = c }
     function automationWallMenu(row) { Nav.trackMenu(-1, 520, 420, { albumIndex: albumModel.albumAt(Number(row)) }) }
     function automationViewCover(on) { if (on) coverViewer.open(albumTracks.cover, albumTracks.title, albumTracks.artist); else coverViewer.close() }

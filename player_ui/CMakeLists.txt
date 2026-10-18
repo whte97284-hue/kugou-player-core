@@ -11,6 +11,7 @@ qt_add_executable(KugouPlayer
     src/playlist_service.h src/playlist_service.cpp
     src/playlist_importer.h src/playlist_importer.cpp
     src/decrypt_service.h src/decrypt_service.cpp
+    src/cover_service.h src/cover_service.cpp
     src/folder_watcher.h src/folder_watcher.cpp
     src/settings_service.h src/settings_service.cpp
     src/library_tools.h src/library_tools.cpp
@@ -78,6 +79,7 @@ qt_add_qml_module(KugouPlayer
         qml/DesktopLyrics.qml
         qml/AlbumStrip.qml
         qml/CoverViewer.qml
+        qml/CoverPanel.qml
         qml/HoverTip.qml
         qml/SortPopup.qml
         qml/LyricSourcePanel.qml

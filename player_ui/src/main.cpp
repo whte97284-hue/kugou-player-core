@@ -13,6 +13,7 @@
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QQuickItem>
 #include <QTimer>
 #include <QKeyEvent>
 #include <QWheelEvent>
@@ -27,6 +28,7 @@
 #include "playlist_service.h"
 #include "playlist_importer.h"
 #include "decrypt_service.h"
+#include "cover_service.h"
 #include "settings_service.h"
 #include "decryptor.hpp"
 #include "window_helper.h"
@@ -199,6 +201,30 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         steps->push_back({"i11_small", [window, call] { call("automationImportFilter", 0); window->resize(980, 640); }, 1400});
         steps->push_back({"i12_saved", [window, call] { window->resize(1600, 1000); call("automationImportSave"); }, 1800});
         steps->push_back({"i13_err", [call] { call("automationImport", true); call("automationImportGo", QStringLiteral("https://example.com/abc")); }, 900});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_COVER")) {
+        // 封面面板:专辑墙 → 真实点一下横幅上的封面按钮 → 选一张 → 开始导入
+        // 用合成鼠标事件点 objectName=coverBtn,验证的是「点击 → 信号 → 面板」整条链路
+        auto clickCoverBtn = [window]() {
+            auto* it = window->findChild<QQuickItem*>("coverBtn");
+            if (!it) { std::fprintf(stderr, "KP_COVER_BTN not found\n"); return; }
+            const QPointF c = it->mapToScene(QPointF(it->width() / 2, it->height() / 2));
+            std::fprintf(stderr, "KP_COVER_BTN at %.0f,%.0f size %.0fx%.0f\n", c.x(), c.y(),
+                         it->width(), it->height());
+            QMouseEvent mv(QEvent::MouseMove, c, window->mapToGlobal(c), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(window, &mv);
+            QMouseEvent pr(QEvent::MouseButtonPress, c, window->mapToGlobal(c), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(window, &pr);
+            QMouseEvent rl(QEvent::MouseButtonRelease, c, window->mapToGlobal(c), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(window, &rl);
+        };
+        // 等首次扫描完成(真实使用里用户不会在扫描中开面板)
+        steps->push_back({"v01_wall", [call] { call("automationGo", QStringLiteral("albums")); call("automationWallSort", 3); }, 20000});
+        steps->push_back({"v02_click", clickCoverBtn, 1400});
+        // 矮窗口:底部按钮必须还在视野内且可点
+        steps->push_back({"v02b_short", [window] { window->resize(1180, 620); }, 1500});
+        steps->push_back({"v03_runall", [call] { call("automationCoverRunAll"); }, 45000});
+        steps->push_back({"v04_report", [call] { call("automationCoverLog"); }, 2500});
+        steps->push_back({"v04_running", [call] { call("automationCoverRun"); }, 3000});
     } else if (qEnvironmentVariableIsSet("KP_TEST_SORTUI")) {
         // 排序入口与横幅对齐:专辑墙 (默认 / 菜单开着 / 播放中) 与歌曲页 (默认 / 改过排序),再看矮窗口
         steps->push_back({"s01_wall", [call] { call("automationGo", QStringLiteral("albums")); }, 1600});
@@ -828,6 +854,7 @@ int main(int argc, char* argv[]) {
     TrackListModel albumTracks(&library);
     SearchModel search(&library);
     DecryptService decrypt(&library);
+    CoverService covers(&library);
     SettingsService settings(&library);
     ArtistModel artists(&library);
     TrackCollectionModel songs(&library, &playlists);
@@ -858,6 +885,7 @@ int main(int argc, char* argv[]) {
     ctx->setContextProperty("searchModel", &search);
     ctx->setContextProperty("playlists", &playlists);
     ctx->setContextProperty("decrypt", &decrypt);
+    ctx->setContextProperty("covers", &covers);
     ctx->setContextProperty("settings", &settings);
     ctx->setContextProperty("artistModel", &artists);
     ctx->setContextProperty("songsModel", &songs);

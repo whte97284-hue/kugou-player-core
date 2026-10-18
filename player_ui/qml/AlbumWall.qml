@@ -192,6 +192,7 @@ Item {
                 sortOpen: sortPop.shown
                 onOpenAlbum: (index, coverItem) => wall.openAlbum(index, coverItem)
                 onSortMenu: (anchor) => sortPop.open(anchor)
+                onCoverPanel: (anchor) => coverSheet.openAt(anchor)
             }
             // 横幅高度变化 (扫描完成、窗口缩放):用户尚未滚动时停在顶部;已滚动但视口还在横幅范围内时
             // 保持视口相对横幅的位置 (GridView 有时自己挪 contentY、有时不挪,所以按记下的相对位置重设)
@@ -355,6 +356,12 @@ Item {
         onPicked: (i) => albumModel.sortMode = i
     }
 
+    // ---- 专辑封面面板 ----
+    CoverPanel {
+        id: coverSheet
+        bottomInset: wall.bottomInset + 8
+    }
+
     // 截图自动化
     function automationScroll(y) { smooth.stop(); grid.userScrolled = true; grid.contentY = clampY(grid.originY + y) }
     function automationSortMenu(on) {
@@ -362,4 +369,10 @@ Item {
         const h = grid.headerItem
         if (h) sortPop.open(h.sortAnchor)
     }
+    // 封面面板:on = 打开 / 关;run = 点「导入」
+    function automationCoverPanel(on) { if (on) coverSheet.openAt(null); else coverSheet.close() }
+    function automationCoverRun() { coverSheet.run() }
+    function automationCoverPick(i) { coverSheet.toggle(Number(i), 1) }
+    function automationCoverRunAll() { coverSheet.runAll() }
+    function automationCoverLog() { covers.openFailureLog() }
 }

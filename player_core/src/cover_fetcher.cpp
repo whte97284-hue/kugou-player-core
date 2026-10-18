@@ -263,9 +263,13 @@ bool ReadFlacTags(const std::wstring& path, FlacTags& out) {
 }
 
 bool EmbedFlacPicture(const std::wstring& path, const std::string& jpeg, int width, int height,
-                      std::string* error) {
-    if (jpeg.size() < 3 || static_cast<uint8_t>(jpeg[0]) != 0xFF || static_cast<uint8_t>(jpeg[1]) != 0xD8)
+                      std::string* error, const std::string& mimeIn) {
+    const char* sniffed = SniffImage(jpeg);
+    if (!sniffed) {
+        if (error) *error = "图片格式不认识";
         return false;
+    }
+    const std::string mimeStr = mimeIn.empty() ? std::string(sniffed) : mimeIn;
     if (jpeg.size() > 0xFFFFF0u) { // 单块最大 16MB-16
         if (error) *error = "封面过大";
         return false;
@@ -288,9 +292,8 @@ bool EmbedFlacPicture(const std::wstring& path, const std::string& jpeg, int wid
     }
 
     // PICTURE 块体
-    const char kMime[] = "image/jpeg";
     std::vector<uint8_t> body;
-    body.reserve(32 + sizeof(kMime) + jpeg.size());
+    body.reserve(32 + mimeStr.size() + jpeg.size());
     const auto put32 = [&](uint32_t v) {
         body.push_back(static_cast<uint8_t>(v));
         body.push_back(static_cast<uint8_t>(v >> 8));
@@ -304,8 +307,8 @@ bool EmbedFlacPicture(const std::wstring& path, const std::string& jpeg, int wid
         body.push_back(static_cast<uint8_t>(v));
     };
     putBE32(3);                                        // picture type: Cover (front)
-    putBE32(static_cast<uint32_t>(sizeof(kMime) - 1)); // MIME 长度
-    body.insert(body.end(), kMime, kMime + sizeof(kMime) - 1);
+    putBE32(static_cast<uint32_t>(mimeStr.size()));    // MIME 长度
+    body.insert(body.end(), mimeStr.begin(), mimeStr.end());
     putBE32(0);                                        // 描述长度
     putBE32(static_cast<uint32_t>(width));             // 宽 (未知填 0)
     putBE32(static_cast<uint32_t>(height));            // 高
@@ -505,6 +508,31 @@ bool JsonGetInt(const std::string& json, const std::string& key, long long& out,
     return true;
 }
 
+const char* SniffImage(const std::string& d) {
+    const size_t n = d.size();
+    if (n >= 3 && static_cast<uint8_t>(d[0]) == 0xFF && static_cast<uint8_t>(d[1]) == 0xD8) return "image/jpeg";
+    if (n >= 8 && static_cast<uint8_t>(d[0]) == 0x89 && d[1] == 'P' && d[2] == 'N' && d[3] == 'G') return "image/png";
+    if (n >= 12 && d[0] == 'R' && d[1] == 'I' && d[2] == 'F' && d[3] == 'F' && d[8] == 'W' && d[9] == 'E' &&
+        d[10] == 'B' && d[11] == 'P')
+        return "image/webp";
+    if (n >= 6 && d[0] == 'G' && d[1] == 'I' && d[2] == 'F') return "image/gif";
+    if (n >= 2 && d[0] == 'B' && d[1] == 'M') return "image/bmp";
+    return nullptr;
+}
+
+std::string HexHead(const std::string& d) {
+    static const char* kHex = "0123456789abcdef";
+    std::string out;
+    const size_t n = std::min<size_t>(8, d.size());
+    for (size_t i = 0; i < n; ++i) {
+        const uint8_t v = static_cast<uint8_t>(d[i]);
+        out.push_back(kHex[v >> 4]);
+        out.push_back(kHex[v & 15]);
+        out.push_back(' ');
+    }
+    return out;
+}
+
 std::string UrlEncode(const std::string& utf8) {
     static const char* kHex = "0123456789ABCDEF";
     std::string s;
@@ -531,79 +559,130 @@ const char kUa[] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) KugouPlayer/1.0";
 const size_t kMaxCover = 8u << 20; // 8MB 上限,超过视为异常
 
 // 酷狗:搜歌 → sqhash/sqfilesize 校验 → album_id → imgurl → 下载
-bool FetchKugou(const FlacTags& tags, const std::wstring& flac_path, CoverResult& out, std::string* err) {
-    const std::string kw = UrlEncode(tags.artist.empty() ? tags.title : tags.artist + " " + tags.title);
-    std::string body;
-    if (!Http("http://mobilecdn.kugou.com/api/v3/search/song?format=json&keyword=" + kw +
-                  "&page=1&pagesize=10&showtype=1",
-              body)) {
-        if (err) *err = "kugou: 搜索失败";
-        return false;
-    }
-    if (body.find("\"info\":[]") != std::string::npos) {
-        if (err) *err = "kugou: 无结果";
-        return false;
-    }
+// 用一组关键词依次搜索,任何一次命中就返回 album_id。
+// 为什么要多关键词:单曲版本差异(「Luv(Sic)」只搜到「Luv(sic) Grand Finale」)、
+// 罗马字与原文差异(「Sakurairo Diary」vs「桜色ダイアリー」)—— 换关键词常能命中。
+std::string SearchAlbumId(const FlacTags& tags, const std::wstring& probe, bool* fuzzyOut, std::string* lastErr) {
+    std::vector<std::string> keywords;
+    if (!tags.artist.empty() && !tags.title.empty()) keywords.push_back(tags.artist + " " + tags.title);
+    if (!tags.title.empty()) keywords.push_back(tags.title);            // 只搜标题:版本歧义时更准
+    // 备用标题(来自文件名):标签是罗马字时,原文只在文件名里
+    if (!tags.alt_title.empty() && tags.alt_title != tags.title) keywords.push_back(tags.alt_title);
+    if (!tags.album.empty() && tags.album != tags.title) keywords.push_back(tags.album); // 合辑/自建专辑
 
-    // 本地文件大小 (O(1),先用它匹配;MD5 只在 size 不中时才算 —— 38MB 文件算一次要 55ms)
     long long fsize = 0;
-    if (!flac_path.empty()) {
+    if (!probe.empty()) {
         uint64_t sz = 0, mt = 0;
-        if (platform::GetFileInfo(flac_path, sz, mt)) fsize = static_cast<long long>(sz);
+        if (platform::GetFileInfo(probe, sz, mt)) fsize = static_cast<long long>(sz);
     }
+    std::string md5;
+    bool md5Done = false;
+    // 可接受的目标标题:标签标题 + 文件名标题(罗马字 / 原文 各一份),任一命中即可。
+    // 只认标签标题的话,「Sakurairo Diary」永远等不到官方「桜色ダイアリー」。
+    std::vector<std::string> wants;
+    auto addWant = [&wants](const std::string& t) {
+        const std::string n = NormalizeTitle(t);
+        if (n.size() >= 2 && std::find(wants.begin(), wants.end(), n) == wants.end()) wants.push_back(n);
+    };
+    addWant(tags.title);
+    addWant(tags.alt_title);
 
-    // 把候选切成小段 (每段含一个 hash / songname / album_id ...)
-    std::vector<std::string> chunks;
-    {
-        size_t p = body.find("\"hash\"");
-        while (p != std::string::npos && chunks.size() < 10) {
-            size_t nxt = body.find("\"hash\"", p + 6);
+    for (const std::string& kwRaw : keywords) {
+        std::string body;
+        if (!Http("http://mobilecdn.kugou.com/api/v3/search/song?format=json&keyword=" + UrlEncode(kwRaw) +
+                      "&page=1&pagesize=10&showtype=1",
+                  body)) {
+            if (lastErr) *lastErr = "搜索请求失败";
+            continue;
+        }
+        // 把候选切成小段 (每段含一个 hash / songname / album_id ...)
+        std::vector<std::string> chunks;
+        for (size_t p = body.find("\"hash\""); p != std::string::npos && chunks.size() < 10;) {
+            const size_t nxt = body.find("\"hash\"", p + 6);
             chunks.push_back(body.substr(p, (nxt == std::string::npos ? body.size() : nxt) - p));
             p = nxt;
         }
-    }
 
-    // 一阶段:按文件大小精确匹配 (同一份文件必然同大小)
-    std::string album_id;
-    const char* stage = "size";
-    for (const auto& chunk : chunks) {
-        long long sqsz = 0;
-        if (fsize <= 0 || !JsonGetInt(chunk, "sqfilesize", sqsz) || sqsz != fsize) continue;
-        JsonGetString(chunk, "album_id", album_id);
-        if (!album_id.empty()) break;
-    }
-    // 二阶段:大小不中 → 算 MD5 对 sqhash (酷狗的 sqhash 就是整文件 MD5)
-    if (album_id.empty() && !flac_path.empty()) {
-        stage = "md5";
-        const std::string md5 = Md5File(flac_path);
-        if (!md5.empty()) {
-            for (const auto& chunk : chunks) {
-                std::string sq;
-                if (!JsonGetString(chunk, "sqhash", sq) || Lower(sq) != md5) continue;
-                JsonGetString(chunk, "album_id", album_id);
-                if (!album_id.empty()) break;
+        // 一阶段:文件大小精确匹配(同一份文件必然同大小,零额外计算)
+        for (const auto& chunk : chunks) {
+            long long sqsz = 0;
+            if (fsize <= 0 || !JsonGetInt(chunk, "sqfilesize", sqsz) || sqsz != fsize) continue;
+            std::string id;
+            JsonGetString(chunk, "album_id", id);
+            if (!id.empty()) return id;
+        }
+        // 二阶段:MD5 对 sqhash(酷狗的无损 hash 就是整文件 MD5)
+        if (!probe.empty()) {
+            if (!md5Done) {
+                md5 = Md5File(probe);
+                md5Done = true;
+            }
+            if (!md5.empty()) {
+                for (const auto& chunk : chunks) {
+                    std::string sq;
+                    if (!JsonGetString(chunk, "sqhash", sq) || Lower(sq) != md5) continue;
+                    std::string id;
+                    JsonGetString(chunk, "album_id", id);
+                    if (!id.empty()) return id;
+                }
             }
         }
-    }
-    // 三阶段:仍不中 → 歌名规范化全等就当同一首歌(版本不同但封面通常一致)
-    // 只在「歌名对得上」时用,避免拿到别的歌的封面。
-    bool fuzzy = false;
-    if (album_id.empty()) {
-        stage = "fuzzy";
-        const std::string want = NormalizeTitle(tags.title);
+        // 三阶段:歌名规范化全等(版本不同但封面通常一致)
         for (const auto& chunk : chunks) {
             std::string sn;
             if (!JsonGetString(chunk, "songname", sn)) continue;
-            if (NormalizeTitle(sn) != want || want.empty()) continue;
-            JsonGetString(chunk, "album_id", album_id);
-            if (!album_id.empty()) { fuzzy = true; break; }
+            const std::string a = NormalizeTitle(sn);
+            if (a.empty()) continue;
+            if (std::find(wants.begin(), wants.end(), a) == wants.end()) continue;
+            std::string id;
+            JsonGetString(chunk, "album_id", id);
+            if (!id.empty()) {
+                if (fuzzyOut) *fuzzyOut = true;
+                return id;
+            }
         }
+        // 四阶段:前缀匹配。「桜色ダイアリー(樱色日记)」多一个译名后缀,
+        // 与官方「桜色ダイアリー」只差尾巴;短的一方不短于 3 字符且占比过半才认,避免误伤。
+        for (const auto& chunk : chunks) {
+            std::string sn;
+            if (!JsonGetString(chunk, "songname", sn)) continue;
+            const std::string a = NormalizeTitle(sn);
+            if (a.size() < 3) continue;
+            bool hit = false;
+            for (const std::string& w : wants) {
+                if (w.size() < 3) continue;
+                const bool aPre = (w.size() > a.size() && w.compare(0, a.size(), a) == 0);
+                const bool wPre = (a.size() > w.size() && a.compare(0, w.size(), w) == 0);
+                if (!aPre && !wPre) continue;
+                const size_t shorter = std::min(a.size(), w.size());
+                const size_t longer = std::max(a.size(), w.size());
+                if (shorter * 2 < longer) continue;
+                hit = true;
+                break;
+            }
+            if (!hit) continue;
+            std::string id;
+            JsonGetString(chunk, "album_id", id);
+            if (!id.empty()) {
+                if (fuzzyOut) *fuzzyOut = true;
+                return id;
+            }
+        }
+        if (lastErr) *lastErr = "无匹配";
     }
+    return {};
+}
+
+bool FetchKugou(const FlacTags& tags, const std::wstring& flac_path, CoverResult& out, std::string* err) {
+    bool fuzzy = false;
+    std::string sub;
+    const std::string album_id = SearchAlbumId(tags, flac_path, &fuzzy, &sub);
     if (album_id.empty()) {
-        if (err) *err = "kugou: 无匹配";
+        if (err) *err = "kugou: " + (sub.empty() ? std::string("无结果") : sub);
         return false;
     }
 
+    std::string body;
     if (!Http("http://mobilecdn.kugou.com/api/v3/album/info?format=json&albumid=" + album_id, body)) {
         if (err) *err = "kugou: 专辑信息失败";
         return false;
@@ -615,14 +694,23 @@ bool FetchKugou(const FlacTags& tags, const std::wstring& flac_path, CoverResult
     }
     const size_t at = img.find("{size}");
     img.replace(at, 6, "1080");
-    if (!Http(img, body) || body.size() < 3 || static_cast<uint8_t>(body[0]) != 0xFF ||
-        static_cast<uint8_t>(body[1]) != 0xD8 || body.size() > kMaxCover) {
-        if (err) *err = "kugou: 封面下载失败";
+    if (!Http(img, body)) {
+        if (err) *err = "kugou: 图片 HTTP 失败";
+        return false;
+    }
+    const char* fmt = SniffImage(body);
+    if (!fmt) {
+        if (err) *err = "kugou: 图片格式不认识 " + HexHead(body);
+        return false;
+    }
+    if (body.size() > kMaxCover) {
+        if (err) *err = "kugou: 图片过大";
         return false;
     }
     out.jpeg = std::move(body);
+    out.mime = fmt;
     out.source = "kugou";
-    out.detail = "album_id=" + album_id + "/" + (fuzzy ? "fuzzy" : stage);
+    out.detail = "album_id=" + album_id + (fuzzy ? "/fuzzy" : "");
     return true;
 }
 
@@ -676,13 +764,21 @@ bool FetchNetease(const FlacTags& tags, CoverResult& out, std::string* err) {
         if (err) *err = "netease: 无 picUrl";
         return false;
     }
-    if (!Http(pic + "?param=1080y1080", body) || body.size() < 3 ||
-        static_cast<uint8_t>(body[0]) != 0xFF || static_cast<uint8_t>(body[1]) != 0xD8 ||
-        body.size() > kMaxCover) {
-        if (err) *err = "netease: 封面下载失败";
+    if (!Http(pic + "?param=1080y1080", body)) {
+        if (err) *err = "netease: 图片 HTTP 失败";
+        return false;
+    }
+    const char* nfmt = SniffImage(body);
+    if (!nfmt) {
+        if (err) *err = "netease: 图片格式不认识, 前8字节=" + HexHead(body);
+        return false;
+    }
+    if (body.size() > kMaxCover) {
+        if (err) *err = "netease: 图片过大";
         return false;
     }
     out.jpeg = std::move(body);
+    out.mime = nfmt;
     out.source = "netease";
     out.detail = "song_id=" + std::to_string(sid);
     return true;

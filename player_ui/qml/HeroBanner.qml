@@ -7,6 +7,8 @@ Item {
     id: hero
     signal openAlbum(int index, Item coverItem)
     signal sortMenu(Item anchor)
+    // 打开专辑封面面板 (锚点是触发它的按钮)
+    signal coverPanel(Item anchor)
     property bool sortOpen: false   // 排序菜单开着 (箭头朝上、文字强调色)
     // 网格可见高度 (去掉底部播放栏):窗口矮时封面跟着缩小,第一排专辑不被挤出视野
     property real availableHeight: 640
@@ -170,13 +172,28 @@ Item {
                 }
             }
             IconButton {
+                id: coverBtn
+                objectName: "coverBtn"
                 anchors.verticalCenter: parent.verticalCenter
                 width: 42; height: 42
                 outlined: true
                 icon: "album-open"
                 iconSize: 17
-                tip: qsTr("打开专辑")
-                onClicked: hero.openAlbum(hero.albumIndex, sleeve)
+                tip: qsTr("专辑封面")
+                onClicked: hero.coverPanel(coverBtn)
+                // 有专辑缺封面时点一个强调色小圆(无字提示)
+                Rectangle {
+                    readonly property bool on: covers.missingCount > 0
+                    visible: on
+                    width: 6; height: 6; radius: 3
+                    color: Theme.accent
+                    anchors.right: parent.right
+                    anchors.rightMargin: 8
+                    anchors.top: parent.top
+                    anchors.topMargin: 8
+                    scale: on ? 1 : 0
+                    Behavior on scale { NumberAnimation { duration: Theme.fast; easing.type: Easing.OutBack } }
+                }
             }
             IconButton {
                 id: heroMore

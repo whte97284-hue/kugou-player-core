@@ -36,6 +36,9 @@ struct FlacTags {
     std::string title;   // UTF-8
     std::string artist;  // UTF-8 (优先 ARTIST,回落 ALBUMARTIST)
     std::string album;   // UTF-8
+    // 备用标题:文件名的后段(「艺人 - 标题」取标题)。标签被翻成罗马字时
+    // (Sakurairo Diary)文件名往往还留着原文(桜色ダイアリー),用它才搜得到。
+    std::string alt_title;
 };
 
 // 是否 FLAC(看 4 字节魔数)
@@ -51,12 +54,15 @@ std::string Md5File(const std::wstring& path);
 // 把 JPEG 作为 PICTURE 块插入 FLAC(已有封面则不动,返回 false)
 // 先写 path + ".tmp" 再原子替换,失败不会损坏原文件。
 // width/height 未知时传 0(标准允许)。
+// mime 传空 = 自动嗅探
 bool EmbedFlacPicture(const std::wstring& path, const std::string& jpeg,
-                      int width = 0, int height = 0, std::string* error = nullptr);
+                      int width = 0, int height = 0, std::string* error = nullptr,
+                      const std::string& mime = std::string());
 
 // ---- 在线取封面 ----
 struct CoverResult {
-    std::string jpeg;    // JPEG 字节
+    std::string jpeg;    // 图片字节 (字段名沿用,实际可能是 PNG/WEBP)
+    std::string mime;    // "image/jpeg" / "image/png" / "image/webp"
     std::string source;  // "kugou" / "netease"
     std::string detail;  // 调试信息(album_id 等)
 };
@@ -74,6 +80,10 @@ bool EnsureCover(const std::wstring& flac_path, std::string* error = nullptr,
 
 // ---- 工具(公开便于测试) ----
 std::string UrlEncode(const std::string& utf8);
+// 识别图片格式,返回 MIME;不认识返回 nullptr
+const char* SniffImage(const std::string& data);
+// 前 8 字节的 hex (错误信息里显示,便于定位返回的到底是什么)
+std::string HexHead(const std::string& data);
 // 从 JSON 文本里取字符串字段(轻量,只够用不追求完备;找不到返回 false)
 bool JsonGetString(const std::string& json, const std::string& key, std::string& out, size_t from = 0);
 bool JsonGetInt(const std::string& json, const std::string& key, long long& out, size_t from = 0);
