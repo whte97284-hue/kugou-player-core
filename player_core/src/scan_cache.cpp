@@ -184,3 +184,16 @@ void ScanCache::Put(const std::wstring& path, ScanCacheEntry entry) {
     entry.meta.cover_data.clear();
     entries_[path] = std::move(entry);
 }
+
+size_t ScanCache::Carry(const std::vector<std::pair<std::wstring, std::wstring>>& moves, bool keepSource) {
+    size_t n = 0;
+    for (const auto& mv : moves) {
+        auto it = entries_.find(mv.first);
+        if (it == entries_.end() || mv.first == mv.second) continue;
+        ScanCacheEntry e = it->second;
+        if (!keepSource) entries_.erase(it);
+        entries_[mv.second] = std::move(e);
+        ++n;
+    }
+    return n;
+}

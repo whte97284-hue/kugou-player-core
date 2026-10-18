@@ -14,12 +14,14 @@ Item {
     property string tip
     property color iconTint: "transparent"
     readonly property alias hovered: mouse.containsMouse
-    // 图标切换时弹跳一下 (收藏等状态型按钮)
+    // 图标切换时弹跳一下;收藏键不用它 (切歌时状态变化也会弹),而是在点击时调用 popNow()
     property bool popOnChange: false
+    function popNow() { if (!Theme.reduced) pop.restart() }
     // 图标切换时旋转交叉淡化 (播放 / 暂停)
     property bool morphOnChange: false
     // 点击时图标朝这个方向轻推一下 (-1 上一首,1 下一首,0 不推)
     property int nudge: 0
+    onTipChanged: if (mouse.containsMouse) Nav.hint(btn, tip)
     onIconChanged: {
         if (popOnChange) pop.restart()
         if (morphOnChange && !Theme.reduced) morph.restart()
@@ -123,6 +125,12 @@ Item {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
+        onContainsMouseChanged: {
+            if (!btn.tip.length) return
+            if (containsMouse) Nav.hint(btn, btn.tip)
+            else Nav.unhint(btn)
+        }
+        onPressed: if (btn.tip.length) Nav.unhint(btn)
         onClicked: {
             if (!Theme.reduced) {
                 rippleAnim.restart()

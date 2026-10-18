@@ -1,9 +1,9 @@
 import QtQuick
 import PlayerUi
 
-// 侧边导航:不再是一条深色竖栏,而是两枚悬浮的竖向胶囊 (与播放岛、设置页同一套胶囊语言)
-//  · 上:五个主分区;选中项是一枚柔和的强调色圆底,切换时像液滴一样先伸长、再收拢到新位置
-//  · 主分区之后紧跟:转换 · 音乐文件夹 · 设置 (合并为一枚胶囊)
+// 侧边导航:不再是一条深色竖栏,而是一枚悬浮的竖向胶囊 (与播放岛、设置页同一套胶囊语言)
+//  · 五个主分区;选中项是一枚柔和的强调色圆底,切换时像液滴一样先伸长、再收拢到新位置
+//  · 主分区之后紧跟:转换 · 音乐文件夹 · 设置
 //  · 悬停只提亮图标并给一层极淡的圆底;停留片刻在右侧浮出名称
 Item {
     id: nav
@@ -16,7 +16,7 @@ Item {
         { key: "artists", icon: "artist", tip: qsTr("歌手") },
         { key: "songs", icon: "note", tip: qsTr("歌曲") },
         { key: "playlists", icon: "playlist", tip: qsTr("歌单") },
-        { key: "search", icon: "search", tip: qsTr("搜索  Ctrl K") },
+        { key: "search", icon: "search", tip: qsTr("搜索  Ctrl+K") },
         { key: "tools", icon: "tools", tip: qsTr("转换") },
         { key: "folder", icon: "folder", tip: qsTr("音乐文件夹") },
         { key: "settings", icon: "settings", tip: qsTr("设置") }
@@ -134,6 +134,8 @@ Item {
                 visible: modelData.key === "tools" && decrypt.policy !== 2 && (decrypt.pending.total || 0) > 0 && nav.current !== "tools"
                 SequentialAnimation on opacity {
                     running: parent.visible && !Theme.reduced
+                    // 无限动画会让整个窗口一直按刷新率重画:滚动中、窗口不在前台时都停下
+                    paused: running && (Theme.scrolling || Qt.application.state !== Qt.ApplicationActive)
                     loops: Animation.Infinite
                     OpacityAnimator { from: 1; to: 0.35; duration: 1400; easing.type: Easing.InOutSine }
                     OpacityAnimator { from: 0.35; to: 1; duration: 1400; easing.type: Easing.InOutSine }
@@ -144,41 +146,16 @@ Item {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: nav.navigate(modelData.key)
-                onContainsMouseChanged: {
-                    if (containsMouse) { tip.target = btn; tip.text = modelData.tip; tipDelay.restart() }
-                    else if (tip.target === btn) { tipDelay.stop(); tip.target = null }
+                // 弹出类 (音乐文件夹) 按下就响应,不等松开
+                onClicked: if (modelData.key !== "folder") nav.navigate(modelData.key)
+                // 名称提示:与图标按钮同一个提示框,浮在图标右侧
+                onContainsMouseChanged: containsMouse ? Nav.hintRight(btn, modelData.tip) : Nav.unhint(btn)
+                onPressed: {
+                    Nav.unhint(btn)
+                    if (modelData.key === "folder") nav.navigate(modelData.key)
                 }
             }
         }
     }
 
-    // 名称提示:悬停 450ms 后在图标右侧浮出
-    Timer { id: tipDelay; interval: 450 }
-    Rectangle {
-        id: tip
-        property Item target: null
-        property string text
-        parent: nav.parent
-        z: 200
-        x: nav.width - 4
-        y: target ? target.mapToItem(nav.parent, 0, 0).y + (target.height - height) / 2 : 0
-        width: tipText.implicitWidth + 22
-        height: 30
-        radius: 8
-        color: Theme.tooltip
-        border.width: 1
-        border.color: Qt.rgba(1, 0.96, 0.9, 0.08)
-        opacity: target && !tipDelay.running ? 1 : 0
-        visible: opacity > 0
-        Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
-        Text {
-            id: tipText
-            anchors.centerIn: parent
-            text: tip.text
-            color: Theme.text
-            font.family: Theme.fontFamily
-            font.pixelSize: 12
-        }
-    }
 }

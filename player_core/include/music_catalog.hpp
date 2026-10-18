@@ -31,6 +31,7 @@ struct TrackItem {
     uint16_t channels = 0;
     uint16_t bits_per_sample = 0;
     uint64_t file_size = 0;
+    uint64_t added_time = 0; // 入库依据:文件修改时间 (平台原生单位,只用于比较先后)
 
     bool is_lossless = false;
     bool is_hires = false; // 采样率 > 48kHz 或位深 > 16bit,或 DSD

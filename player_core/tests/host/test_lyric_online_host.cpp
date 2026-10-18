@@ -1,6 +1,7 @@
 // 歌词内核宿主测试 (在线部分): KRC [language:] 中文翻译 / LRC 解析 / 酷狗在线接口 (模拟 HTTP) 与缓存
 // 用法: test_lyric_online_host <work_dir>
 #include "../../include/lyric_manager.hpp"
+#include "../../include/lyric_provider.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -114,7 +115,7 @@ int main(int argc, char** argv) {
         CHECK(lastSearch.find("keyword=ilem%20-%20%E6%A2%A6%E8%89%AF%E8%A1%A3") != std::string::npos);
         CHECK(lastSearch.find("duration=184600") != std::string::npos);
         CHECK(l.lines.size() == 2 && l.HasTranslation());
-        CHECK(fs::exists(work / "cache" / "ilem - 梦良衣.krc"));
+        CHECK(fs::exists(work / "cache" / fs::u8path("ilem - 梦良衣.krc")));
         // 缓存的 .krc 之后由本地匹配直接命中, 不再联网
         int before = calls;
         ParsedLyrics again;
@@ -187,6 +188,190 @@ int main(int argc, char** argv) {
         ParsedLyrics l2;
         CHECK(mgr2.FetchOnline(L"/m/周杰伦 叶惠美/05东风破.wav", L"05东风破", L"未知艺术家", 315308, l2));
         CHECK(l2.artist == L"周杰伦" || l2.lines.size() == 1);
+    }
+
+    std::printf("[3c] 多源聚合:只采用歌名对得上的候选,缓存 .lrc 后本地直接命中,查不到的不重复请求\n");
+    {
+        int calls = 0;
+        auto http = [&](const std::string& url, std::string& body) -> bool {
+            ++calls;
+            if (url.find("lrclib.net/api/search") != std::string::npos) {
+                // 同歌手的另一首歌排在前面 (时长更接近),不该被选中
+                body = R"([{"id":11,"trackName":"晴天","artistName":"周杰伦","albumName":"叶惠美","duration":315.3,"syncedLyrics":"[00:01.00]故事的小黄花"},
+                           {"id":12,"trackName":"东风破","artistName":"周杰伦","albumName":"叶惠美","duration":313.0,"syncedLyrics":"[00:02.00]一盏离愁"}])";
+                return true;
+            }
+            if (url.find("lrclib.net/api/get/12") != std::string::npos) {
+                body = R"({"syncedLyrics":"[00:02.00]一盏离愁\n[00:05.00]孤单窗前","plainLyrics":"一盏离愁"})";
+                return true;
+            }
+            if (url.find("music.163.com/api/search") != std::string::npos) {
+                body = R"({"result":{"songs":[{"id":7,"name":"东风破","artists":[{"name":"周杰伦"}],"album":{"name":"叶惠美"},"duration":313000}]}})";
+                return true;
+            }
+            if (url.find("music.163.com/api/song/lyric") != std::string::npos) {
+                body = R"({"lrc":{"lyric":"[00:02.00]一盏离愁\n[00:05.00]孤单窗前"},"tlyric":{"lyric":"[00:02.00]a parting sorrow\n[00:05.01]alone by the window"}})";
+                return true;
+            }
+            return false; // 酷狗不可用
+        };
+        const fs::path cache = work / "multi_cache";
+        fs::create_directories(cache);
+        LyricManager mgr;
+        mgr.SetCacheDirectory(cache.wstring());
+        mgr.SetHttpGetter(http);
+        ParsedLyrics l;
+        LyricCandidate picked;
+        CHECK(mgr.FetchOnlineMulti(L"/m/东风破.flac", L"东风破", L"周杰伦", 315000, l, &picked));
+        CHECK(picked.title == L"东风破");
+        CHECK(l.lines.size() == 2 && l.lines[0].full_text == L"一盏离愁");
+        CHECK(fs::exists(cache / L"周杰伦 - 东风破.lrc"));
+        // 缓存的 .lrc 进了本地索引:不联网也能载入
+        calls = 0;
+        ParsedLyrics again;
+        CHECK(mgr.LoadLyricsForTrack(L"/m/东风破.flac", L"东风破", L"周杰伦", again));
+        CHECK(again.lines.size() == 2 && calls == 0);
+        // 网易云的翻译单独一份,按时间戳并入 (5.00 与 5.01 在容差内)
+        RawLyricDoc doc;
+        LyricProvider p(http);
+        CHECK(p.Fetch(LyricCandidate{"netease", "7"}, doc, nullptr));
+        ParsedLyrics nl;
+        CHECK(LyricManager::ParseDoc(doc, nl) && nl.lines.size() == 2 && nl.lines[1].translation == L"alone by the window");
+        // 纯文本歌词:无时间轴,按行切分
+        RawLyricDoc plain;
+        plain.kind = RawLyricDoc::Payload::Plain;
+        plain.raw_payload = "第一行\r\n\r\n第二行";
+        ParsedLyrics pl;
+        CHECK(LyricManager::ParseDoc(plain, pl) && pl.lines.size() == 2 && pl.lines[1].full_text == L"第二行");
+        // 一个歌名都对不上:不采用,且本次运行内不再请求
+        ParsedLyrics none;
+        CHECK(!mgr.FetchOnlineMulti(L"/m/七里香.flac", L"七里香", L"周杰伦", 300000, none));
+        calls = 0;
+        CHECK(!mgr.FetchOnlineMulti(L"/m/七里香.flac", L"七里香", L"周杰伦", 300000, none) && calls == 0);
+        // 手动搜索 (loose):关键词不是歌名,候选全部保留
+        LyricQuery lq;
+        lq.title = L"叶惠美";
+        lq.loose = true;
+        CHECK(p.SearchAll(lq).candidates.size() >= 2);
+    }
+
+    std::printf("[3d] 外语歌补翻译:语种判断 / 时间轴一致性 / 带翻译的候选优先 / 缓存与「确认没有」\n");
+    {
+        // 本地 (网易云客户端下的同名 lrc):日文、没有翻译,前面有 JSON 署名行
+        const std::string localLrc =
+            "{\"t\":0,\"c\":[{\"tx\":\"作词: \"},{\"tx\":\"澤野弘之\"}]}\n"
+            "[00:20.60]決めつけばかり 自惚れを着た\n[00:30.30]棚に隠した 哀れな\n"
+            "[00:39.17]都合の傷だけひけらかして\n[00:48.88]どれだけ磨いでも気はやつれる\n";
+        ParsedLyrics local;
+        CHECK(KrcDecoder::ParseLrcText(localLrc, local) && local.lines.size() == 4);
+        CHECK(LyricManager::IsForeignLyrics(local) && LyricManager::NeedsTranslation(local));
+        // 中文歌里夹几句日文、英文:不算外语
+        ParsedLyrics zh;
+        KrcDecoder::ParseLrcText("[00:01.00]一盏离愁孤单伫立在窗口\n[00:05.00]我在门后假装你人还没走\n[00:09.00]ありがとう\n"
+                                 "[00:12.00]旧地如重游月圆更寂寞\n[00:16.00]夜半清醒的烛火不忍苛责我\n", zh);
+        CHECK(!LyricManager::IsForeignLyrics(zh));
+        ParsedLyrics en;
+        KrcDecoder::ParseLrcText("[00:01.00]Yesterday all my troubles seemed so far away\n[00:05.00]Now it looks as though they're here to stay\n", en);
+        CHECK(LyricManager::IsForeignLyrics(en));
+        // 已带翻译 (双语同时间戳) 的不用再找
+        ParsedLyrics bi;
+        KrcDecoder::ParseLrcText("[00:20.60]決めつけばかり 自惚れを着た\n[00:20.60]一味固执己见\n[00:30.30]棚に隠した 哀れな\n[00:30.30]藏在架子上\n"
+                                 "[00:39.17]都合の傷だけひけらかして\n[00:39.17]只炫耀方便的伤\n", bi);
+        CHECK(LyricManager::IsForeignLyrics(bi) && !LyricManager::NeedsTranslation(bi));
+
+        // 时间轴:同一份 (只差全角空格) 完全一致;酷狗式拆行 + 几百毫秒偏差仍算一致;整体错开 3 秒不算
+        ParsedLyrics same, split, shifted;
+        KrcDecoder::ParseLrcText("[00:20.60]決めつけばかり　自惚れを着た\n[00:30.30]棚に隠した　哀れな\n"
+                                 "[00:39.17]都合の傷だけひけらかして\n[00:48.88]どれだけ磨いでも気はやつれる\n", same);
+        KrcDecoder::ParseLrcText("[00:20.90]決めつけばかり\n[00:23.10]自惚れを着た\n[00:30.50]棚に隠した 哀れな\n"
+                                 "[00:39.40]都合の傷だけひけらかして\n[00:49.20]どれだけ磨いでも気はやつれる\n", split);
+        KrcDecoder::ParseLrcText("[00:23.60]決めつけばかり 自惚れを着た\n[00:33.30]棚に隠した 哀れな\n"
+                                 "[00:42.17]都合の傷だけひけらかして\n[00:51.88]どれだけ磨いでも気はやつれる\n", shifted);
+        CHECK(LyricManager::TimelineAgreement(local, same) == 1.0);
+        CHECK(LyricManager::TimelineAgreement(local, split) == 1.0);
+        CHECK(LyricManager::TimelineAgreement(local, shifted) == 0.0);
+
+        // 在线:LRCLIB 排第一但没有翻译;酷狗那份带翻译但时间轴错开 3 秒;网易云带翻译且对得上 -> 用网易云
+        int calls = 0;
+        bool neteaseHasTr = true;
+        auto http = [&](const std::string& url, std::string& body) -> bool {
+            ++calls;
+            if (url.find("lrclib.net/api/search") != std::string::npos) {
+                body = R"J([{"id":21,"trackName":"aLIEz","artistName":"瑞葵(mizuki)/SawanoHiroyuki[nZk]","albumName":"A/Z","duration":268.5,"syncedLyrics":"[00:20.60]決めつけばかり"}])J";
+                return true;
+            }
+            if (url.find("lrclib.net/api/get/21") != std::string::npos) {
+                body = R"J({"syncedLyrics":"[00:20.60]決めつけばかり 自惚れを着た\n[00:30.30]棚に隠した 哀れな"})J";
+                return true;
+            }
+            if (url.find("music.163.com/api/search") != std::string::npos) {
+                body = R"J({"result":{"songs":[{"id":29307041,"name":"aLIEz","artists":[{"name":"瑞葵(mizuki)"},{"name":"SawanoHiroyuki[nZk]"}],"album":{"name":"A/Z"},"duration":268472},
+                                               {"id":99,"name":"aLIEz (2016 TOKYO DOME CITY HALL现场)","artists":[{"name":"mizuki"}],"album":{"name":""},"duration":268000}]}})J";
+                return true;
+            }
+            if (url.find("music.163.com/api/song/lyric?id=29307041") != std::string::npos) {
+                body = std::string(R"J({"lrc":{"lyric":"[00:20.60]決めつけばかり　自惚れを着た\n[00:30.30]棚に隠した　哀れな\n[00:39.17]都合の傷だけひけらかして\n[00:48.88]どれだけ磨いでも気はやつれる"})J") +
+                       (neteaseHasTr ? R"J(,"tlyric":{"lyric":"[00:20.60]一味固执己见\n[00:30.30]藏在架子上\n[00:39.17]只炫耀方便的伤\n[00:48.88]再怎么磨砺也憔悴"}})J" : "}");
+                return true;
+            }
+            if (url.find("music.163.com/api/song/lyric?id=99") != std::string::npos) {
+                body = R"J({"lrc":{"lyric":"[00:23.60]決めつけばかり 自惚れを着た\n[00:33.30]棚に隠した 哀れな\n[00:42.17]都合の傷だけひけらかして\n[00:51.88]どれだけ磨いでも気はやつれる"},
+                           "tlyric":{"lyric":"[00:23.60]现场版翻译\n[00:33.30]现场版翻译二\n[00:42.17]现场三\n[00:51.88]现场四"}})J";
+                return true;
+            }
+            return false; // 酷狗不可用
+        };
+        const fs::path root = work / "tr";
+        fs::create_directories(root / "lyrics");
+        LyricManager mgr;
+        mgr.SetCacheDirectory((root / "lyrics").wstring());
+        mgr.SetHttpGetter(http);
+        ParsedLyrics out;
+        LyricCandidate picked;
+        CHECK(mgr.FindTranslatedVersion(local, L"/m/aLIEz.flac", L"aLIEz", L"瑞葵(mizuki)/SawanoHiroyuki[nZk]", 268472, out, &picked));
+        CHECK(picked.source == "netease" && picked.id == "29307041");
+        CHECK(out.lines.size() == 4 && out.lines[0].translation == L"一味固执己见");
+        CHECK(fs::exists(root / "lyrics_translated" / fs::u8path("瑞葵(mizuki)、SawanoHiroyuki[nZk] - aLIEz#netease.lrc")));
+        // 第二次:翻译缓存直接命中,不联网
+        calls = 0;
+        ParsedLyrics again;
+        LyricCandidate p2;
+        CHECK(mgr.FindTranslatedVersion(local, L"/m/aLIEz.flac", L"aLIEz", L"瑞葵(mizuki)/SawanoHiroyuki[nZk]", 268472, again, &p2));
+        CHECK(calls == 0 && p2.source == "netease" && again.HasTranslation());
+        // 已带翻译 / 中文歌:根本不查
+        CHECK(!mgr.FindTranslatedVersion(bi, L"/m/x.flac", L"x", L"y", 0, again) && calls == 0);
+
+        // 没有对得上的翻译 (网易云这份没翻译,现场版错位):本地兜底,并记下「确认没有」,换个管理器 (重启) 也不再查
+        neteaseHasTr = false;
+        const fs::path root2 = work / "tr2";
+        fs::create_directories(root2 / "lyrics");
+        {
+            LyricManager m2;
+            m2.SetCacheDirectory((root2 / "lyrics").wstring());
+            m2.SetHttpGetter(http);
+            CHECK(!m2.FindTranslatedVersion(local, L"/m/aLIEz.flac", L"aLIEz", L"瑞葵(mizuki)/SawanoHiroyuki[nZk]", 268472, out));
+            CHECK(fs::exists(root2 / "lyrics_translated" / "misses.txt"));
+        }
+        LyricManager m3;
+        m3.SetCacheDirectory((root2 / "lyrics").wstring());
+        m3.SetHttpGetter(http);
+        calls = 0;
+        CHECK(!m3.FindTranslatedVersion(local, L"/m/aLIEz.flac", L"aLIEz", L"瑞葵(mizuki)/SawanoHiroyuki[nZk]", 268472, out) && calls == 0);
+
+        // 排名:只差括号附注的歌名算对上;现场版排到录音室版后面;多歌手写法不同也算同一歌手
+        LyricQuery rq;
+        rq.title = L"aLIEz";
+        rq.artist = L"瑞葵(mizuki)/SawanoHiroyuki[nZk]";
+        rq.duration_ms = 268472;
+        std::vector<LyricCandidate> list(3);
+        list[0].source = "kugou"; list[0].id = "1"; list[0].title = L"aLIEz (2016 TOKYO DOME CITY HALL现场)"; list[0].artist = L"mizuki"; list[0].duration_ms = 270003;
+        list[1].source = "kugou"; list[1].id = "2"; list[1].title = L"aLIEz (《ALDNOAH.ZERO》TV动画片尾曲)";
+        list[1].artist = L"SawanoHiroyuki(nZk) (泽野弘之)/瑞葵 (mizuki)"; list[1].duration_ms = 268638;
+        list[2].source = "lrclib"; list[2].id = "3"; list[2].title = L"secret base"; list[2].duration_ms = 268000;
+        LyricProvider::RankCandidates(rq, list);
+        CHECK(list[0].id == "2" && list[0].title_match);
+        CHECK(list[1].id == "1" && list[1].title_match);
+        CHECK(!list[2].title_match);
     }
 
     std::printf("[4] 候选挑选\n");

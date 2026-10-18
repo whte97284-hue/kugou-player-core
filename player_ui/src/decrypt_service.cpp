@@ -308,6 +308,27 @@ QString CollapseCopy(const QString& out) {
     return QDir::toNativeSeparators(base);
 }
 
+// 加密源旁边的同名歌词 (网易云会把 .lrc 和 .ncm 一起下载) 跟着复制到产物旁边,并按产物文件名改名;
+// 与整理 / 查重同一规则:「歌名.lrc」「歌名.zh.lrc」都算 (主文件名后紧跟一个点)。产物旁已有同名歌词时不覆盖
+void CarryLyrics(const QString& source, const QString& output) {
+    const QFileInfo s(source), o(output);
+    if (!o.isFile() || (s.absolutePath() == o.absolutePath() && s.completeBaseName() == o.completeBaseName())) return;
+    const QString stem = s.completeBaseName().toLower() + ".";
+    static const QStringList exts = {QStringLiteral(".lrc"), QStringLiteral(".krc"), QStringLiteral(".qrc"), QStringLiteral(".trc")};
+    QDirIterator it(s.absolutePath(), QDir::Files);
+    while (it.hasNext()) {
+        const QString f = it.next();
+        const QString name = it.fileName();
+        const QString low = name.toLower();
+        if (!low.startsWith(stem)) continue;
+        bool lyric = false;
+        for (const QString& e : exts) if (low.endsWith(e)) lyric = true;
+        if (!lyric) continue;
+        const QString target = o.absolutePath() + "/" + o.completeBaseName() + name.mid(stem.size() - 1);
+        if (!QFileInfo::exists(target)) QFile::copy(f, target);
+    }
+}
+
 QString SeenFile() { return LibraryService::dataDir() + "/decrypt.seen"; }
 } // namespace
 
@@ -581,6 +602,7 @@ void DecryptService::start(std::vector<Item> items, bool rescanAfter) {
                 r.message = L"未知格式";
             }
             if (r.ok) {
+                CarryLyrics(Q(it.path), Q(r.output));
                 index.Put(it.path, it.size, it.mtime, r.output, DecryptIndex::Fingerprint(it.path, it.size));
                 // 源文件在曲库里:解密后需要重扫才能入库
                 QString src = QDir::fromNativeSeparators(Q(it.path));

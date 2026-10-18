@@ -1,9 +1,12 @@
 #include "library_service.h"
+#include "scan_cache.hpp"
 
 #include <QClipboard>
 #include <QCoreApplication>
 #include <QDate>
+#include <QDateTime>
 #include <QDir>
+#include <unordered_set>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -21,7 +24,9 @@
 
 #include "audio_ingestion_pipeline.hpp"
 #include "audio_tag_parser.hpp"
+#include "library_dedupe.hpp"
 #include "folder_watcher.h"
+#include "xxhash64.hpp"
 #include "kugou_track_bridge.hpp"
 #ifdef Q_OS_WIN
 #include <malloc.h>
@@ -79,6 +84,22 @@ QString TrackKeyOf(const TrackItem& t) {
     return QString::fromStdWString(t.file_path) + QLatin1Char('#') + QString::number(t.is_cue_track ? t.cue_start_ms : 0);
 }
 
+QString PathKeyOf(const QString& path) {
+    QString k = QDir::cleanPath(QDir::fromNativeSeparators(path));
+#ifdef Q_OS_WIN
+    k = k.toLower();
+#endif
+    return k;
+}
+
+QString RemapTrackKey(const QString& key, const QHash<QString, QString>& pathMap) {
+    const int hash = key.lastIndexOf(QLatin1Char('#'));
+    if (hash < 0) return {};
+    auto it = pathMap.constFind(PathKeyOf(key.left(hash)));
+    if (it == pathMap.constEnd()) return {};
+    return QDir::toNativeSeparators(it.value()) + key.mid(hash);
+}
+
 namespace {
 // 「A / B」「A、B」「A feat. B」拆为多位歌手;「&」「,」常见于组合名,不拆
 std::vector<std::wstring> SplitArtists(const std::wstring& s) {
@@ -122,8 +143,19 @@ public:
     std::unique_ptr<MusicCatalog> catalog = std::make_unique<MusicCatalog>();
     std::atomic<qint64> lastPost{0};
     QElapsedTimer clock;
-    QStringList hidden; // 本次聚合时要隐藏的文件夹
+    QStringList hidden;   // 本次聚合时要隐藏的文件夹
+    QStringList excluded; // 只从曲库移除的单个文件
+    QStringList folders;  // 显示去重时,同等音质优先保留排在前面的文件夹里的
+    bool collapseCopies = false;
 };
+
+void LibraryService::carryScanCache(const std::vector<std::pair<std::wstring, std::wstring>>& moves, bool keepSource) {
+    if (moves.empty() || scanning()) return;
+    const std::wstring path = (dataDir() + "/scan.cache").toStdWString();
+    ScanCache cache;
+    if (!cache.Load(path)) return;
+    if (cache.Carry(moves, keepSource) > 0) cache.Save(path);
+}
 
 QString LibraryService::dataDir() {
     QString d = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
@@ -139,13 +171,16 @@ LibraryService::LibraryService(QObject* parent) : QObject(parent) {
     folders_ = s.value("library/folders").toStringList();
     hiddenFolders_ = s.value("library/hiddenFolders").toStringList();
     extraFiles_ = s.value("library/files").toStringList();
+    excludedFiles_ = s.value("library/excludedFiles").toStringList();
+    folderNotes_ = s.value("library/folderNotes").toMap();
     kugouFolders_ = s.value("library/kugouFolders").toStringList();
     watch_ = s.value("library/watch", true).toBool();
+    displayDedupe_ = s.value("library/displayDedupe", false).toBool();
     // 文件夹有变化后等 3 秒:期间又有变化就重新计时,酷狗还在下载 (文件不断变大) 时不会去扫半截文件
     watchDebounce_ = new QTimer(this);
     watchDebounce_->setSingleShot(true);
     watchDebounce_->setInterval(3000);
-    connect(watchDebounce_, &QTimer::timeout, this, &LibraryService::rescan);
+    connect(watchDebounce_, &QTimer::timeout, this, &LibraryService::backgroundRescan);
     watcher_ = new FolderWatcher(this);
     connect(watcher_, &FolderWatcher::changed, watchDebounce_, qOverload<>(&QTimer::start));
     updateWatcher();
@@ -269,7 +304,27 @@ void LibraryService::saveFolders() {
     QSettings().setValue("library/folders", folders_);
     QSettings().setValue("library/hiddenFolders", hiddenFolders_);
     QSettings().setValue("library/files", extraFiles_);
+    QSettings().setValue("library/excludedFiles", excludedFiles_);
     updateWatcher();
+    emit foldersChanged();
+}
+
+void LibraryService::setDisplayDedupe(bool on) {
+    if (on == displayDedupe_) return;
+    displayDedupe_ = on;
+    QSettings().setValue("library/displayDedupe", on);
+    emit displayDedupeChanged();
+    // 和隐藏文件夹一样:增量扫描几乎全部命中缓存,只是重新聚合
+    rescan();
+}
+
+void LibraryService::setFolderNote(const QString& path, const QString& note) {
+    if (!folders_.contains(path)) return;
+    const QString n = note.simplified();
+    if (folderNotes_.value(path).toString() == n) return;
+    if (n.isEmpty()) folderNotes_.remove(path);
+    else folderNotes_.insert(path, n);
+    QSettings().setValue("library/folderNotes", folderNotes_);
     emit foldersChanged();
 }
 
@@ -327,6 +382,7 @@ int LibraryService::addFolderUrls(const QVariantList& urls) {
 void LibraryService::removeFolder(const QString& path) {
     if (!folders_.removeOne(path)) return;
     hiddenFolders_.removeOne(path);
+    if (folderNotes_.remove(path)) QSettings().setValue("library/folderNotes", folderNotes_);
     saveFolders();
     if (scanning_) {
         rescanPending_ = true;
@@ -339,12 +395,62 @@ void LibraryService::removeFolder(const QString& path) {
     }
 }
 
+void LibraryService::excludeFiles(const QStringList& paths) {
+    int n = 0;
+    for (const QString& p : paths) {
+        QString c = QDir::toNativeSeparators(QDir::cleanPath(p));
+        if (c.isEmpty() || excludedFiles_.contains(c, Qt::CaseInsensitive)) continue;
+        excludedFiles_.append(c);
+        ++n;
+    }
+    if (!n) return;
+    saveFolders();
+    rescan();
+}
+
+void LibraryService::includeFiles(const QStringList& paths) {
+    int n = 0;
+    for (const QString& p : paths) {
+        QString c = QDir::toNativeSeparators(QDir::cleanPath(p));
+        for (int i = excludedFiles_.size() - 1; i >= 0; --i)
+            if (excludedFiles_[i].compare(c, Qt::CaseInsensitive) == 0) {
+                excludedFiles_.removeAt(i);
+                ++n;
+            }
+    }
+    if (!n) return;
+    saveFolders();
+    rescan();
+}
+
+void LibraryService::clearExcludedFiles() {
+    if (excludedFiles_.isEmpty()) return;
+    excludedFiles_.clear();
+    saveFolders();
+    rescan();
+}
+
 void LibraryService::rescan() {
+    if (folders_.isEmpty() && extraFiles_.isEmpty()) return;
+    if (scanning_) {
+        rescanPending_ = true;
+        quietPending_ = false;
+        // 后台重扫进行中又有人要扫:改为正常提示
+        if (quiet_) { quiet_ = false; emit scanningChanged(); }
+        return;
+    }
+    quiet_ = false;
+    startScan();
+}
+
+// 文件夹监控触发:悄悄重扫,没有变化时界面完全不动
+void LibraryService::backgroundRescan() {
     if (folders_.isEmpty() && extraFiles_.isEmpty()) return;
     if (scanning_) {
         rescanPending_ = true;
         return;
     }
+    quiet_ = true;
     startScan();
 }
 
@@ -378,6 +484,9 @@ void LibraryService::startScan() {
     for (const QString& f : extraFiles_)
         if (QFileInfo(f).isFile()) job->pipeline.AddInputPath(f.toStdWString());
     job->hidden = hiddenFolders_;
+    job->excluded = excludedFiles_;
+    job->folders = folders_;
+    job->collapseCopies = displayDedupe_;
     job->clock.start();
 
     scanning_ = true;
@@ -411,14 +520,23 @@ void LibraryService::startScan() {
         },
         [this, job](const IngestionSummary& sum) {
             // 专辑聚合同样在后台线程完成,界面线程只做指针交换
-            auto snap = BuildAlbums(std::move(job->catalog), job->hidden);
+            auto snap = BuildAlbums(std::move(job->catalog), job->hidden, job->excluded, job->collapseCopies, job->folders);
             QMetaObject::invokeMethod(this, [this, snap, sum]() { finishScan(snap, sum); }, Qt::QueuedConnection);
         });
 }
 
 void LibraryService::finishScan(std::shared_ptr<LibrarySnapshot> snap, const IngestionSummary& sum) {
-    // 被取消的扫描结果不完整:曲库已有内容时保留旧快照,首次导入时保留已识别的部分
-    const bool keepOld = sum.cancelled && albumCount() > 0;
+    // 被取消的扫描结果不完整:曲库已有内容时保留旧快照,首次导入时保留已识别的部分。
+    // 内容与当前完全一致 (监控误报、手动重扫但没变化):同样沿用旧快照,曲目 ID 不变,
+    // 列表、详情页、播放队列、歌词都不会被刷新打断
+    bool unchanged = false;
+    {
+        std::lock_guard<std::mutex> lock(snap_mutex_);
+        unchanged = !sum.cancelled && snap_ && snap->signature != 0 && snap->signature == snap_->signature;
+    }
+    const bool keepOld = (sum.cancelled && albumCount() > 0) || unchanged;
+    const bool wasQuiet = quiet_;
+    quiet_ = false;
     if (!keepOld) {
         {
             std::lock_guard<std::mutex> lock(snap_mutex_);
@@ -444,6 +562,9 @@ void LibraryService::finishScan(std::shared_ptr<LibrarySnapshot> snap, const Ing
         {"seconds", sum.elapsed_seconds},
         {"incremental", sum.cache_hits > 0},
         {"cancelled", sum.cancelled},
+        {"unchanged", unchanged},
+        // 后台重扫没发现变化:不弹扫描结果
+        {"shown", !(wasQuiet && unchanged)},
     };
     if (sum.cancelled) status_ = tr("已取消扫描");
     else if (folders_.isEmpty() && extraFiles_.isEmpty()) status_ = tr("曲库已清空");
@@ -464,6 +585,8 @@ void LibraryService::finishScan(std::shared_ptr<LibrarySnapshot> snap, const Ing
         ReleaseFreeHeap();
         if (rescanPending_) {
             rescanPending_ = false;
+            quiet_ = quietPending_;
+            quietPending_ = true;
             if (folders_.isEmpty() && extraFiles_.isEmpty()) finishScan(std::make_shared<LibrarySnapshot>(), IngestionSummary{});
             else startScan();
         }
@@ -479,7 +602,9 @@ void LibraryService::ReleaseFreeHeap() {
 #endif
 }
 
-std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<MusicCatalog> catalog, const QStringList& hidden) {
+std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<MusicCatalog> catalog, const QStringList& hidden,
+                                                            const QStringList& excluded, bool collapseCopies,
+                                                            const QStringList& folderOrder) {
     auto snap = std::make_shared<LibrarySnapshot>();
     snap->catalog = std::move(*catalog);
     const auto& tracks = snap->catalog.GetAllTracks();
@@ -491,7 +616,19 @@ std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<Mus
         if (!p.empty() && p.back() != L'/') p += L'/';
         hiddenPrefixes.push_back(p);
     }
-    auto isHidden = [&](const TrackItem& t) {
+    std::unordered_set<std::wstring> excludedKeys;
+    for (const QString& e : excluded) {
+        std::wstring p = QDir::cleanPath(e).toLower().toStdWString();
+        for (wchar_t& c : p) if (c == L'\\') c = L'/';
+        excludedKeys.insert(p);
+    }
+    auto isHiddenBase = [&](const TrackItem& t) {
+        if (!excludedKeys.empty()) {
+            std::wstring p;
+            p.reserve(t.file_path.size());
+            for (wchar_t c : t.file_path) p += c == L'\\' ? L'/' : static_cast<wchar_t>(towlower(c));
+            if (excludedKeys.count(p)) return true;
+        }
         if (hiddenPrefixes.empty()) return false;
         // 解密产物按它自己的落盘位置归类/隐藏 (转换输出目录就是用户可见的曲库)
         const std::wstring& path = t.file_path;
@@ -502,6 +639,60 @@ std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<Mus
             if (p.compare(0, h.size(), h) == 0) return true;
         return false;
     };
+
+    // 显示去重:歌手 + 歌名规范化后相同、时长相差不到 3 秒的算同一首,只显示音质最好的一份
+    // (Live、伴奏等规范化后仍不同,不会被收起;没有歌手或歌名标签的不参与)
+    if (collapseCopies) {
+        std::vector<std::wstring> folderKeys;
+        for (const QString& f : folderOrder) {
+            std::wstring k = QDir::cleanPath(f).toLower().toStdWString();
+            for (wchar_t& c : k) if (c == L'\\') c = L'/';
+            if (!k.empty() && k.back() != L'/') k += L'/';
+            folderKeys.push_back(k);
+        }
+        auto folderRank = [&](const TrackItem& t) {
+            std::wstring p;
+            p.reserve(t.file_path.size());
+            for (wchar_t c : t.file_path) p += c == L'\\' ? L'/' : static_cast<wchar_t>(towlower(c));
+            for (size_t i = 0; i < folderKeys.size(); ++i)
+                if (p.compare(0, folderKeys[i].size(), folderKeys[i]) == 0) return static_cast<int>(i);
+            return static_cast<int>(folderKeys.size());
+        };
+        auto better = [&](const TrackItem* a, const TrackItem* b) {
+            if (a->is_lossless != b->is_lossless) return a->is_lossless;
+            if (a->bits_per_sample != b->bits_per_sample) return a->bits_per_sample > b->bits_per_sample;
+            if (a->sample_rate != b->sample_rate) return a->sample_rate > b->sample_rate;
+            if (a->bitrate_kbps != b->bitrate_kbps) return a->bitrate_kbps > b->bitrate_kbps;
+            const int ra = folderRank(*a), rb = folderRank(*b);
+            if (ra != rb) return ra < rb;
+            return a->file_path < b->file_path;
+        };
+        std::unordered_map<std::wstring, std::vector<const TrackItem*>> byKey;
+        for (const auto& t : tracks) {
+            if (t.duration_ms == 0 || isHiddenBase(t)) continue;
+            const std::wstring artist = dedupe::NormalizeArtist(t.artist), title = dedupe::NormalizeTitle(t.title);
+            if (artist.empty() || title.empty()) continue;
+            byKey[artist + L"\x1f" + title].push_back(&t);
+        }
+        for (auto& kv : byKey) {
+            auto& v = kv.second;
+            if (v.size() < 2) continue;
+            std::sort(v.begin(), v.end(), [](const TrackItem* a, const TrackItem* b) { return a->duration_ms < b->duration_ms; });
+            for (size_t i = 0; i < v.size();) {
+                size_t j = i + 1;
+                while (j < v.size() && v[j]->duration_ms - v[i]->duration_ms <= 3000) ++j;
+                if (j - i >= 2) {
+                    const TrackItem* best = v[i];
+                    for (size_t k = i + 1; k < j; ++k)
+                        if (better(v[k], best)) best = v[k];
+                    for (size_t k = i; k < j; ++k)
+                        if (v[k] != best) snap->shownCopy[v[k]->id] = best->id;
+                }
+                i = j;
+            }
+        }
+    }
+    auto isHidden = [&](const TrackItem& t) { return isHiddenBase(t) || (!snap->shownCopy.empty() && snap->shownCopy.count(t.id)); };
 
     std::map<std::wstring, int> index;
     for (const auto& t : tracks) {
@@ -544,6 +735,7 @@ std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<Mus
             if (!a.coverTrack && (t->has_cover || !t->external_cover_path.empty())) a.coverTrack = t;
             if (a.year.isEmpty() && !t->year.empty()) a.year = Q(t->year).left(4);
             artists[!t->album_artist.empty() ? t->album_artist : t->artist]++;
+            a.addedTime = std::max(a.addedTime, t->added_time);
         }
         if (artists.size() == 1) a.artist = Q(artists.begin()->first);
         else if (artists.size() > 1) {
@@ -554,6 +746,9 @@ std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<Mus
         }
         if (!a.coverTrack && !a.tracks.empty()) a.coverTrack = a.tracks.front();
         a.sortKey = SortKeyOf(a.title.toStdWString());
+        // 群星 / 没有歌手的合辑排在按歌手排序的最后
+        a.artistSortKey = a.artist.isEmpty() || a.artist == QObject::tr("群星") ? QStringLiteral("\uffff") + a.sortKey
+                                                                                : SortKeyOf(a.artist.toStdWString());
     }
     std::sort(snap->albums.begin(), snap->albums.end(),
               [](const AlbumInfo& x, const AlbumInfo& y) { return x.sortKey < y.sortKey; });
@@ -620,6 +815,41 @@ std::shared_ptr<LibrarySnapshot> LibraryService::BuildAlbums(std::unique_ptr<Mus
         snap->songs.push_back(k.second);
         snap->songLetters.push_back(LetterOf(k.first));
     }
+    // 内容指纹:每首歌的路径 / CUE 起点 / 大小 / 修改时间 / 标签 / 音质各自哈希后求和 (与扫描线程的完成顺序无关),
+    // 再并上影响显示的设置 (隐藏 / 移除的文件、显示去重、文件夹顺序)
+    {
+        uint64_t sum = 0, mix = 0;
+        auto addStr = [](kp::Xxh64& h, const std::wstring& w) {
+            h.Add(reinterpret_cast<const uint8_t*>(w.data()), w.size() * sizeof(wchar_t));
+            const uint8_t sep = 0x1f;
+            h.Add(&sep, 1);
+        };
+        auto addNum = [](kp::Xxh64& h, uint64_t v) { h.Add(reinterpret_cast<const uint8_t*>(&v), sizeof v); };
+        for (const TrackItem& t : tracks) {
+            kp::Xxh64 h(0x6b70);
+            for (const std::wstring* w : {&t.file_path, &t.source_path, &t.title, &t.artist, &t.album, &t.album_artist,
+                                          &t.genre, &t.year, &t.format, &t.codec, &t.external_cover_path})
+                addStr(h, *w);
+            for (uint64_t v : {uint64_t(t.cue_start_ms), uint64_t(t.cue_end_ms), t.file_size, t.added_time,
+                               uint64_t(t.duration_ms), uint64_t(t.bitrate_kbps), uint64_t(t.sample_rate),
+                               uint64_t(t.bits_per_sample), uint64_t(t.track_no), uint64_t(t.disc_no),
+                               uint64_t(t.has_cover), uint64_t(t.is_cue_track)})
+                addNum(h, v);
+            const uint64_t d = h.Digest();
+            sum += d;
+            mix ^= d * 0x9E3779B97F4A7C15ull;
+        }
+        kp::Xxh64 h(0x736e);
+        addNum(h, sum);
+        addNum(h, mix);
+        addNum(h, tracks.size());
+        addNum(h, collapseCopies ? 1 : 0);
+        for (const QStringList* l : {&hidden, &excluded, &folderOrder}) {
+            for (const QString& x : *l) addStr(h, x.toStdWString());
+            addStr(h, L"|");
+        }
+        snap->signature = h.Digest() | 1; // 0 留给「没有指纹」
+    }
     return snap;
 }
 
@@ -627,6 +857,29 @@ QString LibraryService::formatDuration(uint64_t ms) {
     uint64_t s = ms / 1000;
     if (s >= 3600) return QString("%1:%2:%3").arg(s / 3600).arg((s / 60) % 60, 2, 10, QChar('0')).arg(s % 60, 2, 10, QChar('0'));
     return QString("%1:%2").arg(s / 60).arg(s % 60, 2, 10, QChar('0'));
+}
+
+QString LibraryService::formatLongDuration(uint64_t ms) {
+    const uint64_t min = (ms + 30000) / 60000;
+    if (min < 60) return tr("%1 分钟").arg(std::max<uint64_t>(1, min));
+    return min % 60 ? tr("%1 小时 %2 分钟").arg(min / 60).arg(min % 60) : tr("%1 小时").arg(min / 60);
+}
+
+QVariantList LibraryService::albumTrackIds(int i) const {
+    QVariantList out;
+    auto s = snapshot();
+    if (i < 0 || i >= static_cast<int>(s->albums.size())) return out;
+    for (const TrackItem* t : s->albums[i].tracks) out.append(static_cast<double>(t->id));
+    return out;
+}
+
+QVariantList LibraryService::artistTrackIds(int i) const {
+    QVariantList out;
+    auto s = snapshot();
+    if (i < 0 || i >= static_cast<int>(s->artists.size())) return out;
+    out.reserve(static_cast<int>(s->artists[i].tracks.size()));
+    for (const TrackItem* t : s->artists[i].tracks) out.append(static_cast<double>(t->id));
+    return out;
 }
 
 QString LibraryService::trackQuality(const TrackItem& t) {
@@ -649,7 +902,7 @@ QString LibraryService::qualityBadge(int i) const {
     return {};
 }
 
-int LibraryService::featuredAlbum() const {
+int LibraryService::featuredAlbum(int skip) const {
     auto s = snapshot();
     const int n = static_cast<int>(s->albums.size());
     if (n == 0) return -1;
@@ -661,8 +914,14 @@ int LibraryService::featuredAlbum() const {
     }
     if (pool.empty())
         for (int i = 0; i < n; ++i) pool.push_back(i);
-    uint seed = qHash(QDate::currentDate().toJulianDay());
-    return pool[seed % pool.size()];
+    // 按「专辑名 + 歌手」和日期算出的散列排名:新增 / 删掉别的专辑不会让今天的推荐变掉
+    const size_t seed = qHash(QDate::currentDate().toJulianDay());
+    std::vector<std::pair<size_t, int>> ranked;
+    ranked.reserve(pool.size());
+    for (int i : pool) ranked.emplace_back(qHash(s->albums[i].title + QChar(0x1f) + s->albums[i].artist, seed), i);
+    const size_t k = static_cast<size_t>(std::max(0, skip)) % ranked.size();
+    std::nth_element(ranked.begin(), ranked.begin() + k, ranked.end());
+    return ranked[k].second;
 }
 
 QVariantMap LibraryService::albumInfo(int i) const {
@@ -679,7 +938,7 @@ QVariantMap LibraryService::albumInfo(int i) const {
     m["trackCount"] = static_cast<int>(a.tracks.size());
     QStringList parts;
     if (!a.year.isEmpty()) parts << a.year;
-    parts << tr("%1 首").arg(a.tracks.size()) << formatDuration(a.totalMs);
+    parts << tr("%1 首").arg(a.tracks.size()) << formatLongDuration(a.totalMs);
     m["summary"] = parts.join(QStringLiteral("  ·  "));
     return m;
 }
@@ -696,7 +955,7 @@ QVariantMap LibraryService::artistInfo(int i) const {
     m["cover"] = a.coverAlbum >= 0 ? QString("image://cover/a/%1/%2").arg(generation_).arg(a.coverAlbum) : QString();
     m["albumCount"] = static_cast<int>(a.albums.size());
     m["trackCount"] = static_cast<int>(a.tracks.size());
-    m["summary"] = tr("%1 张专辑  ·  %2 首  ·  %3").arg(a.albums.size()).arg(a.tracks.size()).arg(formatDuration(ms));
+    m["summary"] = tr("%1 张专辑  ·  %2 首  ·  %3").arg(a.albums.size()).arg(a.tracks.size()).arg(formatLongDuration(ms));
     return m;
 }
 
@@ -715,7 +974,18 @@ int LibraryService::artistIndexOf(const QString& name) const {
     // 合作曲目:取第一位歌手
     std::vector<std::wstring> parts = SplitArtists(name.toStdWString());
     if (parts.size() > 1) return artistIndexOf(QString::fromStdWString(parts.front()));
-    return -1;
+    // 异体字 / 简繁写法不同 (久石让 / 久石譲):全拼相同、字数相同且只有一位时才认,同音的几位歌手不乱认
+    const std::wstring wn = name.toStdWString();
+    if (!PinyinHelper::HasPhonetic(wn)) return -1;
+    const std::string py = PinyinHelper::GetFullPinyin(wn);
+    int found = -1;
+    for (int i = 0; i < static_cast<int>(s->artists.size()); ++i) {
+        const QString& a = s->artists[i].name;
+        if (a.size() != name.size() || PinyinHelper::GetFullPinyin(a.toStdWString()) != py) continue;
+        if (found >= 0) return -1;
+        found = i;
+    }
+    return found;
 }
 
 int LibraryService::albumOfTrack(double trackId) const {
@@ -752,6 +1022,20 @@ QVariantMap LibraryService::trackInfo(double trackId) const {
     m["isCue"] = t->is_cue_track;
     m["exists"] = QFileInfo::exists(path);
     m["source"] = t->source_path.empty() ? QString() : QDir::toNativeSeparators(Q(t->source_path)); // 解密产物的加密源
+    const QFileInfo fi(path);
+    m["fileName"] = fi.fileName();
+    m["modified"] = fi.exists() ? fi.lastModified().toString(QStringLiteral("yyyy-MM-dd HH:mm")) : QString();
+    // 回放增益 (dB) 与峰值 (线性,1.0 = 满刻度)
+    m["hasRgTrack"] = t->has_rg_track;
+    m["rgTrackGain"] = t->rg_track_gain;
+    m["rgTrackPeak"] = t->rg_track_peak;
+    m["hasRgAlbum"] = t->has_rg_album;
+    m["rgAlbumGain"] = t->rg_album_gain;
+    m["rgAlbumPeak"] = t->rg_album_peak;
+    // 封面来源:embedded = 内嵌;否则为同目录封面的文件名;都没有为空
+    m["cover"] = QString("image://cover/t/%1/%2").arg(generation_).arg(t->id);
+    m["coverSource"] = t->has_cover ? QStringLiteral("embedded")
+                       : t->external_cover_path.empty() ? QString() : QFileInfo(Q(t->external_cover_path)).fileName();
     return m;
 }
 

@@ -16,7 +16,10 @@ Row {
             width: bars.barWidth
             radius: width / 2
             color: bars.color
-            height: Math.max(3, bars.maxHeight * (player.playing ? (index === 0 ? player.pulse0 : index === 1 ? player.pulse1 : player.pulse2) * 0.85 + 0.15 : 0.22))
+            // 暂停时停成一组高低不一的柱子 (而不是三个小圆点,那样像「更多」图标)
+            height: Math.max(3, bars.maxHeight * (player.playing ? (index === 0 ? player.pulse0 : index === 1 ? player.pulse1 : player.pulse2) * 0.7 + 0.3
+                                                                 : [0.45, 0.85, 0.6][index]))
+            opacity: player.playing ? 1 : 0.6
         }
     }
 }

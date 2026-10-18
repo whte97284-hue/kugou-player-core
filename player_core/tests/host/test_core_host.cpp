@@ -162,6 +162,26 @@ int main(int argc, char** argv) {
               lemon ? U8(lemon->album + L" / " + lemon->title) + " #" + std::to_string(lemon->track_no) : "");
     }
 
+    {
+        AudioMetadata none;
+        TrackItem d = MusicCatalog::BuildTrack(L"F:/ZiYuan/Music/周杰伦 叶惠美/05东风破.wav", none);
+        Check("无标签 \"周杰伦 叶惠美/05东风破.wav\":歌手 / 专辑取自目录,标题去掉补零曲号",
+              d.artist == L"周杰伦" && d.album == L"叶惠美" && d.title == L"东风破" && d.track_no == 5,
+              U8(d.artist + L" / " + d.album + L" / " + d.title) + " #" + std::to_string(d.track_no));
+        TrackItem e = MusicCatalog::BuildTrack(L"D:/Music/Taylor Swift/1989.flac", none);
+        TrackItem f = MusicCatalog::BuildTrack(L"D:/Music/2003 - 叶惠美/17岁.flac", none);
+        TrackItem g = MusicCatalog::BuildTrack(L"D:/Music/Beyond - 海阔天空/2002年的第一场雪.mp3", none);
+        Check("目录推断不误伤:英文空格目录 / 年份目录 / 数字开头的歌名",
+              e.artist == L"未知艺术家" && e.title == L"1989" && f.artist == L"未知艺术家" && f.title == L"17岁" &&
+              g.artist == L"Beyond" && g.album == L"海阔天空" && g.title == L"2002年的第一场雪" && g.track_no == 0,
+              U8(e.artist + L"|" + f.artist + L"|" + f.title + L"|" + g.artist + L"|" + g.title));
+        AudioMetadata tagged;
+        tagged.artist = L"周杰伦";
+        tagged.album = L"叶惠美";
+        TrackItem h = MusicCatalog::BuildTrack(L"D:/Music/群星 合集/03 晴天.flac", tagged);
+        Check("有歌手标签时不看目录", h.artist == L"周杰伦" && h.album == L"叶惠美", U8(h.artist));
+    }
+
     // KGMA
     const IngestionItemResult* kg = nullptr;
     for (const auto& r : results)

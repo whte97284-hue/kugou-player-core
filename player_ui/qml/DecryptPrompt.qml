@@ -22,7 +22,7 @@ Rectangle {
         y: prompt.shown ? 0 : 16
         Behavior on y { NumberAnimation { duration: 420; easing.type: Easing.OutQuint } }
     }
-    Behavior on opacity { OpacityAnimator { duration: Theme.normal; easing.type: Easing.OutCubic } }
+    Behavior on opacity { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
 
     Connections {
         target: decrypt

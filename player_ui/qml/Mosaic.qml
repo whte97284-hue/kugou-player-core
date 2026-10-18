@@ -33,6 +33,13 @@ Item {
         source: visible ? mosaic.covers[0] : ""
         decodeSize: mosaic.decodeSize
     }
+    // 2×2:只圆外侧的角,中间留 2px 细缝,整体读作一张圆角方图
+    Rectangle {
+        anchors.fill: parent
+        visible: !mosaic.favorite && mosaic.covers.length >= 4
+        radius: mosaic.radius
+        color: Qt.rgba(1, 1, 1, 0.05)
+    }
     Grid {
         anchors.fill: parent
         visible: !mosaic.favorite && mosaic.covers.length >= 4
@@ -43,10 +50,21 @@ Item {
             RoundedImage {
                 width: (mosaic.width - 2) / 2
                 height: width
-                radius: index === 0 || index === 3 ? mosaic.radius * 0.6 : mosaic.radius * 0.6
+                radius: mosaic.radius
+                corners: [Qt.vector4d(1, 0, 0, 0), Qt.vector4d(0, 1, 0, 0), Qt.vector4d(0, 0, 0, 1), Qt.vector4d(0, 0, 1, 0)][index]
+                outline: false
+                placeholder: false
                 source: mosaic.covers[index]
                 decodeSize: mosaic.decodeSize / 2
             }
         }
+    }
+    Rectangle {
+        anchors.fill: parent
+        visible: !mosaic.favorite && mosaic.covers.length >= 4
+        radius: mosaic.radius
+        color: "transparent"
+        border.width: 1
+        border.color: Qt.rgba(1, 1, 1, 0.07)
     }
 }

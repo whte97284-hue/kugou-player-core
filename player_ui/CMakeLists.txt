@@ -9,9 +9,14 @@ qt_add_executable(KugouPlayer
     src/player_controller.h src/player_controller.cpp
     src/window_helper.h src/window_helper.cpp
     src/playlist_service.h src/playlist_service.cpp
+    src/playlist_importer.h src/playlist_importer.cpp
     src/decrypt_service.h src/decrypt_service.cpp
+    src/cover_service.h src/cover_service.cpp
     src/folder_watcher.h src/folder_watcher.cpp
     src/settings_service.h src/settings_service.cpp
+    src/library_tools.h src/library_tools.cpp
+    src/taskbar_helper.h src/taskbar_helper.cpp
+    src/frame_diag.h src/frame_diag.cpp
 )
 
 set_source_files_properties(qml/Theme.qml qml/Nav.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -69,6 +74,19 @@ qt_add_qml_module(KugouPlayer
         qml/SettingsPage.qml
         qml/DecryptPrompt.qml
         qml/DecryptToast.qml
+        qml/OrganizePage.qml
+        qml/DedupePage.qml
+        qml/DesktopLyrics.qml
+        qml/AlbumStrip.qml
+        qml/CoverViewer.qml
+        qml/CoverPanel.qml
+        qml/HoverTip.qml
+        qml/SortPopup.qml
+        qml/LyricSourcePanel.qml
+        qml/EqualizerPanel.qml
+        qml/PlaylistImport.qml
+        qml/SortTab.qml
+        qml/DetailBar.qml
 )
 
 qt_add_shaders(KugouPlayer "shaders"
@@ -96,10 +114,12 @@ if(MSVC)
     target_compile_definitions(KugouPlayer PRIVATE NOMINMAX)
 endif()
 if(WIN32)
-    target_link_libraries(KugouPlayer PRIVATE dwmapi)
+    target_link_libraries(KugouPlayer PRIVATE dwmapi ole32 dbghelp)
+    # 程序图标 (资源管理器、任务栏固定图标)
+    target_sources(KugouPlayer PRIVATE res/app.rc)
     set_target_properties(KugouPlayer PROPERTIES WIN32_EXECUTABLE ON)
 endif()
 
 file(GLOB PLAYER_ICONS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} icons/*.svg)
 qt_add_resources(KugouPlayer "icons" PREFIX "/" FILES ${PLAYER_ICONS})
-qt_add_resources(KugouPlayer "images" PREFIX "/" FILES images/shadow.png)
+qt_add_resources(KugouPlayer "images" PREFIX "/" FILES images/shadow.png images/app_icon_256.png)
